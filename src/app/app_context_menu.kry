@@ -1,0 +1,93 @@
+#module "app_context_menu"
+#inspect off
+# k2c's generated header app/app_context_menu.h would shadow
+# src/app_context_menu.h (quoted includes search the generated dir first,
+# turning the import into a self-include), so pull in the own header's
+# include instead.
+#import "app_state.h"
+#import "app_clipboard.h"
+#import "app_commands.h"
+#import "app_search.h"
+#import "kryon.h"
+
+CONTEXT_COPY :: 2001
+CONTEXT_NEW_TAB :: 2002
+CONTEXT_CLOSE_TAB :: 2003
+CONTEXT_PASTE :: 2004
+CONTEXT_PASTE_PRIMARY :: 2005
+CONTEXT_FIND :: 2006
+CONTEXT_FIND_NEXT :: 2007
+CONTEXT_FIND_PREVIOUS :: 2008
+CONTEXT_SELECT_ALL :: 2009
+
+draw_context_menu :: (app: *State, session: *Session) #export {
+    items: [11]MenuItem = {
+        {MenuCommand, "New Tab", "Ctrl+Shift+T", CONTEXT_NEW_TAB, 0, 0, nil, 0},
+        {MenuCommand, "Close Tab", "Ctrl+Shift+W", CONTEXT_CLOSE_TAB, 0, 0, nil, 0},
+        {MenuSeparator, nil, nil, 0, 0, 0, nil, 0},
+        {MenuCommand, "Copy", "Ctrl+Shift+C", CONTEXT_COPY, 0, 0, nil, 0},
+        {MenuCommand, "Paste", "Ctrl+Shift+V", CONTEXT_PASTE, 0, 0, nil, 0},
+        {MenuCommand, "Paste Primary", nil, CONTEXT_PASTE_PRIMARY, 0, 0, nil, 0},
+        {MenuCommand, "Select All", "Ctrl+Shift+A", CONTEXT_SELECT_ALL, 0, 0, nil, 0},
+        {MenuSeparator, nil, nil, 0, 0, 0, nil, 0},
+        {MenuCommand, "Find", "Ctrl+Shift+F", CONTEXT_FIND, 0, 0, nil, 0},
+        {MenuCommand, "Find Next", "Ctrl+Shift+G", CONTEXT_FIND_NEXT, 0, 0, nil, 0},
+        {MenuCommand, "Find Previous", "Ctrl+Shift+B", CONTEXT_FIND_PREVIOUS, 0, 0, nil, 0}
+    }
+    command: i32
+    result: MenuResult
+
+    if app == nil || session == nil || app->context_menu_open == 0 {
+        return
+    }
+    items[1].disabled = app->session_count <= 1
+    items[3].disabled = app->selection.active == 0
+    items[5].disabled = primary_selection_available() == 0
+    result = Menu((MenuProps){
+        .id = 1300,
+        .mode = MenuModeContext,
+        .bounds = app->viewport,
+        .items = items,
+        .item_count = (int)(sizeof(items) / sizeof(items[0])),
+        .open = &app->context_menu_open,
+        .x = &app->context_menu_x,
+        .y = &app->context_menu_y
+    })
+    command = result.activated_id
+    if command == CONTEXT_NEW_TAB {
+        app_execute_command(app, APP_COMMAND_NEW_TAB)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_CLOSE_TAB {
+        app_execute_command(app, APP_COMMAND_CLOSE_TAB)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_COPY {
+        copy_selection(app)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_PASTE {
+        paste_clipboard_to_session(session)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_PASTE_PRIMARY {
+        paste_primary_to_session(app, session)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_SELECT_ALL {
+        select_all(app)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_FIND {
+        focus_search(app)
+        app->context_menu_open = 0
+    } else if command == CONTEXT_FIND_NEXT {
+        if app->search_text[0] == '\0' {
+            focus_search(app)
+        } else {
+            find_scrollback_direction(app, 1)
+        }
+        app->context_menu_open = 0
+    } else if command == CONTEXT_FIND_PREVIOUS {
+        if app->search_text[0] == '\0' {
+            focus_search(app)
+        } else {
+            find_scrollback_direction(app, -1)
+        }
+        app->context_menu_open = 0
+    }
+}

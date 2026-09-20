@@ -1,0 +1,98 @@
+#module "app_search"
+#inspect off
+# k2c's generated header app/app_search.h would shadow src/app_search.h
+# (quoted includes search the generated dir first, turning the import into
+# a self-include), so pull in the own header's include instead.
+#import "app_state.h"
+#import "app_sessions.h"
+#import "kryon.h"
+#import "string.h"
+
+focus_search :: (app: *State) #export {
+    if app == nil { return }
+    app->search_visible = 1
+    app->search_focused = 1
+    app->search_cursor = (int)strlen(app->search_text)
+}
+
+find_scrollback_direction :: (app: *State, direction: i32) -> i32 #export {
+    session: *Session = active_session(app)
+    terminal: *TerminalState
+    search: TerminalPaneSearchController
+
+    if app == nil || session == nil || app->search_text[0] == '\0' {
+        return 0
+    }
+    terminal = &session->terminal
+    search = terminal_search_controller(terminal, &app->selection,
+    app->visible_rows, app->first_visible_row,
+    &session->scroll_offset)
+    return TerminalPaneSearchFindNext(search, app->search_text, direction,
+    nil)
+}
+
+find_scrollback :: (app: *State) -> i32 #export {
+    session: *Session = active_session(app)
+    terminal: *TerminalState
+    search: TerminalPaneSearchController
+
+    if app == nil || session == nil || app->search_text[0] == '\0' {
+        return 0
+    }
+    terminal = &session->terminal
+    search = terminal_search_controller(terminal, &app->selection,
+    app->visible_rows, app->first_visible_row,
+    &session->scroll_offset)
+    return TerminalPaneSearchFindInitial(search, app->search_text, nil)
+}
+
+draw_search_prompt :: (app: *State) #export {
+    result: i32
+    ctrl: i32
+    shift: i32
+    actions: [2]ModalAction = {
+        {.label = "Cancel"},
+        {.label = "Find"}
+    }
+
+    if app == nil || !app->search_visible { return }
+    ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)
+    shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)
+    if IsKeyPressed(KEY_ESCAPE) {
+        app->search_visible = 0
+        app->search_focused = 0
+        return
+    }
+    if ctrl != 0 && shift != 0 && IsLayoutKeyPressed('g') &&
+    app->search_text[0] != '\0' {
+        find_scrollback_direction(app, 1)
+        app->search_focused = 1
+    }
+    if ctrl != 0 && shift != 0 && IsLayoutKeyPressed('b') &&
+    app->search_text[0] != '\0' {
+        find_scrollback_direction(app, -1)
+        app->search_focused = 1
+    }
+    result = Modal((ModalProps){
+        .title = "Find",
+        .actions = actions,
+        .action_count = 2,
+        .text = app->search_text,
+        .text_size = (int)sizeof(app->search_text),
+        .cursor_position = &app->search_cursor,
+        .focused = &app->search_focused
+    })
+
+    if result == 1 {
+        app->search_visible = 0
+        app->search_focused = 0
+    } else if result == 2 {
+        if app->selection.active != 0 {
+            find_scrollback_direction(app, -1)
+        } else {
+            find_scrollback(app)
+        }
+        app->search_visible = 1
+        app->search_focused = 1
+    }
+}
