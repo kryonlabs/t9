@@ -50,3 +50,33 @@ replacement lands; do not retain a second execution path or command alias.
 The rewrite is complete when no handwritten C code in t9 owns terminal
 behavior, app state, or interface rendering; only the minimal native process
 boundary remains where required by the operating systems.
+
+## Implementation status (2026-09-20)
+
+Landed on Linux, verified by `make test` (engine suite, pane suites,
+simple terminal, real-PTY process suite):
+
+- Pane modules: all `.kry` (clipboard, csi, dcs, keys, modes, mouse,
+  osc, profile, profile_colors, profile_prompt, profile_settings,
+  render, reflow, selection, session, sgr, sixel, text, widget,
+  runtime policy).
+- Terminal engine: all `.kry` in `src/engine/` (terminal_state, csi,
+  modes, keys, mouse, search, sgr, paste, text, dcs, sixel, osc, view,
+  screen, parser, process).
+- Sessions and persistence: `.kry` in `src/app/` (config, session,
+  session_store, profile, palette, selection, input, launch options).
+- Native boundary: `terminal_pty.c` exposes pure spawn/read/write/
+  resize/exit/signal operations through `terminal_pty.h`; the engine
+  drives them from `engine/process.kry`. Plan 9 keeps its own
+  implementation until its boundary converges.
+- Kryon gained `RenderTextGlyph` (upstream commit) for fixed-cell
+  glyph surfaces; pane rendering uses it instead of raw atlas draws.
+
+Known k2c gaps are recorded in `../kryon/plan/language/K2C_APP_PORT_GAPS.md`;
+app code works around them (local tables, table-driven long conditions,
+no `state` locals with compound literals, `#export`ed callbacks,
+module basenames distinct from imported headers).
+
+Remaining for full plan closure: the Plan 9 `mkfile` cutover to
+generated sources plus Taiji guest verification, and the Rill host
+build path after the interface ports land.
