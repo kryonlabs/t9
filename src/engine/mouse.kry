@@ -1,0 +1,36 @@
+#module "mouse"
+#inspect off
+#import "terminal.h"
+
+terminal_mouse_mode :: (
+terminal: *const TerminalState) -> TerminalPaneMouseMode {
+    mode: TerminalPaneMouseMode = (TerminalPaneMouseMode){0}
+
+    if terminal == nil { return mode }
+    mode.mode = terminal->mouse_mode
+    mode.utf8 = terminal->mouse_utf8
+    mode.sgr = terminal->mouse_sgr
+    mode.urxvt = terminal->mouse_urxvt
+    mode.pixels = terminal->mouse_pixels
+    return mode
+}
+
+terminal_send_mouse_pixels :: (terminal: *TerminalState,
+button: i32, col: i32, row: i32, pixel_x: i32, pixel_y: i32,
+pressed: i32, motion: i32, mods: i32) -> i32 #export {
+    seq: [64]char
+
+    if terminal == nil { return 0 }
+    len: i32 = EncodeTerminalPaneMouse(seq, (int)sizeof(seq),
+    button, col, row, pixel_x, pixel_y, pressed, motion, mods,
+    terminal_mouse_mode(terminal))
+    if len <= 0 { return 0 }
+    return terminal_write(terminal, seq, len)
+}
+
+terminal_send_mouse :: (terminal: *TerminalState, button: i32,
+col: i32, row: i32, pressed: i32, motion: i32,
+mods: i32) -> i32 #export {
+    return terminal_send_mouse_pixels(terminal, button, col, row,
+    col, row, pressed, motion, mods)
+}

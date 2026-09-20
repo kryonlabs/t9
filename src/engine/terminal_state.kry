@@ -1,0 +1,68 @@
+#module "terminal_state"
+#inspect off
+#import "terminal.h"
+#import "terminal_modes.h"
+#import "string.h"
+
+terminal_init :: (terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    memset(terminal, 0, sizeof(TerminalState))
+    terminal->fd = -1
+    terminal->cursor_visible = 1
+    terminal->cursor_blink = 1
+    terminal->autowrap = 1
+    terminal->insert_mode = 0
+    terminal->scrollback_limit = SCROLLBACK_LIMIT
+    terminal->default_fg = COLOR_DEFAULT
+    terminal->default_bg = COLOR_DEFAULT
+    terminal->cursor_color = COLOR_DEFAULT
+    terminal->mouse_fg = COLOR_DEFAULT
+    terminal->mouse_bg = COLOR_DEFAULT
+    terminal->selection_fg = COLOR_DEFAULT
+    terminal->selection_bg = COLOR_DEFAULT
+    terminal->base_fg = COLOR_DEFAULT
+    terminal->base_bg = COLOR_DEFAULT
+    terminal->base_cursor_color = COLOR_DEFAULT
+    terminal->base_selection_fg = COLOR_DEFAULT
+    terminal->base_selection_bg = COLOR_DEFAULT
+    terminal->cursor_style = TERMINAL_CURSOR_DEFAULT
+    InitClipboardBuffer(&terminal->clipboard, "")
+    InitTerminalPaneDCSBuffer(&terminal->dcs, 0)
+    terminal->current_hyperlink = 0
+    terminal->hyperlink_count = 0
+    terminal_reset_charsets(terminal)
+    i: i32 = 0
+    while i < 256 {
+        terminal->palette_overrides[i] = COLOR_DEFAULT
+        i += 1
+    }
+    terminal_reset_style(terminal)
+    terminal_save_cursor_state(terminal)
+}
+
+terminal_send_alternate_scroll :: (terminal: *TerminalState,
+direction: i32, mods: i32) -> i32 #export {
+    if terminal == nil || direction == 0 ||
+    terminal->alternate_screen == 0 ||
+    terminal->alternate_scroll == 0 ||
+    terminal->mouse_mode != 0 {
+        return 0
+    }
+    return terminal_send_key(terminal,
+    direction > 0 ? KEY_UP_CODE : KEY_DOWN_CODE, mods)
+}
+
+terminal_send_focus :: (terminal: *TerminalState,
+focused: i32) -> i32 #export {
+    if terminal == nil || terminal->focus_reporting == 0 {
+        return 0
+    }
+    return terminal_write_text(terminal,
+    focused != 0 ? "\x1b[I" : "\x1b[O")
+}
+
+terminal_consume_bell :: (terminal: *TerminalState) -> i32 #export {
+    if terminal == nil || terminal->bell_pending == 0 { return 0 }
+    terminal->bell_pending = 0
+    return 1
+}

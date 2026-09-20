@@ -1,0 +1,125 @@
+#module "csi"
+#inspect off
+#import "terminal_csi.h"
+#import "stdio.h"
+
+clamp_int :: (value: i32, low: i32, high: i32) -> i32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+terminal_mode_state :: (
+terminal: *const TerminalState) -> TerminalPaneModeState {
+    state: TerminalPaneModeState = (TerminalPaneModeState){0}
+
+    if terminal == nil { return state }
+    state.cursor_blink = terminal->cursor_blink
+    state.cursor_visible = terminal->cursor_visible
+    state.origin_mode = terminal->origin_mode
+    state.autowrap = terminal->autowrap
+    state.application_cursor_keys = terminal->application_cursor_keys
+    state.mouse_mode = terminal->mouse_mode
+    state.focus_reporting = terminal->focus_reporting
+    state.mouse_utf8 = terminal->mouse_utf8
+    state.mouse_sgr = terminal->mouse_sgr
+    state.alternate_scroll = terminal->alternate_scroll
+    state.mouse_urxvt = terminal->mouse_urxvt
+    state.mouse_pixels = terminal->mouse_pixels
+    state.bracketed_paste = terminal->bracketed_paste
+    state.alternate_screen = terminal->alternate_screen
+    state.insert_mode = terminal->insert_mode
+    state.newline_mode = terminal->newline_mode
+    return state
+}
+
+terminal_csi_arg :: (terminal: *const TerminalState, index: i32,
+fallback: i32) -> i32 #export {
+    if terminal == nil || index < 0 || index >= terminal->csi_count ||
+    terminal->csi_args[index] == 0 {
+        return fallback
+    }
+    return terminal->csi_args[index]
+}
+
+terminal_csi_cursor_row_from_arg :: (
+terminal: *const TerminalState, index: i32,
+fallback: i32) -> i32 #export {
+    if terminal == nil { return 0 }
+    row: i32 = terminal_csi_arg(terminal, index, fallback) - 1
+    if terminal->origin_mode != 0 {
+        row += terminal->scroll_top
+    }
+    return row
+}
+
+terminal_csi_set_modifier_key_mode :: (
+terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    resource: i32 = terminal_csi_arg(terminal, 0, 0)
+    value: i32 = terminal_csi_arg(terminal, 1, 0)
+    if resource != 4 { return }
+    terminal->modify_other_keys = clamp_int(value, 0, 2)
+}
+
+terminal_csi_disable_modifier_key_mode :: (
+terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    resource: i32 = terminal_csi_arg(terminal, 0, 2)
+    if resource == 4 { terminal->modify_other_keys = -1 }
+}
+
+terminal_csi_set_mode :: (terminal: *TerminalState, mode: i32,
+enabled: i32) #export {
+    if terminal == nil { return }
+    state: TerminalPaneModeState = terminal_mode_state(terminal)
+    TerminalPaneModeStateSetMode(&state, mode, enabled)
+    terminal->insert_mode = state.insert_mode
+    terminal->newline_mode = state.newline_mode
+}
+
+terminal_csi_apply_cursor_style :: (terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    style: i32 = terminal_csi_arg(terminal, 0, 0)
+    decoded_style: i32
+    decoded_blink: i32
+
+    if DecodeTerminalPaneCursorStyleRequest(style, &decoded_style,
+    &decoded_blink) != 0 {
+        terminal->cursor_style = decoded_style
+        terminal->cursor_blink = decoded_blink
+    }
+}
+
+terminal_csi_send_private_mode_report :: (terminal: *TerminalState,
+mode: i32) #export {
+    response: [32]char
+
+    if FormatTerminalPaneModeReport(response, (int)sizeof(response),
+    terminal_mode_state(terminal), 1, mode) > 0 {
+        terminal_write_text(terminal, response)
+    }
+}
+
+terminal_csi_send_mode_report :: (terminal: *TerminalState,
+mode: i32) #export {
+    response: [32]char
+
+    if FormatTerminalPaneModeReport(response, (int)sizeof(response),
+    terminal_mode_state(terminal), 0, mode) > 0 {
+        terminal_write_text(terminal, response)
+    }
+}
+
+terminal_csi_send_device_status_report :: (
+terminal: *TerminalState) #export {
+    response: [32]char
+
+    if terminal == nil { return }
+    request: i32 = terminal_csi_arg(terminal, 0, 0)
+    if FormatTerminalPaneDeviceStatusReport(response,
+    (int)sizeof(response), terminal->csi_private == '?',
+    request, terminal->cursor_row, terminal->cursor_col) > 0 {
+        terminal_write_text(terminal, response)
+    }
+}

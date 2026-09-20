@@ -1,0 +1,20 @@
+#module "paste"
+#inspect off
+#import "terminal.h"
+
+write_paste_chunk :: (userdata: *void, text: const char*,
+size: i32) -> i32 #export {
+    terminal: *TerminalState = (TerminalState *)userdata
+
+    if terminal == nil || text == nil || size <= 0 { return 0 }
+    return terminal_write(terminal, text, size)
+}
+
+terminal_clipboard :: (
+terminal: *TerminalState) -> TerminalPaneClipboard #export {
+    clipboard: TerminalPaneClipboard = (TerminalPaneClipboard){0}
+
+    if terminal == nil { return clipboard }
+    return MakeTerminalPaneClipboard(&terminal->clipboard,
+    terminal->bracketed_paste, write_paste_chunk, terminal)
+}

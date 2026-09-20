@@ -41,6 +41,10 @@ PANE_RUNTIME_C = $(BUILD_DIR)/generated/src/runtime/terminal_pane.c
 PANE_RUNTIME_H = $(PANE_RUNTIME_C:.c=.h)
 PANE_RUNTIME_OBJ = $(PANE_RUNTIME_C:.c=.o)
 PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_RUNTIME_OBJ)
+ENGINE_KRY := $(sort $(wildcard src/engine/*.kry))
+ENGINE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(ENGINE_KRY))
+ENGINE_KRY_H := $(ENGINE_KRY_C:.c=.h)
+ENGINE_KRY_OBJS := $(ENGINE_KRY_C:.c=.o)
 RAYLIB_A = $(ENGINE_BUILD_DIR)/raylib/libraylib.a
 LIBOQS_A = $(ENGINE_BUILD_DIR)/vendor/liboqs/lib/liboqs.a
 CURL_A = $(ENGINE_BUILD_DIR)/vendor/curl/lib/libcurl.a
@@ -57,37 +61,39 @@ PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
 PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
-OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS)
+OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS)
 HOST_SRC_FILES := $(filter-out src/main.c,$(SRC_FILES))
-HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PANE_OBJS)
+HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS)
+# Pick a module's object from its .kry port when present, else its C file.
+mod_obj = $(if $(wildcard src/engine/$(1).kry),$(BUILD_DIR)/generated/src/engine/$(1).o,$(BUILD_DIR)/src/$(1).o)
 TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(BUILD_DIR)/src/config.o \
 	$(BUILD_DIR)/src/launch_options.o \
-	$(BUILD_DIR)/src/terminal.o \
-	$(BUILD_DIR)/src/terminal_csi.o \
-	$(BUILD_DIR)/src/terminal_modes.o \
-	$(BUILD_DIR)/src/terminal_keys.o $(BUILD_DIR)/src/terminal_paste.o \
-	$(BUILD_DIR)/src/terminal_mouse.o $(BUILD_DIR)/src/terminal_search.o \
-	$(BUILD_DIR)/src/terminal_view.o $(BUILD_DIR)/src/terminal_osc.o \
-	$(BUILD_DIR)/src/terminal_sixel.o $(BUILD_DIR)/src/terminal_dcs.o \
-	$(BUILD_DIR)/src/terminal_sgr.o $(BUILD_DIR)/src/terminal_screen.o \
-	$(BUILD_DIR)/src/terminal_text.o \
-	$(BUILD_DIR)/src/terminal_parser.o \
+	$(call mod_obj,terminal_state) \
+	$(call mod_obj,csi) \
+	$(call mod_obj,modes) \
+	$(call mod_obj,keys) $(call mod_obj,paste) \
+	$(call mod_obj,mouse) $(call mod_obj,search) \
+	$(call mod_obj,terminal_view) $(call mod_obj,terminal_osc) \
+	$(call mod_obj,terminal_sixel) $(call mod_obj,terminal_dcs) \
+	$(call mod_obj,sgr) $(call mod_obj,terminal_screen) \
+	$(call mod_obj,terminal_text) \
+	$(call mod_obj,terminal_parser) \
 	$(BUILD_DIR)/src/terminal_pty.o \
 	$(BUILD_DIR)/src/session.o \
 	$(BUILD_DIR)/src/input.o $(BUILD_DIR)/src/selection.o \
 	$(BUILD_DIR)/src/session_store.o $(BUILD_DIR)/src/profile.o \
 	$(BUILD_DIR)/src/palette.o
 PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
-	$(BUILD_DIR)/src/terminal.o \
-	$(BUILD_DIR)/src/terminal_csi.o \
-	$(BUILD_DIR)/src/terminal_modes.o \
-	$(BUILD_DIR)/src/terminal_keys.o $(BUILD_DIR)/src/terminal_paste.o \
-	$(BUILD_DIR)/src/terminal_mouse.o $(BUILD_DIR)/src/terminal_search.o \
-	$(BUILD_DIR)/src/terminal_view.o $(BUILD_DIR)/src/terminal_osc.o \
-	$(BUILD_DIR)/src/terminal_sixel.o $(BUILD_DIR)/src/terminal_dcs.o \
-	$(BUILD_DIR)/src/terminal_sgr.o $(BUILD_DIR)/src/terminal_screen.o \
-	$(BUILD_DIR)/src/terminal_text.o \
-	$(BUILD_DIR)/src/terminal_parser.o \
+	$(call mod_obj,terminal_state) \
+	$(call mod_obj,csi) \
+	$(call mod_obj,modes) \
+	$(call mod_obj,keys) $(call mod_obj,paste) \
+	$(call mod_obj,mouse) $(call mod_obj,search) \
+	$(call mod_obj,terminal_view) $(call mod_obj,terminal_osc) \
+	$(call mod_obj,terminal_sixel) $(call mod_obj,terminal_dcs) \
+	$(call mod_obj,sgr) $(call mod_obj,terminal_screen) \
+	$(call mod_obj,terminal_text) \
+	$(call mod_obj,terminal_parser) \
 	$(BUILD_DIR)/src/terminal_pty.o
 
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
@@ -150,8 +156,8 @@ engine:
 $(PANE_RUNTIME_C) $(PANE_RUNTIME_H) &: runtime/terminal_pane.kry | engine
 	$(ENGINE_K2C) --strict --no-main --root . -o $(BUILD_DIR)/generated/src $<
 
-$(PANE_KRY_C) $(PANE_KRY_H) &: $(PANE_KRY) $(PANE_RUNTIME_H) | engine
-	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY)
+$(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) &: $(PANE_KRY) $(ENGINE_KRY) $(PANE_RUNTIME_H) | engine
+	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY) $(ENGINE_KRY)
 
 $(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
 	@mkdir -p $(dir $@)
