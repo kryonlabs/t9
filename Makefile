@@ -63,6 +63,7 @@ TEST = $(BUILD_DIR)/tests/terminal_test
 SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
 PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
 PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
+PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
 OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
@@ -83,6 +84,7 @@ TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(call mod_obj,app_config) \
 	$(call mod_obj,text) \
 	$(call mod_obj,parser) \
 	$(BUILD_DIR)/src/terminal_pty.o \
+	$(call mod_obj,process) \
 	$(call mod_obj,app_session) \
 	$(call mod_obj,app_input) $(call mod_obj,app_selection) \
 	$(call mod_obj,app_session_store) $(call mod_obj,app_profile) \
@@ -98,7 +100,8 @@ PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
 	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
 	$(call mod_obj,parser) \
-	$(BUILD_DIR)/src/terminal_pty.o
+	$(BUILD_DIR)/src/terminal_pty.o \
+	$(call mod_obj,process)
 
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -201,6 +204,17 @@ $(PANE_POLICY_TEST): engine $(BUILD_DIR)/tests/terminal_pane_policy_test.o \
 		$(PANE_OBJS) -Wl,--whole-archive $(ENGINE_LIB) \
 		-Wl,--no-whole-archive $(LDLIBS)
 
+$(PROCESS_TEST): engine $(BUILD_DIR)/tests/process_test.o \
+	$(ENGINE_CLIPBOARD_OBJ) \
+	$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
+	$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/process_test.o $(ENGINE_CLIPBOARD_OBJ) \
+		$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
+		$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+		$(PANE_OBJS) $(ENGINE_LIB) $(LDLIBS)
+
 $(PANE_SELECTION_TEST): engine $(BUILD_DIR)/tests/terminal_pane_selection_test.o \
 	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
@@ -230,11 +244,12 @@ $(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests $(BUILD_DI
 run: $(APP)
 	$(APP)
 
-test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST)
+test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) $(PROCESS_TEST)
 	$(TEST)
 	$(SIMPLE_TEST)
 	$(PANE_POLICY_TEST)
 	$(PANE_SELECTION_TEST)
+	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
 	$(PARSER_BENCH)
