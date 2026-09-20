@@ -274,3 +274,22 @@ install: $(APP) $(HOST_SO)
 
 clean:
 	rm -rf $(BUILD_ROOT)
+
+# Native Plan 9 preparation. The guest compiler cannot run k2c, so the
+# .kry app modules are emitted ahead of time as 8c-safe C into
+# build/plan9/generated with the file list the mkfile consumes. Run on
+# the host whenever any .kry changes before a native build (and prepare
+# the Kryon library's own build/plan9 with `make kry-c-plan9` there).
+PLAN9_PREP_DIR = build/plan9
+PLAN9_GENERATED = $(PLAN9_PREP_DIR)/generated
+PLAN9_FILE_LIST = $(PLAN9_PREP_DIR)/generated-c-files.txt
+
+.PHONY: kry-c-plan9
+kry-c-plan9: engine
+	rm -rf $(PLAN9_GENERATED)
+	mkdir -p $(PLAN9_PREP_DIR)
+	$(ENGINE_K2C) --plan9 --strict --no-main --root $(abspath .) \
+		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
+	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
+		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
+	find $(PLAN9_GENERATED) -type f -name '*.c' | LC_ALL=C sort > $(PLAN9_FILE_LIST)
