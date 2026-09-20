@@ -77,7 +77,7 @@ TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(BUILD_DIR)/src/config.o \
 	$(call mod_obj,sixel) $(call mod_obj,dcs) \
 	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
-	$(call mod_obj,terminal_parser) \
+	$(call mod_obj,parser) \
 	$(BUILD_DIR)/src/terminal_pty.o \
 	$(BUILD_DIR)/src/session.o \
 	$(BUILD_DIR)/src/input.o $(BUILD_DIR)/src/selection.o \
@@ -93,7 +93,7 @@ PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
 	$(call mod_obj,sixel) $(call mod_obj,dcs) \
 	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
-	$(call mod_obj,terminal_parser) \
+	$(call mod_obj,parser) \
 	$(BUILD_DIR)/src/terminal_pty.o
 
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
