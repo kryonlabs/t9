@@ -88,7 +88,9 @@ TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(call mod_obj,app_config) \
 	$(call mod_obj,app_session) \
 	$(call mod_obj,app_input) $(call mod_obj,app_selection) \
 	$(call mod_obj,app_session_store) $(call mod_obj,app_profile) \
-	$(call mod_obj,app_palette)
+	$(call mod_obj,app_palette) $(call mod_obj,app_sessions) \
+	$(call mod_obj,app_chrome) $(call mod_obj,app_commands) \
+	$(call mod_obj,app_clipboard) $(call mod_obj,app_search)
 PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
 	$(call mod_obj,terminal_state) \
 	$(call mod_obj,csi) \
