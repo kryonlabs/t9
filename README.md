@@ -20,8 +20,10 @@ and pushes run the Linux build/test path, and published GitHub Releases upload
 Linux `tar.gz`, `.deb`, and `.AppImage` assets plus checksums. The remaining
 feature and release-readiness plan is tracked in
 `docs/REMAINING_FEATURE_PLAN.md`.
-The staged move of t9's implementation into `.kry` is in
-`docs/KRY_REWRITE_PLAN.md`.
+t9's terminal model, parser, session behavior, settings, and interface are
+authored in `.kry` (see `docs/KRY_REWRITE_PLAN.md`); Kryon's `k2c` compiles
+them to C alongside a minimal native PTY boundary. `make test` runs the
+engine, pane, and live-process suites.
 
 By default the build uses `../kryon`. Override with:
 

@@ -54,7 +54,8 @@ boundary remains where required by the operating systems.
 ## Implementation status (2026-09-20)
 
 Landed on Linux, verified by `make test` (engine suite, pane suites,
-simple terminal, real-PTY process suite):
+simple terminal, real-PTY process suite) plus a private-Xvfb app smoke
+run (window open → command → render → child exit → window close):
 
 - Pane modules: all `.kry` (clipboard, csi, dcs, keys, modes, mouse,
   osc, profile, profile_colors, profile_prompt, profile_settings,
@@ -65,18 +66,26 @@ simple terminal, real-PTY process suite):
   screen, parser, process).
 - Sessions and persistence: `.kry` in `src/app/` (config, session,
   session_store, profile, palette, selection, input, launch options).
+- Interface: `.kry` in `src/app/` (chrome, clipboard, search, profile,
+  menu, context menu, commands, sessions, input routing, terminal
+  view, Rill host, app main). `src/main.c` is an entry shim calling
+  `t9_main`; the background image draws through `Image(ImageProps)`.
 - Native boundary: `terminal_pty.c` exposes pure spawn/read/write/
   resize/exit/signal operations through `terminal_pty.h`; the engine
   drives them from `engine/process.kry`. Plan 9 keeps its own
-  implementation until its boundary converges.
+  integrated implementation in `terminal_pty_plan9.c` (excluded from
+  the generated process module) until its side converges on the same
+  boundary.
 - Kryon gained `RenderTextGlyph` (upstream commit) for fixed-cell
   glyph surfaces; pane rendering uses it instead of raw atlas draws.
+- Plan 9: `make kry-c-plan9` emits 8c-safe C plus the file list the
+  `mkfile` (now on Kryon's shared `mk/plan9-app.mk` fragment)
+  consumes.
 
 Known k2c gaps are recorded in `../kryon/plan/language/K2C_APP_PORT_GAPS.md`;
 app code works around them (local tables, table-driven long conditions,
 no `state` locals with compound literals, `#export`ed callbacks,
 module basenames distinct from imported headers).
 
-Remaining for full plan closure: the Plan 9 `mkfile` cutover to
-generated sources plus Taiji guest verification, and the Rill host
-build path after the interface ports land.
+Remaining for full plan closure: a Taiji guest run of the Plan 9
+build, and the release/Rill packaging checks from stage 6.
