@@ -1,0 +1,125 @@
+#module "terminal_pane_session_host"
+#inspect off
+#import "terminal_pane.h"
+#import "stdio.h"
+#import "stdlib.h"
+#import "string.h"
+
+PaneTitleFallback :: (fallback: const char*) -> const char* {
+    return fallback != nil && fallback[0] != '\0' ? fallback : "terminal"
+}
+
+PanePathBasename :: (path: const char*) -> const char* {
+    if path == nil || path[0] == '\0' { return "" }
+    end: *const char = path + strlen(path)
+    while end > path && end[-1] == '/' { end -= 1 }
+    if end == path { return "/" }
+    slash: *const char = end
+    while slash > path && slash[-1] != '/' { slash -= 1 }
+    return slash
+}
+
+PanePathishTitleStart :: (value: const char*) -> const char* {
+    if value == nil { return "" }
+    colon: *const char = strrchr(value, ':')
+    if colon != nil && (colon[1] == '/' || colon[1] == '~') {
+        return colon + 1
+    }
+    return value
+}
+
+FormatTerminalPaneSessionTitle :: (out: *char, out_size: i32,
+value: const char*, fallback: const char*) -> i32 #export {
+    if out == nil || out_size <= 0 { return 0 }
+    out[0] = '\0'
+    title: *const char = PanePathBasename(PanePathishTitleStart(value))
+    length: i32 = (int)strlen(title)
+    while length > 1 && title[length - 1] == '/' { length -= 1 }
+    if length <= 0 {
+        title = PaneTitleFallback(fallback)
+        length = (int)strlen(title)
+    }
+    if length >= out_size { length = out_size - 1 }
+    if length > 0 { memcpy(out, title, (size_t)length) }
+    out[length] = '\0'
+    return length
+}
+
+PaneSessionCopyField :: (out: *char, out_size: i32,
+value: const char*) -> i32 {
+    if out == nil || out_size <= 0 { return 0 }
+    return UnescapeTerminalPaneText(out, out_size,
+    value != nil ? value : "")
+}
+
+FormatTerminalPaneSessionRecord :: (out: *char, out_size: i32,
+record: TerminalPaneSessionRecord) -> i32 #export {
+    cwd: [4096]char
+    shell: [2048]char
+    title: [1024]char
+    command: [4096]char
+    if out == nil || out_size <= 0 { return 0 }
+    out[0] = '\0'
+    EscapeTerminalPaneText(cwd, (int)sizeof(cwd), record.cwd)
+    EscapeTerminalPaneText(shell, (int)sizeof(shell), record.shell)
+    EscapeTerminalPaneText(title, (int)sizeof(title), record.title)
+    EscapeTerminalPaneText(command, (int)sizeof(command), record.command)
+    length: i32 = snprintf(out, (size_t)out_size,
+    "tab\t%s\t%s\t%s\t%d\t%s\t%d", cwd, shell, title,
+    record.title_override ? 1 : 0, command, record.scroll_offset)
+    if length < 0 || length >= out_size {
+        out[0] = '\0'
+        return 0
+    }
+    return length
+}
+
+ParseTerminalPaneSessionActive :: (line: const char*,
+active: *i32) -> i32 #export {
+    if line == nil || strncmp(line, "active=", 7) != 0 { return 0 }
+    if active != nil { *active = atoi(line + 7) }
+    return 1
+}
+
+ParseTerminalPaneSessionRecord :: (line: const char*,
+out: *TerminalPaneSessionRecord) -> i32 #export {
+    scratch: [8192]char
+    fields: [6]*char = {0}
+    if line == nil || out == nil || strncmp(line, "tab\t", 4) != 0 {
+        return 0
+    }
+    length: size_t = strlen(line)
+    if length >= sizeof(scratch) { return 0 }
+    memcpy(scratch, line, length + 1)
+    while length > 0 && (scratch[length - 1] == '\n' ||
+    scratch[length - 1] == '\r') {
+        length -= 1
+        scratch[length] = '\0'
+    }
+    cursor: *char = scratch + 4
+    count: i32 = 0
+    while count < 6 {
+        next: *char = strchr(cursor, '\t')
+        fields[count] = cursor
+        count += 1
+        if next == nil { break }
+        *next = '\0'
+        cursor = next + 1
+    }
+    if count < 3 { return 0 }
+    memset(out, 0, sizeof(*out))
+    PaneSessionCopyField(out->cwd, (int)sizeof(out->cwd), fields[0])
+    PaneSessionCopyField(out->shell, (int)sizeof(out->shell), fields[1])
+    PaneSessionCopyField(out->title, (int)sizeof(out->title), fields[2])
+    if count >= 4 && fields[3] != nil {
+        out->title_override = atoi(fields[3]) != 0
+    }
+    if count >= 5 && fields[4] != nil {
+        PaneSessionCopyField(out->command,
+        (int)sizeof(out->command), fields[4])
+    }
+    if count >= 6 && fields[5] != nil {
+        out->scroll_offset = atoi(fields[5])
+    }
+    return 1
+}

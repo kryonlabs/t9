@@ -30,21 +30,17 @@ BUILD_DIR ?= $(BUILD_ROOT)/$(PLATFORM)-$(ARCH)
 ENGINE_BUILD_ROOT ?= $(ENGINE_DIR)/build
 ENGINE_BUILD_DIR ?= $(ENGINE_BUILD_ROOT)/$(PLATFORM)-$(ARCH)
 ENGINE_LIB = $(ENGINE_BUILD_DIR)/libkryon.a
-ENGINE_CLIPBOARD_OBJ = $(ENGINE_BUILD_DIR)/ui/ui_clipboard.o
-ENGINE_TERMINAL_PANE_CLIPBOARD_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_clipboard.o
-ENGINE_TERMINAL_PANE_CSI_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_csi.o
-ENGINE_TERMINAL_PANE_DCS_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_dcs.o
-ENGINE_TERMINAL_PANE_KEYS_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_keys.o
-ENGINE_TERMINAL_PANE_MODES_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_modes.o
-ENGINE_TERMINAL_PANE_MOUSE_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_mouse.o
-ENGINE_TERMINAL_PANE_OSC_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_osc.o
-ENGINE_TERMINAL_PANE_PROFILE_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_profile.o
-ENGINE_TERMINAL_PANE_REFLOW_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_reflow.o
-ENGINE_TERMINAL_PANE_SELECTION_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_selection.o
-ENGINE_TERMINAL_PANE_SESSION_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_session.o
-ENGINE_TERMINAL_PANE_SGR_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_sgr.o
-ENGINE_TERMINAL_PANE_SIXEL_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_sixel.o
-ENGINE_TERMINAL_PANE_TEXT_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_text.o
+ENGINE_K2C = $(ENGINE_BUILD_DIR)/bin/k2c
+PANE_C_FILES := $(sort $(wildcard src/terminal_pane/*.c))
+PANE_C_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PANE_C_FILES))
+PANE_KRY := $(sort $(wildcard src/terminal_pane/*.kry))
+PANE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(PANE_KRY))
+PANE_KRY_H := $(PANE_KRY_C:.c=.h)
+PANE_KRY_OBJS := $(PANE_KRY_C:.c=.o)
+PANE_RUNTIME_C = $(BUILD_DIR)/generated/src/runtime/terminal_pane.c
+PANE_RUNTIME_H = $(PANE_RUNTIME_C:.c=.h)
+PANE_RUNTIME_OBJ = $(PANE_RUNTIME_C:.c=.o)
+PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_RUNTIME_OBJ)
 RAYLIB_A = $(ENGINE_BUILD_DIR)/raylib/libraylib.a
 LIBOQS_A = $(ENGINE_BUILD_DIR)/vendor/liboqs/lib/liboqs.a
 CURL_A = $(ENGINE_BUILD_DIR)/vendor/curl/lib/libcurl.a
@@ -56,11 +52,14 @@ APP = $(BUILD_DIR)/bin/t9
 HOST_LIB = $(BUILD_DIR)/lib/libt9_host.a
 HOST_SO = $(BUILD_DIR)/lib/t9-host.so
 TEST = $(BUILD_DIR)/tests/terminal_test
+SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
+PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
+PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
-OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES))
+OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS)
 HOST_SRC_FILES := $(filter-out src/main.c,$(SRC_FILES))
-HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES))
+HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PANE_OBJS)
 TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(BUILD_DIR)/src/config.o \
 	$(BUILD_DIR)/src/launch_options.o \
 	$(BUILD_DIR)/src/terminal.o \
@@ -124,8 +123,11 @@ CFLAGS ?= -Wall -Wextra -O2
 ifeq ($(PLATFORM),linux)
   CFLAGS += -fPIC
 endif
-CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include \
-	-I$(ENGINE_BUILD_DIR)/generated/src -I$(ENGINE_BUILD_DIR)/generated/include \
+CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include -I$(ENGINE_DIR)/src/ui \
+	-I$(ENGINE_DIR)/vendor/utf8proc \
+	-I$(BUILD_DIR)/generated/src -I$(ENGINE_BUILD_DIR)/generated/src \
+	-I$(ENGINE_BUILD_DIR)/generated/src/runtime \
+	-I$(ENGINE_BUILD_DIR)/generated/include \
 	$(BACKEND_CFLAGS) $(SYSTEM_THEME_CFLAGS) \
 	-DKTREM_KRYON_FONT_PATH=\"$(abspath $(ENGINE_DIR))/fonts/noto/NotoSans-Regular.ttf\" \
 	-DHAS_LIBOQS=1 -I$(ENGINE_BUILD_DIR)/vendor/liboqs/include \
@@ -143,7 +145,17 @@ all: $(APP) $(HOST_LIB) $(HOST_SO)
 
 engine:
 	$(MAKE) -C $(ENGINE_DIR) KRYON_BACKEND=$(KRYON_BACKEND) \
-		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB)
+		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB) $(ENGINE_K2C)
+
+$(PANE_RUNTIME_C) $(PANE_RUNTIME_H) &: runtime/terminal_pane.kry | engine
+	$(ENGINE_K2C) --strict --no-main --root . -o $(BUILD_DIR)/generated/src $<
+
+$(PANE_KRY_C) $(PANE_KRY_H) &: $(PANE_KRY) $(PANE_RUNTIME_H) | engine
+	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY)
+
+$(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -c $< -o $@
 
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
@@ -156,43 +168,44 @@ $(HOST_LIB): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
 $(HOST_SO): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
 	$(CC) $(CFLAGS) -shared -o $@ $(HOST_OBJS)
 
-$(TEST): engine $(TEST_OBJS) $(ENGINE_CLIPBOARD_OBJ) \
-		$(ENGINE_TERMINAL_PANE_CLIPBOARD_OBJ) \
-		$(ENGINE_TERMINAL_PANE_CSI_OBJ) \
-		$(ENGINE_TERMINAL_PANE_DCS_OBJ) \
-		$(ENGINE_TERMINAL_PANE_KEYS_OBJ) \
-		$(ENGINE_TERMINAL_PANE_MODES_OBJ) \
-		$(ENGINE_TERMINAL_PANE_MOUSE_OBJ) \
-		$(ENGINE_TERMINAL_PANE_OSC_OBJ) \
-		$(ENGINE_TERMINAL_PANE_PROFILE_OBJ) \
-		$(ENGINE_TERMINAL_PANE_REFLOW_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SESSION_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SELECTION_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SGR_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SIXEL_OBJ) \
-		$(ENGINE_TERMINAL_PANE_TEXT_OBJ) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(TEST_OBJS) $(ENGINE_CLIPBOARD_OBJ) \
-		$(ENGINE_TERMINAL_PANE_CLIPBOARD_OBJ) \
-		$(ENGINE_TERMINAL_PANE_CSI_OBJ) \
-		$(ENGINE_TERMINAL_PANE_DCS_OBJ) \
-		$(ENGINE_TERMINAL_PANE_KEYS_OBJ) \
-		$(ENGINE_TERMINAL_PANE_MODES_OBJ) \
-		$(ENGINE_TERMINAL_PANE_MOUSE_OBJ) \
-		$(ENGINE_TERMINAL_PANE_OSC_OBJ) \
-		$(ENGINE_TERMINAL_PANE_PROFILE_OBJ) \
-		$(ENGINE_TERMINAL_PANE_REFLOW_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SESSION_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SELECTION_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SGR_OBJ) \
-		$(ENGINE_TERMINAL_PANE_SIXEL_OBJ) \
-		$(ENGINE_TERMINAL_PANE_TEXT_OBJ)
+# The engine test stubs the pane widget's theme entry points so it runs
+# headless; keep the real widget object out of that link. Other pane objects
+# pull libkryon members that also define the clipboard/input/theme functions
+# the test stubs; link order keeps the test's stubs authoritative.
+PANE_TEST_OBJS = $(filter-out %/terminal_pane_widget.o,$(PANE_OBJS))
 
-$(PARSER_BENCH): engine $(PARSER_BENCH_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/benchmarks
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(PARSER_BENCH_OBJS) \
+$(TEST): engine $(TEST_OBJS) $(PANE_TEST_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Wl,--allow-multiple-definition -o $@ \
+		$(TEST_OBJS) \
+		$(PANE_TEST_OBJS) $(ENGINE_LIB) $(LDLIBS)
+
+$(SIMPLE_TEST): engine $(BUILD_DIR)/tests/simple_terminal_test.o \
+	$(BUILD_DIR)/src/terminal_pane/simple_terminal.o | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(BUILD_DIR)/tests/simple_terminal_test.o \
+		$(BUILD_DIR)/src/terminal_pane/simple_terminal.o
+
+$(PANE_POLICY_TEST): engine $(BUILD_DIR)/tests/terminal_pane_policy_test.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/terminal_pane_policy_test.o \
+		$(PANE_OBJS) -Wl,--whole-archive $(ENGINE_LIB) \
+		-Wl,--no-whole-archive $(LDLIBS)
+
+$(PANE_SELECTION_TEST): engine $(BUILD_DIR)/tests/terminal_pane_selection_test.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/terminal_pane_selection_test.o \
+		$(PANE_OBJS) \
+		-Wl,--whole-archive $(ENGINE_LIB) \
+		-Wl,--no-whole-archive $(LDLIBS)
+
+$(PARSER_BENCH): engine $(PARSER_BENCH_OBJS) $(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/benchmarks
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(PARSER_BENCH_OBJS) $(PANE_OBJS) \
 		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
 		$(LDLIBS)
 
 $(BUILD_DIR)/src/%.o: src/%.c src/*.h | $(BUILD_DIR)/src
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tests/%.o: tests/%.c src/terminal.h | $(BUILD_DIR)/tests
@@ -207,8 +220,11 @@ $(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests $(BUILD_DI
 run: $(APP)
 	$(APP)
 
-test: $(TEST)
+test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST)
 	$(TEST)
+	$(SIMPLE_TEST)
+	$(PANE_POLICY_TEST)
+	$(PANE_SELECTION_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
 	$(PARSER_BENCH)
