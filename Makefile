@@ -75,7 +75,7 @@ TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(BUILD_DIR)/src/config.o \
 	$(call mod_obj,mouse) $(call mod_obj,search) \
 	$(call mod_obj,view) $(call mod_obj,osc) \
 	$(call mod_obj,sixel) $(call mod_obj,dcs) \
-	$(call mod_obj,sgr) $(call mod_obj,terminal_screen) \
+	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
 	$(call mod_obj,terminal_parser) \
 	$(BUILD_DIR)/src/terminal_pty.o \
@@ -91,7 +91,7 @@ PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
 	$(call mod_obj,mouse) $(call mod_obj,search) \
 	$(call mod_obj,view) $(call mod_obj,osc) \
 	$(call mod_obj,sixel) $(call mod_obj,dcs) \
-	$(call mod_obj,sgr) $(call mod_obj,terminal_screen) \
+	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
 	$(call mod_obj,terminal_parser) \
 	$(BUILD_DIR)/src/terminal_pty.o
