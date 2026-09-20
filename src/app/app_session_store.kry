@@ -1,0 +1,139 @@
+#module "app_session_store"
+#inspect off
+#import "session_store.h"
+#import "terminal_pane.h"
+#import "stdio.h"
+#import "stdlib.h"
+#import "string.h"
+#import "sys/stat.h"
+
+PLAN9_BUILD :: #defined(KRYON_NATIVE_PLAN9)
+
+state_dir :: (path: *char, path_size: i32) -> i32 {
+    if path == nil || path_size <= 0 { return 0 }
+#if PLAN9_BUILD {
+    home: const char* = getenv("home")
+    if home != nil && home[0] != '\0' {
+        snprintf(path, (size_t)path_size, "%s/lib/t9", home)
+    } else {
+        return 0
+    }
+} #else {
+    xdg: const char* = getenv("XDG_STATE_HOME")
+    home: const char* = getenv("HOME")
+    if xdg != nil && xdg[0] != '\0' {
+        snprintf(path, (size_t)path_size, "%s/t9", xdg)
+    } else if home != nil && home[0] != '\0' {
+        snprintf(path, (size_t)path_size, "%s/.local/state/t9",
+        home)
+    } else {
+        return 0
+    }
+}
+    return 1
+}
+
+session_store_state_path :: (path: *char, path_size: i32) -> i32 #export {
+    dir: [1024]char
+
+    if path == nil || path_size <= 0 ||
+    state_dir(dir, (int)sizeof(dir)) == 0 {
+        return 0
+    }
+    len: i32 = (int)strlen(dir)
+    if len <= 0 || len + 8 >= path_size { return 0 }
+    snprintf(path, (size_t)path_size, "%s/session", dir)
+    return 1
+}
+
+ensure_state_dir :: () {
+    dir: [1024]char
+    partial: [1024]char
+
+    if state_dir(dir, (int)sizeof(dir)) != 0 {
+        snprintf(partial, sizeof(partial), "%s", dir)
+    } else {
+        return
+    }
+    i: i32 = 1
+    while partial[i] != '\0' {
+        if partial[i] == '/' {
+            partial[i] = '\0'
+            mkdir(partial, 0700)
+            partial[i] = '/'
+        }
+        i += 1
+    }
+    mkdir(partial, 0700)
+}
+
+session_store_save :: (sessions: *const Session, session_count: i32,
+active: i32) -> i32 #export {
+    path: [1024]char
+
+    if sessions == nil || session_count < 0 ||
+    session_store_state_path(path, (int)sizeof(path)) == 0 {
+        return 0
+    }
+    ensure_state_dir()
+    file: *FILE = fopen(path, "w")
+    if file == nil { return 0 }
+    fprintf(file, "active=%d\n",
+    session_count > 0 ? active : 0)
+    i: i32 = 0
+    while i < session_count {
+        cwd: [1024]char
+        line: [8192]char
+        record: SessionRecord
+        session: *const Session = &sessions[i]
+
+        memset(&record, 0, sizeof(record))
+        session_current_cwd(session, cwd, (int)sizeof(cwd))
+        snprintf(record.cwd, sizeof(record.cwd), "%s", cwd)
+        snprintf(record.shell, sizeof(record.shell), "%s",
+        session->shell)
+        snprintf(record.title, sizeof(record.title), "%s",
+        session->title_override != 0 ? session_title(session)
+        : "")
+        snprintf(record.command, sizeof(record.command), "%s",
+        session->command)
+        record.title_override =
+        session->title_override != 0 ? 1 : 0
+        record.scroll_offset = session->scroll_offset
+        if FormatTerminalPaneSessionRecord(line,
+        (int)sizeof(line), record) > 0 {
+            fprintf(file, "%s\n", line)
+        }
+        i += 1
+    }
+    fclose(file)
+    return 1
+}
+
+session_store_load :: (records: *SessionRecord, max_records: i32,
+active: *i32) -> i32 #export {
+    path: [1024]char
+    line: [4096]char
+    restored: i32 = 0
+
+    if active != nil { *active = 0 }
+    if records == nil || max_records <= 0 ||
+    session_store_state_path(path, (int)sizeof(path)) == 0 {
+        return 0
+    }
+    file: *FILE = fopen(path, "r")
+    if file == nil { return 0 }
+    while fgets(line, sizeof(line), file) != nil &&
+    restored < max_records {
+        record: *SessionRecord = &records[restored]
+
+        if ParseTerminalPaneSessionActive(line, active) != 0 {
+            continue
+        }
+        if ParseTerminalPaneSessionRecord(line, record) != 0 {
+            restored += 1
+        }
+    }
+    fclose(file)
+    return restored
+}

@@ -1,0 +1,88 @@
+#module "app_input"
+#inspect off
+#import "input.h"
+#import "terminal.h"
+
+keyboard_state :: TerminalPaneInputState #global
+
+InputTarget :: struct {
+    terminal: *TerminalState
+    key_filter: InputKeyFilter
+    filter: InputWriteFilter
+    userdata: *void
+}
+
+input_key_mode :: (
+terminal: *const TerminalState) -> TerminalPaneKeyMode {
+    mode: TerminalPaneKeyMode = (TerminalPaneKeyMode){0}
+
+    if terminal == nil { return mode }
+    mode.application_cursor_keys = terminal->application_cursor_keys
+    mode.application_keypad = terminal->application_keypad
+    mode.modify_other_keys = terminal->modify_other_keys
+    return mode
+}
+
+input_write_terminal :: (userdata: *void, text: const char*,
+length: i32) -> i32 #export {
+    target: *InputTarget = (InputTarget *)userdata
+
+    if target == nil || target->terminal == nil || text == nil ||
+    length <= 0 {
+        return 0
+    }
+    if target->filter != nil &&
+    target->filter(target->userdata, text, length) != 0 {
+        return 1
+    }
+    return terminal_write(target->terminal, text, length)
+}
+
+input_filter_key :: (userdata: *void, platform_key: i32,
+mods: i32) -> i32 #export {
+    target: *InputTarget = (InputTarget *)userdata
+
+    if target == nil || target->key_filter == nil { return 0 }
+    return target->key_filter(target->userdata, platform_key,
+    mods)
+}
+
+input_target :: (target: *InputTarget) -> TerminalPaneInput {
+    terminal: *TerminalState = target != nil
+    ? target->terminal : nil
+
+    return MakeTerminalPaneInput(input_key_mode(terminal),
+    input_write_terminal, target, &keyboard_state)
+}
+
+input_mods :: () -> i32 #export {
+    return GetTerminalPaneInputModifiers()
+}
+
+input_send_control_key :: (terminal: *TerminalState, key: i32,
+mods: i32) -> i32 #export {
+    if terminal == nil { return 0 }
+    {
+        target: InputTarget = {terminal, nil, nil, nil}
+
+        return SendTerminalPaneControlInput(input_target(&target),
+        key, mods)
+    }
+}
+
+input_send_keyboard :: (terminal: *TerminalState) #export {
+    input_send_keyboard_filtered(terminal, nil, nil, nil)
+}
+
+input_send_keyboard_filtered :: (terminal: *TerminalState,
+key_filter: InputKeyFilter, filter: InputWriteFilter,
+userdata: *void) #export {
+    if terminal == nil { return }
+    {
+        target: InputTarget = {terminal, key_filter, filter,
+        userdata}
+
+        PumpTerminalPaneKeyboardInputFiltered(
+        input_target(&target), input_filter_key, &target)
+    }
+}

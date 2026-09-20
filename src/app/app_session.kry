@@ -1,0 +1,241 @@
+#module "app_session"
+#inspect off
+#import "session.h"
+#import "terminal_pane.h"
+#import "stdio.h"
+#import "stdlib.h"
+#import "string.h"
+#import "unistd.h"
+
+PLAN9_BUILD :: #defined(KRYON_NATIVE_PLAN9)
+
+copy_text :: (dst: *char, dst_size: i32, src: const char*) {
+    if dst == nil || dst_size <= 0 { return }
+    if src == nil { src = "" }
+    len: size_t = strlen(src)
+    if len >= (size_t)dst_size {
+        len = (size_t)dst_size - 1
+    }
+    memcpy(dst, src, len)
+    dst[len] = '\0'
+}
+
+set_short_title :: (session: *Session, text: const char*,
+fallback: const char*) {
+    if session == nil { return }
+    FormatTerminalPaneSessionTitle(session->title,
+    (int)sizeof(session->title), text, fallback)
+}
+
+display_directory :: (cwd: const char*) -> const char* {
+    home: const char* = getenv("HOME")
+
+    if cwd == nil || cwd[0] == '\0' { return "~" }
+    if home != nil && home[0] != '\0' && strcmp(cwd, home) == 0 {
+        return "~"
+    }
+    if home != nil && home[0] != '\0' &&
+    strncmp(cwd, home, strlen(home)) == 0 &&
+    cwd[strlen(home)] == '/' {
+        return cwd + strlen(home) + 1
+    }
+    if strcmp(cwd, "/") == 0 { return "/" }
+    slash: *const char = strrchr(cwd, '/')
+    return slash != nil && slash[1] != '\0' ? slash + 1 : cwd
+}
+
+default_title_text :: (session: *const Session, out: *char,
+out_size: i32) {
+    hostname: [256]char = {0}
+
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if session == nil { return }
+    if session->command[0] != '\0' {
+        FormatTerminalPaneSessionTitle(out, out_size,
+        session->command, "terminal")
+        return
+    }
+    user: const char* = getenv("USER")
+    if user == nil || user[0] == '\0' {
+        user = getenv("user")
+    }
+    if user == nil || user[0] == '\0' { user = "user" }
+    host: *const char = getenv("HOSTNAME")
+#if PLAN9_BUILD {
+    if host == nil || host[0] == '\0' {
+        host = getenv("sysname")
+    }
+} #else {
+    if host == nil || host[0] == '\0' {
+        if gethostname(hostname, sizeof(hostname) - 1) == 0 {
+            host = hostname
+        }
+    }
+}
+    if host == nil || host[0] == '\0' { host = "localhost" }
+    snprintf(out, (size_t)out_size, "Terminal - %s@%s %s", user,
+    host, display_directory(session->cwd))
+}
+
+set_default_title :: (session: *Session) {
+    if session != nil {
+        default_title_text(session, session->title,
+        (int)sizeof(session->title))
+    }
+}
+
+set_shell_title :: (session: *Session, text: const char*) -> i32 {
+    if session == nil || text == nil { return 0 }
+    at: *const char = strchr(text, '@')
+    if at == nil || at == text { return 0 }
+    colon: *const char = strchr(at + 1, ':')
+    if colon == nil || colon == at + 1 { return 0 }
+    space: *const char = strchr(text, ' ')
+    if space != nil && space < colon { return 0 }
+    path: *const char = colon + 1
+    while *path == ' ' { path += 1 }
+    if *path == '\0' { return 0 }
+    snprintf(session->title, sizeof(session->title),
+    "Terminal - %.*s %s", (int)(colon - text), text,
+    display_directory(path))
+    return 1
+}
+
+session_init :: (session: *Session) #export {
+    if session == nil { return }
+    memset(session, 0, sizeof(Session))
+    terminal_init(&session->terminal)
+}
+
+session_open :: (session: *Session, cwd: const char*,
+shell: const char*, command: const char*, cols: i32, rows: i32,
+scrollback_limit: i32) -> i32 #export {
+    if session == nil { return 0 }
+    session_close(session)
+    session_init(session)
+    copy_text(session->cwd, (int)sizeof(session->cwd), cwd)
+    copy_text(session->shell, (int)sizeof(session->shell), shell)
+    copy_text(session->command, (int)sizeof(session->command),
+    command)
+    set_default_title(session)
+    terminal_set_scrollback_limit(&session->terminal,
+    scrollback_limit)
+    if terminal_spawn(&session->terminal, session->cwd,
+    session->shell, session->command, cols, rows) == 0 {
+        terminal_feed(&session->terminal, "Could not start shell\r\n",
+        23)
+        session->used = 1
+        return 0
+    }
+    session->used = 1
+    return 1
+}
+
+session_close :: (session: *Session) #export {
+    if session == nil { return }
+    terminal_close(&session->terminal)
+    session->used = 0
+    session->scroll_offset = 0
+}
+
+session_title :: (session: *const Session) -> const char* #export {
+    if session == nil { return "" }
+    if session->title[0] != '\0' { return session->title }
+    return "terminal"
+}
+
+session_set_title :: (session: *Session, title: const char*) #export {
+    if session == nil { return }
+    copy_text(session->title, (int)sizeof(session->title),
+    title != nil && title[0] != '\0' ? title : "terminal")
+    session->title_override = 1
+}
+
+session_restore_title :: (session: *Session, title: const char*,
+title_override: i32) #export {
+    if session == nil || title == nil || title[0] == '\0' {
+        return
+    }
+    session->title_override = title_override != 0 ? 1 : 0
+    if session->title_override != 0 {
+        copy_text(session->title, (int)sizeof(session->title),
+        title)
+    } else {
+        set_short_title(session, title, "terminal")
+    }
+}
+
+session_sync_terminal_metadata_with_mode :: (session: *Session,
+dynamic_title_mode: i32) #export {
+    if session == nil { return }
+    if session->terminal.current_directory[0] != '\0' &&
+    strcmp(session->cwd, session->terminal.current_directory) != 0 {
+        copy_text(session->cwd, (int)sizeof(session->cwd),
+        session->terminal.current_directory)
+        if session->title_override == 0 &&
+        session->terminal.title[0] == '\0' {
+            set_default_title(session)
+        }
+    }
+    if session->terminal.title[0] != '\0' &&
+    session->title_override == 0 {
+        base: [128]char
+        composed: [512]char
+
+        if dynamic_title_mode == TERMINAL_PANE_TITLE_IGNORE {
+            set_default_title(session)
+        } else if dynamic_title_mode ==
+        TERMINAL_PANE_TITLE_PREPEND {
+            default_title_text(session, base, (int)sizeof(base))
+            snprintf(composed, sizeof(composed), "%s - %s",
+            session->terminal.title,
+            base[0] != '\0' ? base : "terminal")
+            set_short_title(session, composed, "terminal")
+        } else if dynamic_title_mode ==
+        TERMINAL_PANE_TITLE_APPEND {
+            default_title_text(session, base, (int)sizeof(base))
+            snprintf(composed, sizeof(composed), "%s - %s",
+            base[0] != '\0' ? base : "terminal",
+            session->terminal.title)
+            set_short_title(session, composed, "terminal")
+        } else {
+            if set_shell_title(session,
+            session->terminal.title) == 0 {
+                set_short_title(session,
+                session->terminal.title, "terminal")
+            }
+        }
+    }
+}
+
+session_sync_terminal_metadata :: (session: *Session) #export {
+    session_sync_terminal_metadata_with_mode(session,
+    TERMINAL_PANE_TITLE_REPLACE)
+}
+
+session_current_cwd :: (session: *const Session, out: *char,
+out_size: i32) #export {
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if session == nil { return }
+    if session->terminal.current_directory[0] != '\0' {
+        copy_text(out, out_size,
+        session->terminal.current_directory)
+        return
+    }
+    if session->terminal.pid > 0 {
+#if !PLAN9_BUILD {
+        link_path: [64]char
+        snprintf(link_path, sizeof(link_path), "/proc/%d/cwd",
+        session->terminal.pid)
+        len: ssize_t = readlink(link_path, out,
+        (size_t)out_size - 1)
+        if len > 0 {
+            out[len] = '\0'
+            return
+        }
+}
+    }
+    copy_text(out, out_size, session->cwd)
+}
