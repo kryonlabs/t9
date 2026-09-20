@@ -1,0 +1,322 @@
+#module "terminal_pane_dcs_host"
+#inspect off
+#import "terminal_pane.h"
+#import "stdio.h"
+#import "stdlib.h"
+#import "string.h"
+
+TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES :: 4194304
+
+dcs_hex_value :: (ch: i32) -> i32 {
+    if ch >= '0' && ch <= '9' { return ch - '0' }
+    if ch >= 'a' && ch <= 'f' { return 10 + ch - 'a' }
+    if ch >= 'A' && ch <= 'F' { return 10 + ch - 'A' }
+    return -1
+}
+
+append_text :: (buffer: *char, buffer_size: i32, used: *i32,
+text: const char*) -> i32 {
+    if buffer == nil || used == nil || text == nil ||
+    buffer_size <= 0 { return 0 }
+    len: i32 = (int)strlen(text)
+    if *used < 0 || *used + len >= buffer_size { return 0 }
+    memcpy(buffer + *used, text, (size_t)len)
+    *used += len
+    buffer[*used] = '\0'
+    return 1
+}
+
+hex_digits :: [17]char #global = {'0','1','2','3','4','5','6','7','8','9',
+'a','b','c','d','e','f','\0'}
+
+append_hex_bytes :: (buffer: *char, buffer_size: i32, used: *i32,
+bytes: const char*) -> i32 {
+    cursor: const unsigned char* = (const unsigned char *)bytes
+
+    if buffer == nil || used == nil || bytes == nil ||
+    buffer_size <= 0 { return 0 }
+    while *cursor != '\0' {
+        if *used + 2 >= buffer_size { return 0 }
+        buffer[*used] = hex_digits[*cursor >> 4]
+        *used += 1
+        buffer[*used] = hex_digits[*cursor & 15]
+        *used += 1
+        cursor += 1
+    }
+    buffer[*used] = '\0'
+    return 1
+}
+
+decode_hex_name :: (out: *char, out_size: i32, text: const char*,
+text_len: i32) -> i32 {
+    used: i32 = 0
+    i: i32
+
+    if out == nil || out_size <= 0 || text == nil || text_len <= 0 ||
+    (text_len & 1) != 0 { return 0 }
+    i = 0
+    while i < text_len {
+        hi: i32 = dcs_hex_value((unsigned char)text[i])
+        lo: i32 = dcs_hex_value((unsigned char)text[i + 1])
+
+        if hi < 0 || lo < 0 || used >= out_size - 1 { return 0 }
+        out[used] = (char)((hi << 4) | lo)
+        used += 1
+        i += 2
+    }
+    out[used] = '\0'
+    return used > 0 ? 1 : 0
+}
+
+TerminalPaneTermInfoEntry :: struct {
+    name: const char*
+    value: const char*
+}
+
+terminfo_entries :: [44]TerminalPaneTermInfoEntry #global = {
+    {"TN", "xterm-256color"},
+    {"Co", "256"},
+    {"RGB", "8/8/8"},
+    {"kbs", "\x7f"},
+    {"kcuu1", "\x1b[A"},
+    {"kcud1", "\x1b[B"},
+    {"kcuf1", "\x1b[C"},
+    {"kcub1", "\x1b[D"},
+    {"khome", "\x1b[H"},
+    {"kend", "\x1b[F"},
+    {"kich1", "\x1b[2~"},
+    {"kdch1", "\x1b[3~"},
+    {"kpp", "\x1b[5~"},
+    {"knp", "\x1b[6~"},
+    {"ka1", "\x1bOw"},
+    {"ka3", "\x1bOy"},
+    {"kb2", "\x1bOu"},
+    {"kc1", "\x1bOq"},
+    {"kc3", "\x1bOs"},
+    {"kent", "\x1bOM"},
+    {"kf1", "\x1bOP"},
+    {"kf2", "\x1bOQ"},
+    {"kf3", "\x1bOR"},
+    {"kf4", "\x1bOS"},
+    {"kf5", "\x1b[15~"},
+    {"kf6", "\x1b[17~"},
+    {"kf7", "\x1b[18~"},
+    {"kf8", "\x1b[19~"},
+    {"kf9", "\x1b[20~"},
+    {"kf10", "\x1b[21~"},
+    {"kf11", "\x1b[23~"},
+    {"kf12", "\x1b[24~"},
+    {"kf13", "\x1b[1;2P"},
+    {"kf14", "\x1b[1;2Q"},
+    {"kf15", "\x1b[1;2R"},
+    {"kf16", "\x1b[1;2S"},
+    {"kf17", "\x1b[15;2~"},
+    {"kf18", "\x1b[17;2~"},
+    {"kf19", "\x1b[18;2~"},
+    {"kf20", "\x1b[19;2~"},
+    {"kf21", "\x1b[20;2~"},
+    {"kf22", "\x1b[21;2~"},
+    {"kf23", "\x1b[23;2~"},
+    {"kf24", "\x1b[24;2~"}
+}
+
+terminfo_value :: (name: const char*) -> const char* {
+    i: i32
+
+    if name == nil { return nil }
+    i = 0
+    while i < 44 {
+        if strcmp(name, terminfo_entries[i].name) == 0 {
+            return terminfo_entries[i].value
+        }
+        i += 1
+    }
+    return nil
+}
+
+format_failure :: (out: *char, out_size: i32) -> i32 {
+    if out == nil || out_size <= 0 { return 0 }
+    out[0] = '\0'
+    len: i32 = snprintf(out, (size_t)out_size, "\x1bP0+r\x1b\\")
+    if len <= 0 || len >= out_size {
+        out[0] = '\0'
+        return 0
+    }
+    return len
+}
+
+dcs_append_utf8 :: (out: *char, out_size: i32, used: *i32,
+codepoint: u32) -> i32 {
+    if out == nil || used == nil || out_size <= 0 { return 0 }
+    if codepoint < 0x80 {
+        if *used + 1 >= out_size { return 0 }
+        out[*used] = (char)codepoint
+        *used += 1
+    } else if codepoint < 0x800 {
+        if *used + 2 >= out_size { return 0 }
+        out[*used] = (char)(0xc0 | (codepoint >> 6))
+        *used += 1
+        out[*used] = (char)(0x80 | (codepoint & 0x3f))
+        *used += 1
+    } else if codepoint < 0x10000 {
+        if *used + 3 >= out_size { return 0 }
+        out[*used] = (char)(0xe0 | (codepoint >> 12))
+        *used += 1
+        out[*used] = (char)(0x80 | ((codepoint >> 6) & 0x3f))
+        *used += 1
+        out[*used] = (char)(0x80 | (codepoint & 0x3f))
+        *used += 1
+    } else if codepoint <= 0x10ffff {
+        if *used + 4 >= out_size { return 0 }
+        out[*used] = (char)(0xf0 | (codepoint >> 18))
+        *used += 1
+        out[*used] = (char)(0x80 | ((codepoint >> 12) & 0x3f))
+        *used += 1
+        out[*used] = (char)(0x80 | ((codepoint >> 6) & 0x3f))
+        *used += 1
+        out[*used] = (char)(0x80 | (codepoint & 0x3f))
+        *used += 1
+    } else {
+        return 0
+    }
+    out[*used] = '\0'
+    return 1
+}
+
+InitTerminalPaneDCSBuffer :: (buffer: *TerminalPaneDCSBuffer,
+max_bytes: i32) #export {
+    if buffer == nil { return }
+    memset(buffer, 0, sizeof(TerminalPaneDCSBuffer))
+    buffer->max_bytes = max_bytes > 0
+    ? max_bytes : TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+}
+
+ResetTerminalPaneDCSBuffer :: (buffer: *TerminalPaneDCSBuffer) #export {
+    if buffer == nil { return }
+    buffer->length = 0
+    buffer->ignored = 0
+    if buffer->text != nil {
+        buffer->text[0] = '\0'
+    }
+    if buffer->max_bytes <= 0 {
+        buffer->max_bytes = TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+    }
+}
+
+FreeTerminalPaneDCSBuffer :: (buffer: *TerminalPaneDCSBuffer) #export {
+    if buffer == nil { return }
+    free(buffer->text)
+    memset(buffer, 0, sizeof(TerminalPaneDCSBuffer))
+}
+
+AppendTerminalPaneDCSCodepoint :: (buffer: *TerminalPaneDCSBuffer,
+codepoint: u32) -> i32 #export {
+    bytes: [8]char
+    used: i32 = 0
+    i: i32
+
+    if buffer == nil || buffer->ignored != 0 { return 0 }
+    if buffer->max_bytes <= 0 {
+        buffer->max_bytes = TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+    }
+    if dcs_append_utf8(bytes, (int)sizeof(bytes), &used,
+    codepoint) == 0 {
+        buffer->ignored = 1
+        return 0
+    }
+    if buffer->capacity <= buffer->length + used + 1 {
+        capacity: i32 = buffer->capacity > 0
+        ? buffer->capacity * 2 : 1024
+
+        while capacity <= buffer->length + used + 1 &&
+        capacity < buffer->max_bytes {
+            capacity *= 2
+        }
+        if capacity > buffer->max_bytes {
+            capacity = buffer->max_bytes
+        }
+        if capacity <= buffer->length + used + 1 {
+            buffer->ignored = 1
+            return 0
+        }
+        text: *char = (char *)realloc(buffer->text, (size_t)capacity)
+        if text == nil {
+            buffer->ignored = 1
+            return 0
+        }
+        buffer->text = text
+        buffer->capacity = capacity
+    }
+    i = 0
+    while i < used {
+        buffer->text[buffer->length] = bytes[i]
+        buffer->length += 1
+        i += 1
+    }
+    buffer->text[buffer->length] = '\0'
+    return used
+}
+
+GetTerminalPaneDCSBufferText :: (
+buffer: *TerminalPaneDCSBuffer) -> const char* #export {
+    if buffer == nil || buffer->ignored != 0 || buffer->text == nil {
+        return nil
+    }
+    buffer->text[buffer->length] = '\0'
+    return buffer->text
+}
+
+TerminalPaneDCSBufferIgnored :: (
+buffer: *const TerminalPaneDCSBuffer) -> i32 #export {
+    return buffer != nil && buffer->ignored != 0 ? 1 : 0
+}
+
+FormatTerminalPaneXTGETTCAPResponse :: (out: *char, out_size: i32,
+payload: const char*) -> i32 #export {
+    cursor: const char*
+    used: i32 = 0
+    first: i32 = 1
+
+    if out == nil || out_size <= 0 { return 0 }
+    out[0] = '\0'
+    if payload == nil || strncmp(payload, "+q", 2) != 0 {
+        return 0
+    }
+    cursor = payload + 2
+    if append_text(out, out_size, &used, "\x1bP1+r") == 0 {
+        return 0
+    }
+    while *cursor != '\0' {
+        end: const char* = strchr(cursor, ';')
+        name: [32]char
+        value: const char*
+        len: i32 = end != nil
+        ? (int)(end - cursor) : (int)strlen(cursor)
+
+        if decode_hex_name(name, (int)sizeof(name), cursor,
+        len) == 0 {
+            return format_failure(out, out_size)
+        }
+        value = terminfo_value(name)
+        if value == nil {
+            return format_failure(out, out_size)
+        }
+        if first == 0 &&
+        append_text(out, out_size, &used, ";") == 0 {
+            return 0
+        }
+        if append_hex_bytes(out, out_size, &used, name) == 0 ||
+        append_text(out, out_size, &used, "=") == 0 ||
+        append_hex_bytes(out, out_size, &used, value) == 0 {
+            out[0] = '\0'
+            return 0
+        }
+        first = 0
+        if end == nil { break }
+        cursor = end + 1
+    }
+    if append_text(out, out_size, &used, "\x1b\\") == 0 {
+        return 0
+    }
+    return used
+}
