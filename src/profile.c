@@ -11,20 +11,18 @@ static TerminalPaneColors terminal_profile_theme(const Palette *palette)
 
     if(palette == NULL)
         return ResolveTerminalPaneThemeColors(GetTerminalPaneThemeColors());
-    colors = (TerminalPaneColors){
-        palette->terminal_background,
-        palette->foreground,
-        palette->muted,
-        palette->selection,
-        palette->selection_text,
-        palette->cursor,
-        palette->link,
-        palette->chrome_border,
-        palette->scroll_indicator,
-        palette->scroll_indicator_text,
-        palette->bell_overlay,
-        palette->bell_border
-    };
+    colors.background = palette->terminal_background;
+    colors.text = palette->foreground;
+    colors.muted_text = palette->muted;
+    colors.selection = palette->selection;
+    colors.selection_text = palette->selection_text;
+    colors.cursor = palette->cursor;
+    colors.link = palette->link;
+    colors.border = palette->chrome_border;
+    colors.scroll_indicator = palette->scroll_indicator;
+    colors.scroll_indicator_text = palette->scroll_indicator_text;
+    colors.bell_overlay = palette->bell_overlay;
+    colors.bell_border = palette->bell_border;
     return ResolveTerminalPaneThemeColors(colors);
 }
 
@@ -33,13 +31,11 @@ static TerminalPaneProfileColors terminal_profile_configured(
 {
     TerminalPaneProfileColors colors;
 
-    colors = (TerminalPaneProfileColors){
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT
-    };
+    colors.foreground = COLOR_DEFAULT;
+    colors.background = COLOR_DEFAULT;
+    colors.cursor = COLOR_DEFAULT;
+    colors.selection_foreground = COLOR_DEFAULT;
+    colors.selection_background = COLOR_DEFAULT;
     if(config == NULL)
         return colors;
     colors.foreground = config->terminal_foreground;
@@ -55,18 +51,16 @@ static TerminalPaneProfileState terminal_profile_state(
 {
     TerminalPaneProfileState state;
 
-    state = (TerminalPaneProfileState){
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT,
-        COLOR_DEFAULT
-    };
+    state.base_foreground = COLOR_DEFAULT;
+    state.base_background = COLOR_DEFAULT;
+    state.base_cursor = COLOR_DEFAULT;
+    state.base_selection_foreground = COLOR_DEFAULT;
+    state.base_selection_background = COLOR_DEFAULT;
+    state.foreground = COLOR_DEFAULT;
+    state.background = COLOR_DEFAULT;
+    state.cursor = COLOR_DEFAULT;
+    state.selection_foreground = COLOR_DEFAULT;
+    state.selection_background = COLOR_DEFAULT;
     if(terminal == NULL)
         return state;
     state.base_foreground = terminal->base_fg;

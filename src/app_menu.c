@@ -1,5 +1,7 @@
 #include "app_menu.h"
 
+#include <string.h>
+
 #include "app_commands.h"
 
 #include "kryon.h"
@@ -134,16 +136,17 @@ void draw_app_menu_bar(State *app, Rectangle bounds)
          (int)(sizeof(help_items) / sizeof(help_items[0]))}
     };
     MenuResult result;
+    MenuProps in;
 
     if(app == NULL)
         return;
-    result = Menu((MenuProps){
-        .id = 1200,
-        .mode = MenuModeBar,
-        .bounds = bounds,
-        .menus = menus,
-        .menu_count = (int)(sizeof(menus) / sizeof(menus[0])),
-        .open_index = &app->top_menu_index
-    });
+    memset(&in, 0, sizeof(in));
+    in.id = 1200;
+    in.mode = MenuModeBar;
+    in.bounds = bounds;
+    in.menus = menus;
+    in.menu_count = (int)(sizeof(menus) / sizeof(menus[0]));
+    in.open_index = &app->top_menu_index;
+    result = Menu(in);
     app_execute_command(app, result.activated_id);
 }

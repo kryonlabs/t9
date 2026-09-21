@@ -189,6 +189,7 @@ static void handle_selection(State *app, Session *session)
             int total = terminal_visible_line_count(&session->terminal);
             int max_scroll = max_int(0, total - app->visible_rows);
             int first_visible_row = app->first_visible_row;
+            Vector2 mouse_clamped;
 
             if(scroll_delta != 0) {
                 session->scroll_offset = clamp_int(
@@ -203,12 +204,13 @@ static void handle_selection(State *app, Session *session)
                 row = mouse.y < app->viewport.y
                          ? first_visible_row
                          : first_visible_row + app->visible_rows - 1;
-            col = visible_col_from_mouse(app, (Vector2){
-                clamp_int((int)mouse.x, (int)app->viewport.x,
-                          (int)(app->viewport.x + app->viewport.width - 1)),
-                clamp_int((int)mouse.y, (int)app->viewport.y,
-                          (int)(app->viewport.y + app->viewport.height - 1))
-            });
+            mouse_clamped.x = (float)clamp_int(
+                (int)mouse.x, (int)app->viewport.x,
+                (int)(app->viewport.x + app->viewport.width - 1));
+            mouse_clamped.y = (float)clamp_int(
+                (int)mouse.y, (int)app->viewport.y,
+                (int)(app->viewport.y + app->viewport.height - 1));
+            col = visible_col_from_mouse(app, mouse_clamped);
         }
         if(row >= 0)
             selection_update_end(&app->selection, &session->terminal, row,

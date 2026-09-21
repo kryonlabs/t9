@@ -64,15 +64,13 @@ static void current_sgr_status(const TerminalState *terminal, char *buffer,
     buffer[0] = '\0';
     if(terminal == NULL)
         return;
-    status = (TerminalPaneSGRStatus){
-        terminal->current_style &
-            (STYLE_BOLD | STYLE_ITALIC | STYLE_UNDERLINE | STYLE_INVERSE |
-             STYLE_STRIKE | STYLE_FAINT | STYLE_CONCEAL | STYLE_BLINK |
-             STYLE_OVERLINE),
-        terminal->current_fg,
-        terminal->current_bg,
-        terminal->current_underline,
-    };
+    status.styles = terminal->current_style &
+        (STYLE_BOLD | STYLE_ITALIC | STYLE_UNDERLINE | STYLE_INVERSE |
+         STYLE_STRIKE | STYLE_FAINT | STYLE_CONCEAL | STYLE_BLINK |
+         STYLE_OVERLINE);
+    status.foreground = terminal->current_fg;
+    status.background = terminal->current_bg;
+    status.underline = terminal->current_underline;
     (void)FormatTerminalPaneSGRStatus(buffer, buffer_size, status);
 }
 

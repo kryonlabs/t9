@@ -1,5 +1,7 @@
 #include "app_context_menu.h"
 
+#include <string.h>
+
 #include "app_clipboard.h"
 #include "app_commands.h"
 #include "app_search.h"
@@ -34,22 +36,25 @@ void draw_context_menu(State *app, Session *session)
         {MenuCommand, "Find Previous", "Ctrl+Shift+B", CONTEXT_FIND_PREVIOUS, 0, 0, NULL, 0}
     };
     int command;
+    MenuProps in;
+    MenuResult out;
 
     if(app == NULL || session == NULL || !app->context_menu_open)
         return;
     items[1].disabled = app->session_count <= 1;
     items[3].disabled = !app->selection.active;
     items[5].disabled = !primary_selection_available();
-    command = Menu((MenuProps){
-        .id = 1300,
-        .mode = MenuModeContext,
-        .bounds = app->viewport,
-        .items = items,
-        .item_count = (int)(sizeof(items) / sizeof(items[0])),
-        .open = &app->context_menu_open,
-        .x = &app->context_menu_x,
-        .y = &app->context_menu_y
-    }).activated_id;
+    memset(&in, 0, sizeof(in));
+    in.id = 1300;
+    in.mode = MenuModeContext;
+    in.bounds = app->viewport;
+    in.items = items;
+    in.item_count = (int)(sizeof(items) / sizeof(items[0]));
+    in.open = &app->context_menu_open;
+    in.x = &app->context_menu_x;
+    in.y = &app->context_menu_y;
+    out = Menu(in);
+    command = out.activated_id;
     if(command == CONTEXT_NEW_TAB) {
         app_execute_command(app, APP_COMMAND_NEW_TAB);
         app->context_menu_open = 0;

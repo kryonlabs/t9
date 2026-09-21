@@ -60,6 +60,7 @@ static void estimate_terminal_grid(State *app, int *cols, int *rows)
 {
     int chrome_h = app_chrome_height(app);
     TerminalPaneMetrics metrics;
+    Rectangle screen;
 
     if(cols == NULL || rows == NULL)
         return;
@@ -73,9 +74,13 @@ static void estimate_terminal_grid(State *app, int *cols, int *rows)
         return;
     }
     UseTextFont("t9-terminal");
+    screen.x = 0.0f;
+    screen.y = 0.0f;
+    screen.width = (float)GetScreenWidth();
+    screen.height = (float)GetScreenHeight();
     metrics = MeasureTerminalPaneContent(
         TerminalPaneContentBounds(
-            (Rectangle){0, 0, (float)GetScreenWidth(), (float)GetScreenHeight()},
+            screen,
             chrome_h, 0),
         app->config.font_size);
     UseTextFont("t9-ui");

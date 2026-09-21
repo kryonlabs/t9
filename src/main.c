@@ -561,6 +561,7 @@ int main(int argc, char **argv)
     double fast_poll_until = 0.0;
     char arg_error[256];
     LaunchParseResult parse_result;
+    Rectangle frame_bounds;
 
     memset(&app, 0, sizeof(app));
     app.top_menu_index = -1;
@@ -686,9 +687,11 @@ int main(int argc, char **argv)
         BeginInterfaceFrame(frame_width(), frame_height(), 1.0f);
         app_update_auto_hide_mouse(&app);
         if(session != NULL) {
-            draw_terminal_view(&app, session,
-                               (Rectangle){0, 0, (float)frame_width(),
-                                           (float)frame_height()});
+            frame_bounds.x = 0.0f;
+            frame_bounds.y = 0.0f;
+            frame_bounds.width = (float)frame_width();
+            frame_bounds.height = (float)frame_height();
+            draw_terminal_view(&app, session, frame_bounds);
             app_handle_input(&app);
             if(app_interaction_active(&app))
                 fast_poll_until = GetTime() + 0.25;

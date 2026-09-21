@@ -58,14 +58,17 @@ static int color_visible(Color color)
 
 static Color mix_color(Color a, Color b, float t)
 {
+    Color out;
+
     if(t < 0.0f)
         t = 0.0f;
     if(t > 1.0f)
         t = 1.0f;
-    return (Color){(unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t),
-                   (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t),
-                   (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t),
-                   255};
+    out.r = (unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t);
+    out.g = (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t);
+    out.b = (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t);
+    out.a = 255;
+    return out;
 }
 
 void palette_apply_system_theme(Palette *palette)

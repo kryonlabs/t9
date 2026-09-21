@@ -28,14 +28,17 @@ static int clamp_int(int value, int low, int high)
 
 static Color blend_color(Color a, Color b, float t)
 {
+    Color out;
+
     if(t < 0.0f)
         t = 0.0f;
     if(t > 1.0f)
         t = 1.0f;
-    return (Color){(unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t),
-                   (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t),
-                   (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t),
-                   a.a};
+    out.r = (unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t);
+    out.g = (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t);
+    out.b = (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t);
+    out.a = a.a;
+    return out;
 }
 
 static Color
@@ -91,6 +94,8 @@ static void draw_background_texture(State *app, Rectangle viewport)
     float w;
     float h;
     Rectangle dst;
+    Rectangle src;
+    Vector2 origin;
 
     if(app == NULL)
         return;
@@ -103,18 +108,19 @@ static void draw_background_texture(State *app, Rectangle viewport)
         scale = viewport.height / (float)texture.height;
     w = (float)texture.width * scale;
     h = (float)texture.height * scale;
-    dst = (Rectangle){
-        viewport.x + (viewport.width - w) * 0.5f,
-        viewport.y + (viewport.height - h) * 0.5f,
-        w,
-        h
-    };
+    dst.x = viewport.x + (viewport.width - w) * 0.5f;
+    dst.y = viewport.y + (viewport.height - h) * 0.5f;
+    dst.width = w;
+    dst.height = h;
     BeginScissorMode((int)viewport.x, (int)viewport.y,
                      (int)viewport.width, (int)viewport.height);
-    DrawTexturePro(texture,
-                   (Rectangle){0.0f, 0.0f, (float)texture.width,
-                               (float)texture.height},
-                   dst, (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+    src.x = 0.0f;
+    src.y = 0.0f;
+    src.width = (float)texture.width;
+    src.height = (float)texture.height;
+    origin.x = 0.0f;
+    origin.y = 0.0f;
+    DrawTexturePro(texture, src, dst, origin, 0.0f, WHITE);
     EndScissorMode();
 }
 
@@ -130,6 +136,7 @@ static void draw_tabs(State *app, Rectangle bounds)
     int reordered_from = -1;
     int reordered_to = -1;
     Rectangle selected_bounds = {0.0f, 0.0f, 0.0f, 0.0f};
+    TabBarProps bar_props;
 
     if(app == NULL || !app_tab_bar_visible(app))
         return;
@@ -139,22 +146,22 @@ static void draw_tabs(State *app, Rectangle bounds)
         tabs[i].closeable = app->session_count > 1;
     }
     count = app->session_count;
-    clicked = TabBar((TabBarProps){
-        .bounds = bounds,
-        .tabs = tabs,
-        .count = count,
-        .selected_index = app->active,
-        .min_tab_width = Scale(72),
-        .max_tab_width = Scale(280),
-        .scroll_offset = &app->tab_scroll,
-        .focus_selected = true,
-        .closed_index = &closed,
-        .double_clicked_index = &double_clicked,
-        .reordered_from_index = &reordered_from,
-        .reordered_to_index = &reordered_to,
-        .selected_tab_bounds = &selected_bounds,
-        .middle_clicked_index = &middle_clicked
-    });
+    memset(&bar_props, 0, sizeof(bar_props));
+    bar_props.bounds = bounds;
+    bar_props.tabs = tabs;
+    bar_props.count = count;
+    bar_props.selected_index = app->active;
+    bar_props.min_tab_width = Scale(72);
+    bar_props.max_tab_width = Scale(280);
+    bar_props.scroll_offset = &app->tab_scroll;
+    bar_props.focus_selected = true;
+    bar_props.closed_index = &closed;
+    bar_props.double_clicked_index = &double_clicked;
+    bar_props.reordered_from_index = &reordered_from;
+    bar_props.reordered_to_index = &reordered_to;
+    bar_props.selected_tab_bounds = &selected_bounds;
+    bar_props.middle_clicked_index = &middle_clicked;
+    clicked = TabBar(bar_props);
     if(reordered_from >= 0 && reordered_from < app->session_count &&
        reordered_to >= 0 && reordered_to < app->session_count) {
         move_session(app, reordered_from, reordered_to);
@@ -256,6 +263,7 @@ static void draw_line_cells(State *app, const TerminalState *terminal,
                             int visible_row, int y)
 {
     int col;
+    Vector2 text_pos;
 
     if(terminal == NULL || visible_row < 0 ||
        visible_row >= terminal_visible_line_count(terminal))
@@ -311,14 +319,15 @@ static void draw_line_cells(State *app, const TerminalState *terminal,
         len = cell_text(cell, text, sizeof(text));
         if(len <= 0)
             continue;
-        DrawTextEx(GetTextFont(), text,
-                   (Vector2){app->viewport.x + col * app->cell_w, (float)y},
+        text_pos.x = app->viewport.x + col * app->cell_w;
+        text_pos.y = (float)y;
+        DrawTextEx(GetTextFont(), text, text_pos,
                    (float)app->config.font_size, 0.0f, fg);
-        if(app->config.allow_bold && (cell->style & STYLE_BOLD) != 0)
-            DrawTextEx(GetTextFont(), text,
-                       (Vector2){app->viewport.x + col * app->cell_w + 1,
-                                 (float)y},
+        if(app->config.allow_bold && (cell->style & STYLE_BOLD) != 0) {
+            text_pos.x = app->viewport.x + col * app->cell_w + 1;
+            DrawTextEx(GetTextFont(), text, text_pos,
                        (float)app->config.font_size, 0.0f, fg);
+        }
         if(linked && !selected)
             underline = theme_colors.link;
         if((cell->style & STYLE_UNDERLINE) != 0 || linked)
@@ -391,12 +400,10 @@ static void draw_sixel_images(State *app, const TerminalState *terminal,
 
                     color = resolve_terminal_color(app, terminal, pixel,
                                                    view_colors.foreground);
-                    pixel_run = (Rectangle){
-                        (float)origin_x + (float)x * pixel_w,
-                        dest_y,
-                        (float)run * pixel_w,
-                        pixel_h
-                    };
+                    pixel_run.x = (float)origin_x + (float)x * pixel_w;
+                    pixel_run.y = dest_y;
+                    pixel_run.width = (float)run * pixel_w;
+                    pixel_run.height = pixel_h;
                     DrawRectangleRec(pixel_run, color);
                 }
                 x += run;
@@ -417,6 +424,10 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
     int total_rows;
     int row;
     int max_scroll;
+    Rectangle chrome;
+    Vector2 cursor_pos;
+    ModalProps modal_props;
+    TerminalPaneScrollIndicator scroll_props;
 
     seed_theme_defaults_to_terminal(app, terminal);
     UseTextFont("t9-terminal");
@@ -439,12 +450,18 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
 
     DrawRectangleRec(bounds, opaque_color(app->palette.background));
     if(menu_h > 0) {
-        draw_app_menu_bar(app, (Rectangle){bounds.x, bounds.y, bounds.width,
-                                           (float)menu_h});
+        chrome.x = bounds.x;
+        chrome.y = bounds.y;
+        chrome.width = bounds.width;
+        chrome.height = (float)menu_h;
+        draw_app_menu_bar(app, chrome);
     }
     if(tab_h > 0) {
-        draw_tabs(app, (Rectangle){bounds.x, bounds.y + (float)menu_h,
-                                   bounds.width, (float)tab_h});
+        chrome.x = bounds.x;
+        chrome.y = bounds.y + (float)menu_h;
+        chrome.width = bounds.width;
+        chrome.height = (float)tab_h;
+        draw_tabs(app, chrome);
     }
     draw_background_texture(app, app->viewport);
     DrawRectangleRec(app->viewport,
@@ -490,11 +507,13 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
 
                 DrawRectangle(x, y, app->cell_w, app->line_h,
                               view_colors.cursor);
-                if(cell != NULL && cell_text(cell, text, sizeof(text)) > 0)
-                    DrawTextEx(GetTextFont(), text,
-                               (Vector2){(float)x, (float)y},
+                if(cell != NULL && cell_text(cell, text, sizeof(text)) > 0) {
+                    cursor_pos.x = (float)x;
+                    cursor_pos.y = (float)y;
+                    DrawTextEx(GetTextFont(), text, cursor_pos,
                                (float)app->config.font_size, 0.0f,
                                view_colors.background);
+                }
             }
         }
     }
@@ -517,23 +536,22 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
     }
 
     if(session->scroll_offset > 0) {
-        DrawTerminalPaneScrollIndicator((TerminalPaneScrollIndicator){
-            app->viewport,
-            session->scroll_offset,
-            Scale(13),
-            theme_colors
-        });
+        scroll_props.viewport = app->viewport;
+        scroll_props.scroll_offset = session->scroll_offset;
+        scroll_props.font_size = Scale(13);
+        scroll_props.colors = theme_colors;
+        DrawTerminalPaneScrollIndicator(scroll_props);
     }
     draw_context_menu(app, session);
     if(app->about_visible) {
         static const ModalAction actions[] = {{.label = "OK"}};
 
-        if(Modal((ModalProps){
-               .title = "Terminal",
-               .message = "A Kryon terminal application.",
-               .actions = actions,
-               .action_count = 1
-           }) != 0)
+        memset(&modal_props, 0, sizeof(modal_props));
+        modal_props.title = "Terminal";
+        modal_props.message = "A Kryon terminal application.";
+        modal_props.actions = actions;
+        modal_props.action_count = 1;
+        if(Modal(modal_props) != 0)
             app->about_visible = 0;
     }
     draw_search_prompt(app);
@@ -542,15 +560,17 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
             {.label = "Cancel"},
             {.label = "Save"}
         };
-        int result = Modal((ModalProps){
-            .title = profile_prompt_title(app->profile_prompt),
-            .actions = actions,
-            .action_count = 2,
-            .text = app->profile_text,
-            .text_size = (int)sizeof(app->profile_text),
-            .cursor_position = &app->profile_cursor,
-            .focused = &app->profile_focused
-        });
+        int result;
+
+        memset(&modal_props, 0, sizeof(modal_props));
+        modal_props.title = profile_prompt_title(app->profile_prompt);
+        modal_props.actions = actions;
+        modal_props.action_count = 2;
+        modal_props.text = app->profile_text;
+        modal_props.text_size = (int)sizeof(app->profile_text);
+        modal_props.cursor_position = &app->profile_cursor;
+        modal_props.focused = &app->profile_focused;
+        result = Modal(modal_props);
 
         if(result == 1) {
             app->profile_prompt = PROFILE_PROMPT_NONE;
@@ -566,17 +586,19 @@ void draw_terminal_view(State *app, Session *session, Rectangle bounds)
             {.label = "Cancel"},
             {.label = "Rename"}
         };
-        int result = Modal((ModalProps){
-            .title = "Title",
-            .actions = actions,
-            .action_count = 2,
-            .text = app->rename_text,
-            .text_size = (int)sizeof(app->rename_text),
-            .cursor_position = &app->rename_cursor,
-            .focused = &app->rename_focused,
-            .focus_id = 9301,
-            .max_width = 300
-        });
+        int result;
+
+        memset(&modal_props, 0, sizeof(modal_props));
+        modal_props.title = "Title";
+        modal_props.actions = actions;
+        modal_props.action_count = 2;
+        modal_props.text = app->rename_text;
+        modal_props.text_size = (int)sizeof(app->rename_text);
+        modal_props.cursor_position = &app->rename_cursor;
+        modal_props.focused = &app->rename_focused;
+        modal_props.focus_id = 9301;
+        modal_props.max_width = 300;
+        result = Modal(modal_props);
 
         if(result == 1) {
             app->rename_index = -1;
@@ -600,26 +622,36 @@ void draw_starting_frame(State *app)
     int tab_h = app_tab_bar_height(app);
     Rectangle viewport = TerminalPaneContentBounds(bounds, menu_h + tab_h, 0);
     TerminalPaneColors theme_colors = terminal_theme_tokens();
+    Rectangle chrome;
+    TextProps text_props;
 
     UseTextFont("t9-ui");
     DrawRectangleRec(bounds, opaque_color(app->palette.background));
     if(menu_h > 0) {
-        draw_app_menu_bar(app, (Rectangle){bounds.x, bounds.y, bounds.width,
-                                           (float)menu_h});
+        chrome.x = bounds.x;
+        chrome.y = bounds.y;
+        chrome.width = bounds.width;
+        chrome.height = (float)menu_h;
+        draw_app_menu_bar(app, chrome);
     }
     if(tab_h > 0) {
-        draw_tabs(app, (Rectangle){bounds.x, bounds.y + (float)menu_h,
-                                   bounds.width, (float)tab_h});
+        chrome.x = bounds.x;
+        chrome.y = bounds.y + (float)menu_h;
+        chrome.width = bounds.width;
+        chrome.height = (float)tab_h;
+        draw_tabs(app, chrome);
     }
     draw_background_texture(app, viewport);
     DrawRectangleRec(viewport,
                      alpha_color(theme_colors.background,
                                  app->config.background_opacity));
-    Text((TextProps){
-        .bounds = {viewport.x + 10, viewport.y + 10,
-                   viewport.width - 20, (float)Scale(24)},
-        .text = "Starting terminal...",
-        .font = app->config.font_size,
-        .wrap = TextWrapNone
-    });
+    memset(&text_props, 0, sizeof(text_props));
+    text_props.bounds.x = viewport.x + 10;
+    text_props.bounds.y = viewport.y + 10;
+    text_props.bounds.width = viewport.width - 20;
+    text_props.bounds.height = (float)Scale(24);
+    text_props.text = "Starting terminal...";
+    text_props.font = app->config.font_size;
+    text_props.wrap = TextWrapNone;
+    Text(text_props);
 }

@@ -78,16 +78,17 @@ void draw_search_prompt(State *app)
             {.label = "Cancel"},
             {.label = "Find"}
         };
+        ModalProps in;
 
-        result = Modal((ModalProps){
-            .title = "Find",
-            .actions = actions,
-            .action_count = 2,
-            .text = app->search_text,
-            .text_size = (int)sizeof(app->search_text),
-            .cursor_position = &app->search_cursor,
-            .focused = &app->search_focused
-        });
+        memset(&in, 0, sizeof(in));
+        in.title = "Find";
+        in.actions = actions;
+        in.action_count = 2;
+        in.text = app->search_text;
+        in.text_size = (int)sizeof(app->search_text);
+        in.cursor_position = &app->search_cursor;
+        in.focused = &app->search_focused;
+        result = Modal(in);
     }
 
     if(result == 1) {
