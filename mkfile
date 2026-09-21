@@ -21,6 +21,6 @@ appsrc=\
 	src/main.c\
 	src/terminal_pty_plan9.c\
 
-APPCPPFLAGS=-I$ROOT/src -I$ROOT/build/plan9/generated/src
+APPCPPFLAGS=-I$ROOT/src -I$ROOT/build/plan9/generated/src -I$ROOT/build/plan9/generated
 
 < /sys/src/kryon/mk/plan9-app.mk
