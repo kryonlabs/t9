@@ -2,7 +2,6 @@
 #define KTREM_TERMINAL_H
 
 #include "terminal_pane.h"
-#include "ui_tk.h"
 
 #include <stddef.h>
 

@@ -5,7 +5,27 @@
 #include <stdio.h>
 #include <string.h>
 
-static int write_osc52_response(void *userdata, const char *text)
+static int write_osc52_response_impl(void *userdata, const char *text);
+
+/* Host-provided clipboard write callbacks kryon's protocol calls back
+ * into: OSC52 responses echo to the terminal; paste writes are handled by
+ * the pane clipboard layer, so decline here. */
+int
+ClipboardOSC52Write(void *userdata, const char *text)
+{
+    return write_osc52_response_impl(userdata, text);
+}
+
+int
+ClipboardPasteWrite(void *userdata, const char *text, int size)
+{
+    (void)userdata;
+    (void)text;
+    (void)size;
+    return 0;
+}
+
+static int write_osc52_response_impl(void *userdata, const char *text)
 {
     TerminalState *terminal = userdata;
 
@@ -329,6 +349,5 @@ void terminal_finish_osc(TerminalState *terminal)
         return;
     }
     if(code == 52)
-        (void)HandleClipboardOSC52(&terminal->clipboard, payload,
-                                     write_osc52_response, terminal);
+        (void)HandleClipboardOSC52(&terminal->clipboard, payload, terminal);
 }
