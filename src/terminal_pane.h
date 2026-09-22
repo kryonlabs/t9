@@ -11,6 +11,9 @@
 extern "C" {
 #endif
 
+typedef int32_t (*ClipboardPasteWriteFn)(void *userdata, const char *text,
+                                         int32_t size);
+
 typedef struct TerminalPaneColors {
     Color background;
     Color text;
