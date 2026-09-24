@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>t9 - Kryon terminal</title>
-  <meta name="description" content="t9 is a fast Kryon-built terminal aiming to be a practical xfce4-terminal alternative with tabs, search, glyph coverage, launch compatibility, and measured benchmarks.">
+  <title>t9 — Terminal and Ziran migration</title>
+  <meta name="description" content="t9 is a Linux terminal built with the earlier Kryon .kry stack. Its migration to Ziran-based Kryon is pending; benchmark figures are a recorded snapshot.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://ktrem.kryonlabs.com/">
   <meta property="og:title" content="t9 - Kryon terminal">
-  <meta property="og:description" content="A fast Kryon-built terminal with xfce4-terminal compatibility goals, measured benchmarks, and a public parity plan.">
+  <meta property="og:description" content="A terminal built with the earlier Kryon stack, with recorded benchmarks and a pending Ziran migration.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://ktrem.kryonlabs.com/">
   <meta name="twitter:title" content="t9 - Kryon terminal">
-  <meta name="twitter:description" content="A fast Kryon-built terminal with tabs, search, launch compatibility, and measured benchmark data.">
+  <meta name="twitter:description" content="A terminal on the earlier Kryon stack, with tabs, search, recorded benchmarks, and Ziran migration pending.">
   <meta name="theme-color" content="#f3f1ea">
   <meta name="keywords" content="t9,Kryon,Kryon Labs,terminal,xfce4-terminal,terminal emulator,Linux terminal,benchmarks">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -22,7 +22,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "t9",
-    "description": "A fast Kryon-built terminal aiming to be a practical xfce4-terminal alternative.",
+    "description": "A Linux terminal currently built with the earlier Kryon stack.",
     "url": "https://ktrem.kryonlabs.com",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux",
@@ -45,19 +45,20 @@
         <a href="#features">Features</a>
         <a href="#install">Install</a>
         <a href="#roadmap">Roadmap</a>
-        <a class="is-external" href="https://kryonlabs.com">Kryon</a>
+        <a class="is-external" href="https://ziran.kryonlabs.com/">Ziran</a><a class="is-external" href="https://kryonlabs.com">Kryon</a>
         <a class="btn btn-primary" href="#install">Get t9</a>
       </nav>
     </div>
   </header>
 
+  <div class="migration-banner"><strong>Migration note:</strong> This site documents t9’s current legacy <code>.kry</code> implementation. <a href="https://ziran.kryonlabs.com/">Ziran</a> is the new language, and t9’s move to the Ziran-based Kryon library is not complete.</div>
   <main id="top">
     <section class="hero">
       <div class="hero-inner">
-        <span class="hero-eyebrow"><span class="dot"></span>Kryon terminal emulator</span>
+        <span class="hero-eyebrow"><span class="dot"></span>Terminal emulator · Legacy Kryon stack</span>
         <img class="hero-icon" src="favicon.svg" width="84" height="84" alt="t9">
         <h1>t9</h1>
-        <p class="hero-sub">A Kryon-built terminal for Linux desktops. The target is simple: become a practical xfce4-terminal alternative with fast output, familiar tabs, rich terminal compatibility, and honest public benchmarks.</p>
+        <p class="hero-sub">t9 is a Linux terminal currently built with the earlier Kryon <code>.kry</code> toolchain. Its terminal engine and app behavior live in t9; migration to the new Ziran-based Kryon library is still pending.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#benchmarks">View benchmarks</a>
           <a class="btn" href="#parity">Parity matrix</a>
@@ -90,23 +91,23 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
 
     <section class="status-strip" aria-label="Current status">
       <div>
-        <strong>Faster on current GUI suite</strong>
-        <span>t9 beats xfce4-terminal average time in every measured synthetic output workload.</span>
+        <strong>Recorded benchmark snapshot</strong>
+        <span>In the recorded synthetic suite, t9 beat xfce4-terminal averages for measured output workloads. These results are not a current release guarantee.</span>
       </div>
       <div>
-        <strong>External workflows measured</strong>
+        <strong>Recorded Xvfb workflows</strong>
         <span>t9 averages 158.7 ms on live resize, 206.3 ms on clipboard paste, and 613.0 ms on find workflow under Xvfb.</span>
       </div>
       <div>
-        <strong>Built on Kryon</strong>
-        <span>The terminal app lives in t9; reusable runtime work stays in Kryon.</span>
+        <strong>Legacy Kryon dependency</strong>
+        <span>The terminal app lives in t9. Current code uses the earlier Kryon stack; Ziran-based migration remains.</span>
       </div>
     </section>
 
     <section id="benchmarks">
       <p class="section-eyebrow">Benchmarks</p>
-      <h2>Measured against xfce4-terminal</h2>
-      <p class="section-lead">The GUI suite runs both terminals inside Xvfb so it does not interrupt the active desktop. Results are averaged across three isolated runs with <code>KTREM_ACTIVE_FPS=1000</code> and <code>KTREM_PTY_BURST_MS=8</code>. The clipboard and find workloads send the same held shortcuts to both terminals.</p>
+      <h2>Recorded comparison with xfce4-terminal</h2>
+      <p class="section-lead">These archived results came from a GUI suite that ran both terminals inside Xvfb. They are averages across three isolated runs with <code>KTREM_ACTIVE_FPS=1000</code> and <code>KTREM_PTY_BURST_MS=8</code>. The clipboard and find workloads send the same held shortcuts to both terminals.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -194,7 +195,7 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
         <article class="parity-card">
           <h3>Remaining before a full alternative claim</h3>
           <ul>
-            <li>Broader workflow validation beyond the current Xvfb benchmark suite.</li>
+            <li>Broader workflow validation beyond the recorded Xvfb benchmark suite.</li>
             <li>Broader live-resize validation across real desktop window managers.</li>
             <li>Real multi-window launch and single-instance command server behavior.</li>
             <li>Repeated-invocation drop-down visibility toggle.</li>
@@ -223,7 +224,7 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
         </article>
         <article class="feature-card">
           <h3>Kryon integration</h3>
-          <p>The app uses Kryon for windowing, rendering, input, system theme integration, and platform hooks while keeping terminal-specific behavior in t9.</p>
+          <p>The current app uses the earlier Kryon dependency for windowing, rendering, input, theme integration, and platform hooks. Terminal-specific behavior stays in t9. Migration to Ziran-based Kryon is pending.</p>
         </article>
       </div>
     </section>
