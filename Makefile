@@ -1,5 +1,7 @@
 CC ?= cc
 ENGINE_DIR ?= ../kryon
+ZIRAN_DIR ?= ../ziran
+ZIRAN ?= $(ZIRAN_DIR)/build/bin/ziran
 BUILD_ROOT ?= build
 KRYON_BACKEND ?= raylib
 PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
@@ -37,10 +39,14 @@ PANE_KRY := $(sort $(wildcard src/terminal_pane/*.kry))
 PANE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(PANE_KRY))
 PANE_KRY_H := $(PANE_KRY_C:.c=.h)
 PANE_KRY_OBJS := $(PANE_KRY_C:.c=.o)
+PANE_ZI := $(sort $(wildcard src/terminal_pane/*.zi))
+PANE_ZI_C := $(patsubst src/%.zi,$(BUILD_DIR)/generated/src/%.c,$(PANE_ZI))
+PANE_ZI_H := $(PANE_ZI_C:.c=.h)
+PANE_ZI_OBJS := $(PANE_ZI_C:.c=.o)
 PANE_RUNTIME_C = $(BUILD_DIR)/generated/src/runtime/terminal_pane.c
 PANE_RUNTIME_H = $(PANE_RUNTIME_C:.c=.h)
 PANE_RUNTIME_OBJ = $(PANE_RUNTIME_C:.c=.o)
-PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_RUNTIME_OBJ)
+PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_ZI_OBJS) $(PANE_RUNTIME_OBJ)
 ENGINE_KRY := $(sort $(wildcard src/engine/*.kry))
 ENGINE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(ENGINE_KRY))
 ENGINE_KRY_H := $(ENGINE_KRY_C:.c=.h)
@@ -63,6 +69,10 @@ TEST = $(BUILD_DIR)/tests/terminal_test
 SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
 PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
 PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
+PANE_TEXT_TEST = $(BUILD_DIR)/tests/terminal_pane_text_test
+PANE_TEXT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_text
+PANE_TEXT_TEST_C = $(PANE_TEXT_TEST_GEN)/terminal_pane_text.c \
+	$(PANE_TEXT_TEST_GEN)/terminal_pane_text_test.c
 PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
@@ -168,9 +178,25 @@ $(PANE_RUNTIME_C) $(PANE_RUNTIME_H) &: runtime/terminal_pane.kry | engine
 $(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) $(APP_KRY_C) $(APP_KRY_H) &: $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY) $(PANE_RUNTIME_H) | engine
 	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
 
+$(PANE_ZI_C) $(PANE_ZI_H) &: $(PANE_ZI)
+	@mkdir -p $(BUILD_DIR)/generated/src
+	$(ZIRAN) build --target=c --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/generated/src $(PANE_ZI)
+
 $(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -c $< -o $@
+
+$(PANE_TEXT_TEST_C) &: tests/terminal_pane_text_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_TEXT_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_TEXT_TEST_GEN) tests/terminal_pane_text_test.zi
+
+$(PANE_TEXT_TEST): $(PANE_TEXT_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_TEXT_TEST_GEN) $(PANE_TEXT_TEST_C) -o $@
 
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
@@ -246,11 +272,13 @@ $(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests $(BUILD_DI
 run: $(APP)
 	$(APP)
 
-test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) $(PROCESS_TEST)
+test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
+	$(PANE_TEXT_TEST) $(PROCESS_TEST)
 	$(TEST)
 	$(SIMPLE_TEST)
 	$(PANE_POLICY_TEST)
 	$(PANE_SELECTION_TEST)
+	$(PANE_TEXT_TEST)
 	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
@@ -277,8 +305,8 @@ install: $(APP) $(HOST_SO)
 clean:
 	rm -rf $(BUILD_ROOT)
 
-# Native Plan 9 preparation. The guest compiler cannot run k2c, so the
-# .kry app modules are emitted ahead of time as 8c-safe C into
+# Native Plan 9 preparation. The guest compiler cannot run k2c or Ziran,
+# so the .kry and .zi app modules are emitted ahead of time as 8c-safe C into
 # build/plan9/generated with the file list the mkfile consumes. Run on
 # the host whenever any .kry changes before a native build (and prepare
 # the Kryon library's own build/plan9 with `make kry-c-plan9` there).
@@ -294,5 +322,8 @@ kry-c-plan9: engine
 		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
 	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
 		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
+	$(ZIRAN) build --target=plan9-c --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PLAN9_GENERATED) $(PANE_ZI)
 	(cd $(PLAN9_GENERATED) && find . -type f -name '*.c' | \
 	sed -e 's@^\./@@') | LC_ALL=C sort > $(PLAN9_FILE_LIST)

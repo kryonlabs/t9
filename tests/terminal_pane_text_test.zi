@@ -1,0 +1,23 @@
+#import "terminal_pane_text"
+
+#program_export
+main :: () -> s32 {
+    bytes: [8]u8
+    used: s32 = 0
+
+    if !AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0x24) { return 1 }
+    if used != 1 || bytes[0] != 0x24 || bytes[1] != 0 { return 2 }
+    if !AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0xe9) { return 3 }
+    if used != 3 || bytes[1] != 0xc3 || bytes[2] != 0xa9 { return 4 }
+    if !AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0x20ac) { return 5 }
+    if used != 6 || bytes[3] != 0xe2 || bytes[4] != 0x82 || bytes[5] != 0xac { return 6 }
+    if AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0x1f600) { return 7 }
+    if used != 6 || bytes[6] != 0 { return 8 }
+
+    used = 0
+    if !AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0x1f600) { return 9 }
+    if used != 4 || bytes[0] != 0xf0 || bytes[1] != 0x9f ||
+       bytes[2] != 0x98 || bytes[3] != 0x80 || bytes[4] != 0 { return 10 }
+    if AppendTerminalPaneUTF8Codepoint(*bytes[0], 8, *used, 0) { return 11 }
+    return 0
+}

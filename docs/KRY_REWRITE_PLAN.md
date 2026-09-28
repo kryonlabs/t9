@@ -51,6 +51,14 @@ The rewrite is complete when no handwritten C code in t9 owns terminal
 behavior, app state, or interface rendering; only the minimal native process
 boundary remains where required by the operating systems.
 
+## Ziran migration status (2026-09-28)
+
+`terminal_pane_text` is now authored in `.zi` and removed from the legacy
+`.kry` set. Its focused UTF-8 behavior test builds with the hosted C target,
+and `make kry-c-plan9` emits the module with Ziran's `plan9-c` target. The
+remaining engine, pane, and app modules stay on the legacy compiler until each
+one is migrated and verified.
+
 ## Implementation status (2026-09-20)
 
 Landed on Linux, verified by `make test` (engine suite, pane suites,

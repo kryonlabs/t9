@@ -4,7 +4,8 @@
 #
 # The terminal engine, pane, and app modules are authored in .kry and
 # compiled ahead of time on the host (`make kry-c-plan9` in this tree
-# emits 8c-safe C plus the generated-c-files.txt list). The remaining
+# emits 8c-safe C plus the generated-c-files.txt list; Ziran owns the
+# migrated .zi modules). The remaining
 # handwritten C is the process boundary: terminal_pty_plan9.c owns the
 # Plan 9 files/processes side of terminal_pty.h, and main.c is the
 # executable entry shim.
