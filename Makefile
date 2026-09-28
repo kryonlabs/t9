@@ -294,4 +294,5 @@ kry-c-plan9: engine
 		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
 	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
 		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
-	find $(PLAN9_GENERATED) -type f -name '*.c' | LC_ALL=C sort > $(PLAN9_FILE_LIST)
+	(cd $(PLAN9_GENERATED) && find . -type f -name '*.c' | \
+	sed -e 's@^\./@@') | LC_ALL=C sort > $(PLAN9_FILE_LIST)
