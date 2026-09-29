@@ -1,0 +1,154 @@
+#import "terminal_pane_profile_settings"
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+ApplyText :: (settings: *TerminalPaneProfileSettings,
+    limits: TerminalPaneProfileLimits, name: string,
+    value: string) -> s32 {
+    name_bytes: [64]u8
+    value_bytes: [1025]u8
+    Fill(*name_bytes[0], name)
+    Fill(*value_bytes[0], value)
+    return ApplyTerminalPaneProfileSetting(settings, limits,
+        *name_bytes[0], *value_bytes[0])
+}
+
+#program_export
+main :: () -> s32 {
+    settings: TerminalPaneProfileSettings
+    limits: TerminalPaneProfileLimits
+    defaults: TerminalPaneProfileLimits = GetDefaultTerminalPaneProfileLimits()
+    long_value: [513]u8
+    shell_name: [8]u8
+    index: s32 = 0
+
+    if defaults.default_font_size != 16 ||
+       defaults.min_font_size != 10 || defaults.max_font_size != 48 ||
+       defaults.default_scrollback_limit != 5000 ||
+       defaults.min_scrollback_limit != 100 ||
+       defaults.max_scrollback_limit != 100000 ||
+       defaults.default_cursor_style != TERMINAL_PANE_CURSOR_BLOCK {
+        return 1
+    }
+
+    Fill(*settings.shell[0], "stale")
+    Fill(*settings.command[0], "stale")
+    settings.font_size = 99
+    settings.background_opacity = 0
+    InitTerminalPaneProfileSettings(*settings, defaults)
+    if settings.font_size != 16 || settings.scrollback_limit != 5000 ||
+       settings.cursor_style != TERMINAL_PANE_CURSOR_BLOCK ||
+       settings.dynamic_title_mode != TERMINAL_PANE_TITLE_REPLACE ||
+       settings.backspace_binding !=
+           TERMINAL_PANE_KEY_BINDING_ASCII_DELETE ||
+       settings.delete_binding !=
+           TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE ||
+       settings.allow_bold != 1 || settings.background_opacity != 100 ||
+       settings.terminal_foreground != TERMINAL_PANE_COLOR_DEFAULT ||
+       settings.terminal_background != TERMINAL_PANE_COLOR_DEFAULT ||
+       settings.terminal_cursor != TERMINAL_PANE_COLOR_DEFAULT ||
+       settings.terminal_selection_foreground !=
+           TERMINAL_PANE_COLOR_DEFAULT ||
+       settings.terminal_selection_background !=
+           TERMINAL_PANE_COLOR_DEFAULT ||
+       !Same(*settings.shell[0], "") || !Same(*settings.command[0], "") {
+        return 2
+    }
+
+    limits = defaults
+    if ApplyText(*settings, limits, "font-size", "22") != 1 ||
+       settings.font_size != 22 { return 3 }
+    if ApplyText(*settings, limits, "font-size", "4") != 0 ||
+       settings.font_size != 22 { return 4 }
+    if ApplyText(*settings, limits, "scrollback_limit", "9000") != 1 ||
+       settings.scrollback_limit != 9000 { return 5 }
+    if ApplyText(*settings, limits, "unlimited-scrollback", "enabled") != 1 ||
+       settings.unlimited_scrollback != 1 { return 6 }
+    if ApplyText(*settings, limits, "cursor-style", "bar") != 1 ||
+       settings.cursor_style != TERMINAL_PANE_CURSOR_BAR { return 7 }
+    if ApplyText(*settings, limits, "dynamic-title", "append") != 1 ||
+       settings.dynamic_title_mode != TERMINAL_PANE_TITLE_APPEND {
+        return 8
+    }
+    if ApplyText(*settings, limits, "backspace", "control-h") != 1 ||
+       settings.backspace_binding !=
+           TERMINAL_PANE_KEY_BINDING_CONTROL_H { return 9 }
+    if ApplyText(*settings, limits, "delete", "ascii-delete") != 1 ||
+       settings.delete_binding !=
+           TERMINAL_PANE_KEY_BINDING_ASCII_DELETE { return 10 }
+    if ApplyText(*settings, limits, "ambiguous-width", "wide") != 1 ||
+       settings.ambiguous_width_wide != 1 { return 11 }
+    if ApplyText(*settings, limits, "allow-bold", "false") != 1 ||
+       settings.allow_bold != 0 { return 12 }
+    if ApplyText(*settings, limits, "auto-hide-pointer", "on") != 1 ||
+       settings.auto_hide_mouse != 1 { return 13 }
+    if ApplyText(*settings, limits, "middle-click-close-tab", "yes") != 1 ||
+       settings.middle_click_closes_tab != 1 { return 14 }
+    if ApplyText(*settings, limits, "always-show-tabs", "1") != 1 ||
+       settings.always_show_tabs != 1 { return 15 }
+    if ApplyText(*settings, limits, "disable-menu-access-keys", "true") != 1 ||
+       settings.disable_menu_mnemonics != 1 { return 16 }
+    if ApplyText(*settings, limits, "disable-f10", "1") != 1 ||
+       settings.disable_menu_shortcut != 1 { return 17 }
+    if ApplyText(*settings, limits, "disable-f1", "off") != 1 ||
+       settings.disable_help_shortcut != 0 { return 18 }
+    if ApplyText(*settings, limits, "opacity", "50%") != 1 ||
+       settings.background_opacity != 50 { return 19 }
+    if ApplyText(*settings, limits, "opacity", "101%") != 0 ||
+       settings.background_opacity != 50 { return 20 }
+    if ApplyText(*settings, limits, "shell", "/bin/sh") != 1 ||
+       !Same(*settings.shell[0], "/bin/sh") { return 21 }
+    if ApplyText(*settings, limits, "cwd", "/tmp") != 1 ||
+       !Same(*settings.working_directory[0], "/tmp") { return 22 }
+    if ApplyText(*settings, limits, "command", "top") != 1 ||
+       !Same(*settings.command[0], "top") { return 23 }
+    if ApplyText(*settings, limits, "terminal-font", "/tmp/font.ttf") != 1 ||
+       !Same(*settings.terminal_font[0], "/tmp/font.ttf") { return 24 }
+    if ApplyText(*settings, limits, "background-image", "/tmp/bg.png") != 1 ||
+       !Same(*settings.background_image[0], "/tmp/bg.png") { return 25 }
+
+    if ApplyText(*settings, limits, "foreground", "#010203") != 1 ||
+       settings.terminal_foreground !=
+           (TERMINAL_PANE_COLOR_TRUE_RGB | 0x010203) { return 26 }
+    if ApplyText(*settings, limits, "cursor-color", "default") != 1 ||
+       settings.terminal_cursor != TERMINAL_PANE_COLOR_DEFAULT {
+        return 27
+    }
+    if ApplyText(*settings, limits, "selection-background", "040506") != 1 ||
+       settings.terminal_selection_background !=
+           (TERMINAL_PANE_COLOR_TRUE_RGB | 0x040506) { return 28 }
+    if ApplyText(*settings, limits, "terminal-background", "7") != 1 ||
+       settings.terminal_background != 7 { return 29 }
+    if ApplyText(*settings, limits, "terminal-foreground", "bad-color") != 0 ||
+       settings.terminal_foreground ==
+           (TERMINAL_PANE_COLOR_TRUE_RGB | 0x010203) == false { return 30 }
+    if ApplyText(*settings, limits, "unknown", "1") != 0 { return 31 }
+
+    while index < 512 {
+        long_value[index] = 65
+        index += 1
+    }
+    long_value[512] = 0
+    Fill(*shell_name[0], "shell")
+    if ApplyTerminalPaneProfileSetting(*settings, limits, *shell_name[0],
+            *long_value[0]) != 1 || settings.shell[511] != 0 {
+        return 32
+    }
+    return 0
+}

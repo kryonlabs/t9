@@ -1,0 +1,529 @@
+TERMINAL_PANE_CURSOR_DEFAULT :: 0;
+TERMINAL_PANE_CURSOR_BLOCK :: 1;
+TERMINAL_PANE_CURSOR_UNDERLINE :: 2;
+TERMINAL_PANE_CURSOR_BAR :: 3;
+
+TERMINAL_PANE_COLOR_DEFAULT :: -1;
+TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
+TERMINAL_PANE_TITLE_REPLACE :: 0;
+TERMINAL_PANE_TITLE_PREPEND :: 1;
+TERMINAL_PANE_TITLE_APPEND :: 2;
+TERMINAL_PANE_TITLE_IGNORE :: 3;
+TERMINAL_PANE_KEY_BINDING_AUTO :: 0;
+TERMINAL_PANE_KEY_BINDING_ASCII_DELETE :: 1;
+TERMINAL_PANE_KEY_BINDING_CONTROL_H :: 2;
+TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_NONE :: 0;
+TERMINAL_PANE_PROFILE_PROMPT_SHELL :: 1;
+TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY :: 2;
+TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE :: 4;
+TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK :: 5;
+TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND :: 6;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND :: 7;
+TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR :: 8;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND :: 9;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND :: 10;
+TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE :: 11;
+TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING :: 12;
+TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING :: 13;
+TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH :: 14;
+TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD :: 15;
+TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK :: 16;
+TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE :: 17;
+TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB :: 18;
+TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS :: 19;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS :: 20;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT :: 21;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT :: 22;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY :: 23;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE :: 24;
+
+TerminalPaneProfileLimits :: struct {
+    default_font_size: s32
+    min_font_size: s32
+    max_font_size: s32
+    default_scrollback_limit: s32
+    min_scrollback_limit: s32
+    max_scrollback_limit: s32
+    default_cursor_style: s32
+}
+
+TerminalPaneProfileSettings :: struct {
+    font_size: s32
+    scrollback_limit: s32
+    unlimited_scrollback: s32
+    cursor_style: s32
+    dynamic_title_mode: s32
+    backspace_binding: s32
+    delete_binding: s32
+    ambiguous_width_wide: s32
+    allow_bold: s32
+    auto_hide_mouse: s32
+    middle_click_closes_tab: s32
+    always_show_tabs: s32
+    disable_menu_mnemonics: s32
+    disable_menu_shortcut: s32
+    disable_help_shortcut: s32
+    background_opacity: s32
+    terminal_foreground: s32
+    terminal_background: s32
+    terminal_cursor: s32
+    terminal_selection_foreground: s32
+    terminal_selection_background: s32
+    shell: [512]u8
+    working_directory: [1024]u8
+    command: [1024]u8
+    terminal_font: [1024]u8
+    background_image: [1024]u8
+}
+
+TerminalPaneTextDescriptor :: struct {
+    data: *u8
+    length: usize
+}
+
+#program_export
+TerminalPaneTextBytes :: (value: string) -> *u8 {
+    descriptor: *TerminalPaneTextDescriptor = cast(*TerminalPaneTextDescriptor)(*value)
+    return descriptor.data
+}
+
+#scope_file
+
+SameText :: (left: *u8, right: *u8) -> bool {
+    index: s32 = 0
+    if left == null || right == null { return false }
+    while left[index] != 0 && left[index] == right[index] { index += 1 }
+    return left[index] == right[index]
+}
+
+NameIs :: (name: *u8, expected: string) -> bool {
+    if name == null { return false }
+    return SameText(name, TerminalPaneTextBytes(expected))
+}
+
+CopyText :: (output: *u8, output_size: s32, value: *u8) {
+    index: s32 = 0
+    if output == null || output_size <= 0 { return }
+    output[0] = 0
+    if value == null { return }
+    while value[index] != 0 && index < output_size - 1 {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+ZeroBytes :: (value: *u8, size: s32) {
+    index: s32 = 0
+    while index < size {
+        value[index] = 0
+        index += 1
+    }
+}
+
+InRange :: (value: s32, minimum: s32, maximum: s32) -> bool {
+    return minimum <= maximum && value >= minimum && value <= maximum
+}
+
+ParseSignedPrefix :: (value: *u8, output: *s32) -> bool {
+    index: s32 = 0
+    sign: s32 = 1
+    digits: s32 = 0
+    result: s32 = 0
+    if value == null || output == null { return false }
+    while value[index] == 9 || value[index] == 10 || value[index] == 11 ||
+       value[index] == 12 || value[index] == 13 || value[index] == 32 {
+        index += 1
+    }
+    if value[index] == 43 {
+        index += 1
+    } else if value[index] == 45 {
+        sign = -1
+        index += 1
+    }
+    while value[index] >= 48 && value[index] <= 57 {
+        result = result * 10 + cast(s32)(value[index] - 48)
+        digits += 1
+        index += 1
+    }
+    if digits == 0 { return false }
+    output.* = sign * result
+    return true
+}
+
+ParseBool :: (value: *u8, output: *s32) -> bool {
+    if value == null || output == null { return false }
+    if NameIs(value, "1") || NameIs(value, "true") ||
+       NameIs(value, "yes") || NameIs(value, "on") ||
+       NameIs(value, "enabled") {
+        output.* = 1
+        return true
+    }
+    if NameIs(value, "0") || NameIs(value, "false") ||
+       NameIs(value, "no") || NameIs(value, "off") ||
+       NameIs(value, "disabled") {
+        output.* = 0
+        return true
+    }
+    return false
+}
+
+ParsePercent :: (value: *u8, output: *s32) -> bool {
+    index: s32 = 0
+    sign: s32 = 1
+    digits: s32 = 0
+    result: s32 = 0
+    if value == null || output == null { return false }
+    while value[index] == 9 || value[index] == 10 || value[index] == 11 ||
+       value[index] == 12 || value[index] == 13 || value[index] == 32 {
+        index += 1
+    }
+    if value[index] == 43 {
+        index += 1
+    } else if value[index] == 45 {
+        sign = -1
+        index += 1
+    }
+    while value[index] >= 48 && value[index] <= 57 {
+        result = result * 10 + cast(s32)(value[index] - 48)
+        digits += 1
+        index += 1
+    }
+    if digits == 0 { return false }
+    if value[index] == 37 { index += 1 }
+    if value[index] != 0 || result < 0 || result > 100 { return false }
+    output.* = sign * result
+    return true
+}
+
+ParsePaletteIndex :: (value: *u8, output: *s32) -> bool {
+    index: s32 = 0
+    result: s32 = 0
+    if value == null || output == null || value[index] == 0 { return false }
+    while value[index] >= 48 && value[index] <= 57 {
+        result = result * 10 + cast(s32)(value[index] - 48)
+        if result > 255 { return false }
+        index += 1
+    }
+    if value[index] != 0 { return false }
+    output.* = result
+    return true
+}
+
+HexValue :: (value: u8) -> s32 {
+    if value >= 48 && value <= 57 { return cast(s32)value - 48 }
+    if value >= 97 && value <= 102 { return 10 + cast(s32)value - 97 }
+    if value >= 65 && value <= 70 { return 10 + cast(s32)value - 65 }
+    return -1
+}
+
+ParseProfileColor :: (value: *u8, output: *s32) -> bool {
+    index: s32 = 0
+    channel: s32 = 0
+    channels: [6]s32
+    if value == null || output == null { return false }
+    if NameIs(value, "default") || NameIs(value, "system") ||
+       NameIs(value, "theme") {
+        output.* = TERMINAL_PANE_COLOR_DEFAULT
+        return true
+    }
+    if ParsePaletteIndex(value, output) { return true }
+    if value[index] == 35 { index += 1 }
+    while channel < 6 {
+        if value[index] == 0 { return false }
+        channels[channel] = HexValue(value[index])
+        if channels[channel] < 0 { return false }
+        index += 1
+        channel += 1
+    }
+    if channel != 6 || value[index] != 0 { return false }
+    output.* = TERMINAL_PANE_COLOR_TRUE_RGB |
+        ((channels[0] << 20) | (channels[1] << 16)) |
+        ((channels[2] << 12) | (channels[3] << 8)) |
+        ((channels[4] << 4) | channels[5])
+    return true
+}
+
+ParseCursorStyle :: (value: *u8, fallback: s32) -> s32 {
+    if value == null || value[0] == 0 { return fallback }
+    if NameIs(value, "default") || NameIs(value, "0") {
+        return TERMINAL_PANE_CURSOR_DEFAULT
+    }
+    if NameIs(value, "block") || NameIs(value, "1") {
+        return TERMINAL_PANE_CURSOR_BLOCK
+    }
+    if NameIs(value, "underline") || NameIs(value, "2") {
+        return TERMINAL_PANE_CURSOR_UNDERLINE
+    }
+    if NameIs(value, "bar") || NameIs(value, "beam") ||
+       NameIs(value, "3") {
+        return TERMINAL_PANE_CURSOR_BAR
+    }
+    return fallback
+}
+#scope_export
+
+#program_export
+GetDefaultTerminalPaneProfileLimits :: () -> TerminalPaneProfileLimits {
+    limits: TerminalPaneProfileLimits
+    limits.default_font_size = 16
+    limits.min_font_size = 10
+    limits.max_font_size = 48
+    limits.default_scrollback_limit = 5000
+    limits.min_scrollback_limit = 100
+    limits.max_scrollback_limit = 100000
+    limits.default_cursor_style = TERMINAL_PANE_CURSOR_BLOCK
+    return limits
+}
+
+#program_export
+InitTerminalPaneProfileSettings :: (
+    settings: *TerminalPaneProfileSettings,
+    limits: TerminalPaneProfileLimits) {
+    if settings == null { return }
+    settings.font_size = 0
+    settings.scrollback_limit = 0
+    settings.unlimited_scrollback = 0
+    settings.cursor_style = 0
+    settings.dynamic_title_mode = 0
+    settings.backspace_binding = 0
+    settings.delete_binding = 0
+    settings.ambiguous_width_wide = 0
+    settings.allow_bold = 0
+    settings.auto_hide_mouse = 0
+    settings.middle_click_closes_tab = 0
+    settings.always_show_tabs = 0
+    settings.disable_menu_mnemonics = 0
+    settings.disable_menu_shortcut = 0
+    settings.disable_help_shortcut = 0
+    settings.background_opacity = 0
+    settings.terminal_foreground = 0
+    settings.terminal_background = 0
+    settings.terminal_cursor = 0
+    settings.terminal_selection_foreground = 0
+    settings.terminal_selection_background = 0
+    ZeroBytes(*settings.shell[0], 512)
+    ZeroBytes(*settings.working_directory[0], 1024)
+    ZeroBytes(*settings.command[0], 1024)
+    ZeroBytes(*settings.terminal_font[0], 1024)
+    ZeroBytes(*settings.background_image[0], 1024)
+    settings.font_size = limits.default_font_size
+    settings.scrollback_limit = limits.default_scrollback_limit
+    settings.cursor_style = limits.default_cursor_style
+    settings.dynamic_title_mode = TERMINAL_PANE_TITLE_REPLACE
+    settings.backspace_binding = TERMINAL_PANE_KEY_BINDING_ASCII_DELETE
+    settings.delete_binding = TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE
+    settings.allow_bold = 1
+    settings.background_opacity = 100
+    settings.terminal_foreground = TERMINAL_PANE_COLOR_DEFAULT
+    settings.terminal_background = TERMINAL_PANE_COLOR_DEFAULT
+    settings.terminal_cursor = TERMINAL_PANE_COLOR_DEFAULT
+    settings.terminal_selection_foreground = TERMINAL_PANE_COLOR_DEFAULT
+    settings.terminal_selection_background = TERMINAL_PANE_COLOR_DEFAULT
+}
+
+#program_export
+ApplyTerminalPaneProfileSetting :: (
+    settings: *TerminalPaneProfileSettings,
+    limits: TerminalPaneProfileLimits, name: *u8,
+    value: *u8) -> s32 {
+    parsed: s32 = 0
+    if settings == null || name == null || value == null { return 0 }
+    if NameIs(name, "font_size") || NameIs(name, "font-size") {
+        if !ParseSignedPrefix(value, *parsed) ||
+           !InRange(parsed, limits.min_font_size, limits.max_font_size) {
+            return 0
+        }
+        settings.font_size = parsed
+        return 1
+    }
+    if NameIs(name, "scrollback") || NameIs(name, "scrollback_limit") ||
+       NameIs(name, "scrollback-limit") {
+        if !ParseSignedPrefix(value, *parsed) ||
+           !InRange(parsed, limits.min_scrollback_limit,
+               limits.max_scrollback_limit) {
+            return 0
+        }
+        settings.scrollback_limit = parsed
+        return 1
+    }
+    if NameIs(name, "unlimited_scrollback") ||
+       NameIs(name, "unlimited-scrollback") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.unlimited_scrollback = parsed
+        return 1
+    }
+    if NameIs(name, "cursor_style") || NameIs(name, "cursor-style") {
+        settings.cursor_style = ParseCursorStyle(value, settings.cursor_style)
+        return 1
+    }
+    if NameIs(name, "dynamic_title_mode") ||
+       NameIs(name, "dynamic-title-mode") || NameIs(name, "dynamic_title") ||
+       NameIs(name, "dynamic-title") {
+        if NameIs(value, "replace") || NameIs(value, "auto") {
+            settings.dynamic_title_mode = TERMINAL_PANE_TITLE_REPLACE
+        } else if NameIs(value, "prepend") {
+            settings.dynamic_title_mode = TERMINAL_PANE_TITLE_PREPEND
+        } else if NameIs(value, "append") {
+            settings.dynamic_title_mode = TERMINAL_PANE_TITLE_APPEND
+        } else if NameIs(value, "ignore") || NameIs(value, "none") {
+            settings.dynamic_title_mode = TERMINAL_PANE_TITLE_IGNORE
+        } else {
+            return 0
+        }
+        return 1
+    }
+    if NameIs(name, "backspace_binding") ||
+       NameIs(name, "backspace-binding") || NameIs(name, "backspace") {
+        if NameIs(value, "delete") || NameIs(value, "ascii-delete") ||
+           NameIs(value, "del") {
+            settings.backspace_binding = TERMINAL_PANE_KEY_BINDING_ASCII_DELETE
+        } else if NameIs(value, "control-h") || NameIs(value, "backspace") ||
+           NameIs(value, "bs") {
+            settings.backspace_binding = TERMINAL_PANE_KEY_BINDING_CONTROL_H
+        } else {
+            return 0
+        }
+        return 1
+    }
+    if NameIs(name, "delete_binding") || NameIs(name, "delete-binding") ||
+       NameIs(name, "delete") {
+        if NameIs(value, "escape-sequence") || NameIs(value, "sequence") ||
+           NameIs(value, "esc") {
+            settings.delete_binding = TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE
+        } else if NameIs(value, "delete") ||
+           NameIs(value, "ascii-delete") || NameIs(value, "del") {
+            settings.delete_binding = TERMINAL_PANE_KEY_BINDING_ASCII_DELETE
+        } else {
+            return 0
+        }
+        return 1
+    }
+    if NameIs(name, "ambiguous_width_wide") ||
+       NameIs(name, "ambiguous-width-wide") ||
+       NameIs(name, "ambiguous_width") || NameIs(name, "ambiguous-width") {
+        if NameIs(value, "wide") {
+            parsed = 1
+        } else if NameIs(value, "narrow") {
+            parsed = 0
+        } else if !ParseBool(value, *parsed) {
+            return 0
+        }
+        settings.ambiguous_width_wide = parsed
+        return 1
+    }
+    if NameIs(name, "allow_bold") || NameIs(name, "allow-bold") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.allow_bold = parsed
+        return 1
+    }
+    if NameIs(name, "auto_hide_mouse") || NameIs(name, "auto-hide-mouse") ||
+       NameIs(name, "auto_hide_pointer") ||
+       NameIs(name, "auto-hide-pointer") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.auto_hide_mouse = parsed
+        return 1
+    }
+    if NameIs(name, "middle_click_closes_tab") ||
+       NameIs(name, "middle-click-closes-tab") ||
+       NameIs(name, "middle_click_close_tab") ||
+       NameIs(name, "middle-click-close-tab") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.middle_click_closes_tab = parsed
+        return 1
+    }
+    if NameIs(name, "always_show_tabs") || NameIs(name, "always-show-tabs") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.always_show_tabs = parsed
+        return 1
+    }
+    if NameIs(name, "disable_menu_mnemonics") ||
+       NameIs(name, "disable-menu-mnemonics") ||
+       NameIs(name, "disable_menu_access_keys") ||
+       NameIs(name, "disable-menu-access-keys") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.disable_menu_mnemonics = parsed
+        return 1
+    }
+    if NameIs(name, "disable_menu_shortcut") ||
+       NameIs(name, "disable-menu-shortcut") || NameIs(name, "disable_f10") ||
+       NameIs(name, "disable-f10") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.disable_menu_shortcut = parsed
+        return 1
+    }
+    if NameIs(name, "disable_help_shortcut") ||
+       NameIs(name, "disable-help-shortcut") || NameIs(name, "disable_f1") ||
+       NameIs(name, "disable-f1") {
+        if !ParseBool(value, *parsed) { return 0 }
+        settings.disable_help_shortcut = parsed
+        return 1
+    }
+    if NameIs(name, "background_opacity") ||
+       NameIs(name, "background-opacity") || NameIs(name, "opacity") {
+        if !ParsePercent(value, *parsed) { return 0 }
+        settings.background_opacity = parsed
+        return 1
+    }
+    if NameIs(name, "background_image") ||
+       NameIs(name, "background-image") {
+        CopyText(*settings.background_image[0], 1024, value)
+        return 1
+    }
+    if NameIs(name, "shell") {
+        CopyText(*settings.shell[0], 512, value)
+        return 1
+    }
+    if NameIs(name, "working_directory") ||
+       NameIs(name, "working-directory") || NameIs(name, "cwd") {
+        CopyText(*settings.working_directory[0], 1024, value)
+        return 1
+    }
+    if NameIs(name, "command") {
+        CopyText(*settings.command[0], 1024, value)
+        return 1
+    }
+    if NameIs(name, "terminal_font") || NameIs(name, "terminal-font") ||
+       NameIs(name, "font") {
+        CopyText(*settings.terminal_font[0], 1024, value)
+        return 1
+    }
+    if NameIs(name, "terminal_foreground") ||
+       NameIs(name, "terminal-foreground") || NameIs(name, "foreground") {
+        if !ParseProfileColor(value, *parsed) { return 0 }
+        settings.terminal_foreground = parsed
+        return 1
+    }
+    if NameIs(name, "terminal_background") ||
+       NameIs(name, "terminal-background") || NameIs(name, "background") {
+        if !ParseProfileColor(value, *parsed) { return 0 }
+        settings.terminal_background = parsed
+        return 1
+    }
+    if NameIs(name, "terminal_cursor") ||
+       NameIs(name, "terminal-cursor") || NameIs(name, "cursor") ||
+       NameIs(name, "cursor_color") || NameIs(name, "cursor-color") {
+        if !ParseProfileColor(value, *parsed) { return 0 }
+        settings.terminal_cursor = parsed
+        return 1
+    }
+    if NameIs(name, "terminal_selection_foreground") ||
+       NameIs(name, "terminal-selection-foreground") ||
+       NameIs(name, "selection_foreground") ||
+       NameIs(name, "selection-foreground") {
+        if !ParseProfileColor(value, *parsed) { return 0 }
+        settings.terminal_selection_foreground = parsed
+        return 1
+    }
+    if NameIs(name, "terminal_selection_background") ||
+       NameIs(name, "terminal-selection-background") ||
+       NameIs(name, "selection_background") ||
+       NameIs(name, "selection-background") {
+        if !ParseProfileColor(value, *parsed) { return 0 }
+        settings.terminal_selection_background = parsed
+        return 1
+    }
+    return 0
+}
