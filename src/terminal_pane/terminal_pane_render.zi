@@ -1,0 +1,71 @@
+TERMINAL_PANE_GRID_CELL_WIDE_CONT :: 1;
+TERMINAL_PANE_GRID_CELL_HIDDEN :: 2;
+
+Color :: struct {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+Rectangle :: struct {
+    x: float32
+    y: float32
+    width: float32
+    height: float32
+}
+
+TerminalPaneGridCell :: struct {
+    codepoint: u32
+    combining: u32
+    foreground: Color
+    flags: u32
+}
+
+TerminalPaneGridDraw :: struct {
+    bounds: Rectangle
+    cols: s32
+    rows: s32
+    cell_width: s32
+    line_height: s32
+    font_size: s32
+    cells: *TerminalPaneGridCell
+}
+
+#scope_file
+kryon :: #system_library "c";
+RenderTextGlyphHost :: (codepoint: u32, x: s32, y: s32, font_size: s32, color: Color) -> s32 #foreign kryon "RenderTextGlyph";
+#scope_export
+
+#program_export
+DrawTerminalPaneGlyphCell :: (codepoint: u32, combining: u32,
+    x: s32, y: s32, font_size: s32, color: Color) {
+    RenderTextGlyphHost(codepoint, x, y, font_size, color)
+    if combining != 0 {
+        RenderTextGlyphHost(combining, x, y, font_size, color)
+    }
+}
+
+#program_export
+DrawTerminalPaneGlyphGrid :: (grid: TerminalPaneGridDraw) {
+    row: s32 = 0
+    if grid.cells == null || grid.cols <= 0 || grid.rows <= 0 ||
+       grid.cell_width <= 0 || grid.line_height <= 0 ||
+       grid.font_size <= 0 { return }
+    while row < grid.rows {
+        y: s32 = cast(s32)grid.bounds.y + row * grid.line_height
+        col: s32 = 0
+        while col < grid.cols {
+            cell: TerminalPaneGridCell =
+                grid.cells[row * grid.cols + col]
+            x: s32 = cast(s32)grid.bounds.x + col * grid.cell_width
+            if (cell.flags & (TERMINAL_PANE_GRID_CELL_WIDE_CONT |
+                    TERMINAL_PANE_GRID_CELL_HIDDEN)) == 0 {
+                DrawTerminalPaneGlyphCell(cell.codepoint, cell.combining,
+                    x, y, grid.font_size, cell.foreground)
+            }
+            col += 1
+        }
+        row += 1
+    }
+}

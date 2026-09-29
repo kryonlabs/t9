@@ -1,0 +1,24 @@
+#import "terminal_pane_render"
+
+#scope_export
+RenderProbeCount: s32;
+RenderProbeCodepoints: [8]u32;
+RenderProbeX: [8]s32;
+RenderProbeY: [8]s32;
+RenderProbeFont: [8]s32;
+RenderProbeColor: [8]Color;
+
+#program_export
+RenderTextGlyph :: (codepoint: u32, x: s32, y: s32,
+    font_size: s32, color: Color) -> s32 {
+    index: s32 = RenderProbeCount
+    if index >= 0 && index < 8 {
+        RenderProbeCodepoints[index] = codepoint
+        RenderProbeX[index] = x
+        RenderProbeY[index] = y
+        RenderProbeFont[index] = font_size
+        RenderProbeColor[index] = color
+    }
+    RenderProbeCount += 1
+    return 1
+}
