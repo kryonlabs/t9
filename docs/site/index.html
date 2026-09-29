@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>t9 — Terminal and Ziran migration</title>
-  <meta name="description" content="t9 is a Linux terminal built with the earlier Kryon .kry stack. Its migration to Ziran-based Kryon is pending; benchmark figures are a recorded snapshot.">
+  <title>t9 — Terminal and Ziran</title>
+  <meta name="description" content="t9 is a Linux terminal maintained in Ziran. Its source migration and Ziran-based Kryon integration are underway; benchmark figures are a recorded snapshot.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://ktrem.kryonlabs.com/">
   <meta property="og:title" content="t9 - Kryon terminal">
-  <meta property="og:description" content="A terminal built with the earlier Kryon stack, with recorded benchmarks and a pending Ziran migration.">
+  <meta property="og:description" content="A terminal moving to Ziran sources, with recorded benchmarks and active Kryon integration.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://ktrem.kryonlabs.com/">
   <meta name="twitter:title" content="t9 - Kryon terminal">
-  <meta name="twitter:description" content="A terminal on the earlier Kryon stack, with tabs, search, recorded benchmarks, and Ziran migration pending.">
+  <meta name="twitter:description" content="A terminal with tabs, search, recorded benchmarks, and an active Ziran migration.">
   <meta name="theme-color" content="#f3f1ea">
   <meta name="keywords" content="t9,Kryon,Kryon Labs,terminal,xfce4-terminal,terminal emulator,Linux terminal,benchmarks">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -22,7 +22,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "t9",
-    "description": "A Linux terminal currently built with the earlier Kryon stack.",
+    "description": "A Linux terminal whose maintained source language is Ziran.",
     "url": "https://ktrem.kryonlabs.com",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux",
@@ -51,14 +51,14 @@
     </div>
   </header>
 
-  <div class="migration-banner"><strong>Migration note:</strong> This site documents t9’s current legacy <code>.kry</code> implementation. <a href="https://ziran.kryonlabs.com/">Ziran</a> is the new language, and t9’s move to the Ziran-based Kryon library is not complete.</div>
+  <div class="migration-banner"><strong>Migration note:</strong> Ziran (<code>.zi</code>) is t9’s maintained source language. Each migrated module deletes its legacy input; the transition build still contains modules awaiting that final deletion.</div>
   <main id="top">
     <section class="hero">
       <div class="hero-inner">
-        <span class="hero-eyebrow"><span class="dot"></span>Terminal emulator · Legacy Kryon stack</span>
+        <span class="hero-eyebrow"><span class="dot"></span>Terminal emulator · Ziran migration</span>
         <img class="hero-icon" src="favicon.svg" width="84" height="84" alt="t9">
         <h1>t9</h1>
-        <p class="hero-sub">t9 is a Linux terminal currently built with the earlier Kryon <code>.kry</code> toolchain. Its terminal engine and app behavior live in t9; migration to the new Ziran-based Kryon library is still pending.</p>
+        <p class="hero-sub">t9 is a Linux terminal with its maintained product sources in Ziran and its visual boundary moving to Ziran-based Kryon. Recorded benchmarks come from the current transition build.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#benchmarks">View benchmarks</a>
           <a class="btn" href="#parity">Parity matrix</a>
@@ -100,7 +100,7 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
       </div>
       <div>
         <strong>Legacy Kryon dependency</strong>
-        <span>The terminal app lives in t9. Current code uses the earlier Kryon stack; Ziran-based migration remains.</span>
+        <span>The terminal app lives in t9. Maintained sources are Ziran; legacy inputs are deleted module by module.</span>
       </div>
     </section>
 
@@ -224,7 +224,7 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
         </article>
         <article class="feature-card">
           <h3>Kryon integration</h3>
-          <p>The current app uses the earlier Kryon dependency for windowing, rendering, input, theme integration, and platform hooks. Terminal-specific behavior stays in t9. Migration to Ziran-based Kryon is pending.</p>
+          <p>The current transition app uses Kryon for windowing, rendering, input, theme integration, and platform hooks. Terminal-specific behavior stays in t9, with remaining legacy modules scheduled for migration and deletion.</p>
         </article>
       </div>
     </section>

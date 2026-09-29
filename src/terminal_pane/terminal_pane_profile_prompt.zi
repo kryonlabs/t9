@@ -1,0 +1,271 @@
+TERMINAL_PANE_COLOR_DEFAULT :: -1;
+TERMINAL_PANE_TITLE_REPLACE :: 0;
+TERMINAL_PANE_TITLE_PREPEND :: 1;
+TERMINAL_PANE_TITLE_APPEND :: 2;
+TERMINAL_PANE_TITLE_IGNORE :: 3;
+TERMINAL_PANE_KEY_BINDING_AUTO :: 0;
+TERMINAL_PANE_KEY_BINDING_ASCII_DELETE :: 1;
+TERMINAL_PANE_KEY_BINDING_CONTROL_H :: 2;
+TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_NONE :: 0;
+TERMINAL_PANE_PROFILE_PROMPT_SHELL :: 1;
+TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY :: 2;
+TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE :: 4;
+TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK :: 5;
+TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND :: 6;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND :: 7;
+TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR :: 8;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND :: 9;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND :: 10;
+TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE :: 11;
+TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING :: 12;
+TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING :: 13;
+TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH :: 14;
+TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD :: 15;
+TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK :: 16;
+TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE :: 17;
+TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB :: 18;
+TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS :: 19;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS :: 20;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT :: 21;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT :: 22;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY :: 23;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE :: 24;
+
+TerminalPaneProfileLimits :: struct {
+    default_font_size: s32
+    min_font_size: s32
+    max_font_size: s32
+    default_scrollback_limit: s32
+    min_scrollback_limit: s32
+    max_scrollback_limit: s32
+    default_cursor_style: s32
+}
+
+TerminalPaneProfileSettings :: struct {
+    font_size: s32
+    scrollback_limit: s32
+    unlimited_scrollback: s32
+    cursor_style: s32
+    dynamic_title_mode: s32
+    backspace_binding: s32
+    delete_binding: s32
+    ambiguous_width_wide: s32
+    allow_bold: s32
+    auto_hide_mouse: s32
+    middle_click_closes_tab: s32
+    always_show_tabs: s32
+    disable_menu_mnemonics: s32
+    disable_menu_shortcut: s32
+    disable_help_shortcut: s32
+    background_opacity: s32
+    terminal_foreground: s32
+    terminal_background: s32
+    terminal_cursor: s32
+    terminal_selection_foreground: s32
+    terminal_selection_background: s32
+    shell: [512]u8
+    working_directory: [1024]u8
+    command: [1024]u8
+    terminal_font: [1024]u8
+    background_image: [1024]u8
+}
+
+PanePromptInfo :: struct {
+    title: *u8
+    setting: *u8
+}
+
+TextDescriptor :: struct {
+    data: *u8
+    length: usize
+}
+
+#scope_file
+
+TextBytes :: (value: string) -> *u8 {
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*value)
+    return descriptor.data
+}
+t9_host :: #system_library "c";
+FormatTerminalPaneProfileColorHost :: (output: *u8, output_size: s32, color: s32) -> s32 #foreign t9_host "FormatTerminalPaneProfileColor";
+ApplyTerminalPaneProfileSettingHost :: (settings: *TerminalPaneProfileSettings, limits: TerminalPaneProfileLimits, name: *u8, value: *u8) -> s32 #foreign t9_host "ApplyTerminalPaneProfileSetting";
+
+AppendByte :: (output: *u8, output_size: s32, used: *s32, value: u8) -> bool {
+    if output == null || used == null || used.* < 0 || used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendNumber :: (output: *u8, output_size: s32, used: *s32, value: s32) -> bool {
+    digits: [16]u8
+    next: s32 = 15
+    remaining: u32
+    digits[next] = 0
+    next -= 1
+    if value < 0 {
+        if !AppendByte(output, output_size, used, 45) { return false }
+        remaining = cast(u32)(0 - value)
+    } else {
+        remaining = cast(u32)value
+    }
+    while true {
+        digits[next] = cast(u8)(48 + remaining % 10)
+        remaining /= 10
+        if remaining == 0 { break }
+        next -= 1
+    }
+    while next < 15 {
+        if !AppendByte(output, output_size, used, digits[next]) { return false }
+        next += 1
+    }
+    return true
+}
+
+CopyText :: (output: *u8, output_size: s32, value: *u8) -> s32 {
+    length: s32 = 0
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if value == null { return 0 }
+    while value[length] != 0 {
+        if length < output_size - 1 { output[length] = value[length] }
+        length += 1
+    }
+    if length < output_size { output[length] = 0 }
+    return length
+}
+
+PanePrompt :: (prompt: s32) -> PanePromptInfo {
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SHELL { return PanePromptInfo.{TextBytes("Shell"), TextBytes("shell")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY { return PanePromptInfo.{TextBytes("Working Directory"), TextBytes("working-directory")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT { return PanePromptInfo.{TextBytes("Terminal Font"), TextBytes("terminal-font")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE { return PanePromptInfo.{TextBytes("Font Size"), TextBytes("font-size")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK { return PanePromptInfo.{TextBytes("Scrollback Lines"), TextBytes("scrollback")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND { return PanePromptInfo.{TextBytes("Terminal Foreground"), TextBytes("terminal-foreground")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND { return PanePromptInfo.{TextBytes("Terminal Background"), TextBytes("terminal-background")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR { return PanePromptInfo.{TextBytes("Terminal Cursor"), TextBytes("terminal-cursor")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND { return PanePromptInfo.{TextBytes("Selection Foreground"), TextBytes("terminal-selection-foreground")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND { return PanePromptInfo.{TextBytes("Selection Background"), TextBytes("terminal-selection-background")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE { return PanePromptInfo.{TextBytes("Dynamic Title Mode"), TextBytes("dynamic-title-mode")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING { return PanePromptInfo.{TextBytes("Backspace Key"), TextBytes("backspace-binding")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING { return PanePromptInfo.{TextBytes("Delete Key"), TextBytes("delete-binding")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH { return PanePromptInfo.{TextBytes("Ambiguous Width"), TextBytes("ambiguous-width")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD { return PanePromptInfo.{TextBytes("Allow Bold Text"), TextBytes("allow-bold")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK { return PanePromptInfo.{TextBytes("Unlimited Scrollback"), TextBytes("unlimited-scrollback")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE { return PanePromptInfo.{TextBytes("Auto-hide Mouse"), TextBytes("auto-hide-mouse")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB { return PanePromptInfo.{TextBytes("Middle Click Closes Tab"), TextBytes("middle-click-closes-tab")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS { return PanePromptInfo.{TextBytes("Always Show Tabs"), TextBytes("always-show-tabs")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS { return PanePromptInfo.{TextBytes("Disable Menu Access Keys"), TextBytes("disable-menu-mnemonics")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT { return PanePromptInfo.{TextBytes("Disable Menu Shortcut"), TextBytes("disable-menu-shortcut")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT { return PanePromptInfo.{TextBytes("Disable Help Shortcut"), TextBytes("disable-help-shortcut")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY { return PanePromptInfo.{TextBytes("Background Opacity"), TextBytes("background-opacity")} }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE { return PanePromptInfo.{TextBytes("Background Image"), TextBytes("background-image")} }
+    return PanePromptInfo.{TextBytes("Profile"), null}
+}
+
+PanePromptColor :: (output: *u8, output_size: s32, color: s32) -> s32 {
+    if output == null || output_size <= 0 { return 0 }
+    if color == TERMINAL_PANE_COLOR_DEFAULT { return CopyText(output, output_size, TextBytes("default")) }
+    formatted: s32 = FormatTerminalPaneProfileColorHost(output, output_size, color)
+    if formatted > 0 { return formatted }
+    output[0] = 0
+    return 0
+}
+#scope_export
+
+#program_export
+TerminalPaneProfilePromptTitle :: (prompt: s32) -> *u8 {
+    return PanePrompt(prompt).title
+}
+
+#program_export
+TerminalPaneProfilePromptSettingName :: (prompt: s32) -> *u8 {
+    return PanePrompt(prompt).setting
+}
+
+#program_export
+TerminalPaneProfilePromptAffectsColors :: (prompt: s32) -> s32 {
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND ||
+       prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND ||
+       prompt == TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR ||
+       prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND ||
+       prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND { return 1 }
+    return 0
+}
+
+#program_export
+TerminalPaneProfilePromptAffectsFont :: (prompt: s32) -> s32 {
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT { return 1 }
+    return 0
+}
+
+#program_export
+TerminalPaneProfilePromptAffectsScrollback :: (prompt: s32) -> s32 {
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK ||
+       prompt == TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK { return 1 }
+    return 0
+}
+
+#program_export
+FormatTerminalPaneProfilePromptValue :: (output: *u8, output_size: s32, settings: *TerminalPaneProfileSettings, prompt: s32) -> s32 {
+    used: s32 = 0
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if settings == null { return 0 }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SHELL { return CopyText(output, output_size, *settings.shell[0]) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY { return CopyText(output, output_size, *settings.working_directory[0]) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT { return CopyText(output, output_size, *settings.terminal_font[0]) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE {
+        if !AppendNumber(output, output_size, *used, settings.font_size) { output[0] = 0; return 0 }
+        return used
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK {
+        if !AppendNumber(output, output_size, *used, settings.scrollback_limit) { output[0] = 0; return 0 }
+        return used
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND { return PanePromptColor(output, output_size, settings.terminal_foreground) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND { return PanePromptColor(output, output_size, settings.terminal_background) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR { return PanePromptColor(output, output_size, settings.terminal_cursor) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND { return PanePromptColor(output, output_size, settings.terminal_selection_foreground) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND { return PanePromptColor(output, output_size, settings.terminal_selection_background) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE {
+        if settings.dynamic_title_mode == TERMINAL_PANE_TITLE_PREPEND { return CopyText(output, output_size, TextBytes("prepend")) }
+        if settings.dynamic_title_mode == TERMINAL_PANE_TITLE_APPEND { return CopyText(output, output_size, TextBytes("append")) }
+        if settings.dynamic_title_mode == TERMINAL_PANE_TITLE_IGNORE { return CopyText(output, output_size, TextBytes("ignore")) }
+        return CopyText(output, output_size, TextBytes("replace"))
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING || prompt == TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING {
+        binding: s32 = ifx prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING then settings.backspace_binding else settings.delete_binding
+        if binding == TERMINAL_PANE_KEY_BINDING_CONTROL_H { return CopyText(output, output_size, TextBytes("control-h")) }
+        if binding == TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE { return CopyText(output, output_size, TextBytes("escape-sequence")) }
+        return CopyText(output, output_size, TextBytes("ascii-delete"))
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH {
+        if settings.ambiguous_width_wide != 0 { return CopyText(output, output_size, TextBytes("wide")) }
+        return CopyText(output, output_size, TextBytes("narrow"))
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD { if settings.allow_bold != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK { if settings.unlimited_scrollback != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE { if settings.auto_hide_mouse != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB { if settings.middle_click_closes_tab != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS { if settings.always_show_tabs != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS { if settings.disable_menu_mnemonics != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT { if settings.disable_menu_shortcut != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT { if settings.disable_help_shortcut != 0 { return CopyText(output, output_size, TextBytes("true")) }; return CopyText(output, output_size, TextBytes("false")) }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY {
+        if !AppendNumber(output, output_size, *used, settings.background_opacity) { output[0] = 0; return 0 }
+        return used
+    }
+    if prompt == TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE { return CopyText(output, output_size, *settings.background_image[0]) }
+    return 0
+}
+
+#program_export
+ApplyTerminalPaneProfilePromptValue :: (settings: *TerminalPaneProfileSettings, limits: TerminalPaneProfileLimits, prompt: s32, value: *u8) -> s32 {
+    name: *u8 = TerminalPaneProfilePromptSettingName(prompt)
+    if name == null { return 0 }
+    return ApplyTerminalPaneProfileSettingHost(settings, limits, name, value)
+}
