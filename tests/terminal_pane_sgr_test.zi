@@ -1,0 +1,44 @@
+#import "terminal_pane_sgr"
+
+Same :: (value: *u8, expected: *u8, length: s32) -> bool {
+    index: s32 = 0
+    while index < length {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[length] == 0
+}
+
+#program_export
+main :: () -> s32 {
+    output: [80]u8
+    default_expected: [2]u8 = .[48, 109]
+    mixed_expected: [33]u8 = .[
+        49, 59, 52, 59, 53, 51, 59, 51, 56, 59, 53, 59, 49, 59,
+        52, 56, 59, 50, 59, 49, 59, 50, 59, 51, 59, 53, 56, 59, 53, 59, 49, 52, 109
+    ]
+    status: TerminalPaneSGRStatus
+    status.styles = 0
+    status.foreground = TERMINAL_PANE_COLOR_DEFAULT
+    status.background = TERMINAL_PANE_COLOR_DEFAULT
+    status.underline = TERMINAL_PANE_COLOR_DEFAULT
+    if FormatTerminalPaneSGRStatus(*output[0], 80, status) != 2 { return 1 }
+    if !Same(*output[0], *default_expected[0], 2) { return 2 }
+
+    status.styles = TERMINAL_PANE_SGR_BOLD | TERMINAL_PANE_SGR_UNDERLINE |
+        TERMINAL_PANE_SGR_OVERLINE
+    status.foreground = 1
+    status.background = TERMINAL_PANE_COLOR_TRUE_RGB | 0x010203
+    status.underline = 14
+    if FormatTerminalPaneSGRStatus(*output[0], 80, status) != 33 { return 3 }
+    if !Same(*output[0], *mixed_expected[0], 33) { return 4 }
+
+    output[0] = 120
+    status.styles = TERMINAL_PANE_SGR_BOLD
+    status.foreground = 1
+    status.background = TERMINAL_PANE_COLOR_DEFAULT
+    status.underline = TERMINAL_PANE_COLOR_DEFAULT
+    if FormatTerminalPaneSGRStatus(*output[0], 4, status) != 0 { return 5 }
+    if output[0] != 0 { return 6 }
+    return 0
+}

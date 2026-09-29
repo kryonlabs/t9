@@ -20,10 +20,10 @@ and pushes run the Linux build/test path, and published GitHub Releases upload
 Linux `tar.gz`, `.deb`, and `.AppImage` assets plus checksums. The remaining
 feature and release-readiness plan is tracked in
 `docs/REMAINING_FEATURE_PLAN.md`.
-t9's terminal model, parser, session behavior, settings, and interface are
-authored in `.kry` (see `docs/KRY_REWRITE_PLAN.md`); Kryon's `k2c` compiles
-them to C alongside a minimal native PTY boundary. `make test` runs the
-engine, pane, and live-process suites.
+t9's maintained source language is Ziran. The migration from the legacy
+`.kry`/k2c stack is tracked in `docs/ZIRAN_MIGRATION.md`; migrated modules are
+removed from the legacy set only after focused hosted and Plan 9 checks pass.
+`make test` runs the engine, pane, and live-process suites.
 
 By default the build uses `../kryon`. Override with:
 

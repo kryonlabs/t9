@@ -73,6 +73,10 @@ PANE_TEXT_TEST = $(BUILD_DIR)/tests/terminal_pane_text_test
 PANE_TEXT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_text
 PANE_TEXT_TEST_C = $(PANE_TEXT_TEST_GEN)/terminal_pane_text.c \
 	$(PANE_TEXT_TEST_GEN)/terminal_pane_text_test.c
+PANE_SGR_TEST = $(BUILD_DIR)/tests/terminal_pane_sgr_test
+PANE_SGR_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_sgr
+PANE_SGR_TEST_C = $(PANE_SGR_TEST_GEN)/terminal_pane_sgr.c \
+	$(PANE_SGR_TEST_GEN)/terminal_pane_sgr_test.c
 PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
@@ -198,6 +202,16 @@ $(PANE_TEXT_TEST_C) &: tests/terminal_pane_text_test.zi $(PANE_ZI)
 $(PANE_TEXT_TEST): $(PANE_TEXT_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_TEXT_TEST_GEN) $(PANE_TEXT_TEST_C) -o $@
 
+$(PANE_SGR_TEST_C) &: tests/terminal_pane_sgr_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_SGR_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_SGR_TEST_GEN) tests/terminal_pane_sgr_test.zi
+
+$(PANE_SGR_TEST): $(PANE_SGR_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_SGR_TEST_GEN) $(PANE_SGR_TEST_C) -o $@
+
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
 		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
@@ -273,12 +287,13 @@ run: $(APP)
 	$(APP)
 
 test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
-	$(PANE_TEXT_TEST) $(PROCESS_TEST)
+	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PROCESS_TEST)
 	$(TEST)
 	$(SIMPLE_TEST)
 	$(PANE_POLICY_TEST)
 	$(PANE_SELECTION_TEST)
 	$(PANE_TEXT_TEST)
+	$(PANE_SGR_TEST)
 	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
