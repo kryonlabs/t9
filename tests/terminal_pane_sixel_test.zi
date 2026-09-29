@@ -1,0 +1,75 @@
+#import "terminal_pane_sixel"
+#import "terminal_pane_profile_types"
+#import "terminal_pane_profile_colors_theme"
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+FixedPalette :: (userdata: *void, index: s32) -> s32 {
+    if userdata != null || index < 0 { return TERMINAL_PANE_COLOR_DEFAULT }
+    return (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0xff0000)
+}
+
+#program_export
+main :: () -> s32 {
+    image: TerminalPaneSixelImage
+    payload: [128]u8
+
+    Fill(*payload[0], "q#1;2;100;0;0!3~-$#2;2;0;100;0!2~")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 2 ||
+       image.width != 3 || image.height != 12 ||
+       image.pixel_aspect_num != 1 || image.pixel_aspect_den != 1 {
+        return 1
+    }
+    if image.pixels[0] != (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0xff0000) ||
+       image.pixels[5 * image.width + 2] !=
+           (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0xff0000) ||
+       image.pixels[6 * image.width] !=
+           (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0x00ff00) ||
+       image.pixels[6 * image.width + 2] != TERMINAL_PANE_COLOR_DEFAULT {
+        return 2
+    }
+    FreeTerminalPaneSixelImage(*image)
+    if image.pixels != null || image.width != 0 || image.height != 0 ||
+       image.pixel_aspect_num != 0 || image.pixel_aspect_den != 0 {
+        return 3
+    }
+
+    Fill(*payload[0], "0;2q\"1;1;4;6#3;1;120;50;100?")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 1 ||
+       image.width != 4 || image.height != 6 ||
+       image.pixels[0] != TERMINAL_PANE_COLOR_TRUE_RGB { return 4 }
+    FreeTerminalPaneSixelImage(*image)
+
+    Fill(*payload[0], "q\"2;1;2;6#4;2;0;0;100~~")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 1 ||
+       image.width != 2 || image.height != 6 ||
+       image.pixel_aspect_num != 2 || image.pixel_aspect_den != 1 ||
+       image.pixels[0] != (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0x0000ff) { return 5 }
+    FreeTerminalPaneSixelImage(*image)
+
+    Fill(*payload[0], "q~")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 1 ||
+       image.pixels[0] != (TERMINAL_PANE_COLOR_TRUE_RGB | cast(s32)0xff0000) { return 6 }
+    FreeTerminalPaneSixelImage(*image)
+
+    Fill(*payload[0], "not sixel")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 0 ||
+       image.pixels != null { return 7 }
+    Fill(*payload[0], "q!12")
+    if DecodeTerminalPaneSixel(*image, *payload[0],
+            TERMINAL_PANE_COLOR_TRUE_RGB, FixedPalette, cast(*void)null) != 0 ||
+       image.pixels != null { return 8 }
+    return 0
+}

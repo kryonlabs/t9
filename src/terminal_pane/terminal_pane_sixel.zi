@@ -1,0 +1,409 @@
+#import "terminal_pane_profile_colors"
+#import "terminal_pane_profile_types"
+
+TERMINAL_PANE_SIXEL_MAX_DIMENSION :: 4096;
+TERMINAL_PANE_SIXEL_MAX_PIXELS :: 4194304;
+
+TerminalPaneSixelImage :: struct {
+    pixels: *s32
+    width: s32
+    height: s32
+    pixel_aspect_num: s32
+    pixel_aspect_den: s32
+}
+
+TerminalPaneSixelPaletteFn :: #type (
+    userdata: *void, index: s32) -> s32 #c_call;
+
+TerminalPaneSixelBuilder :: struct {
+    pixels: *s32
+    width: s32
+    height: s32
+    max_x: s32
+    max_y: s32
+    raster_width: s32
+    raster_height: s32
+    pixel_aspect_num: s32
+    pixel_aspect_den: s32
+    x: s32
+    y: s32
+    color_index: s32
+    palette: [256]s32
+    background: s32
+    transparent: s32
+    failed: s32
+}
+
+#scope_file
+t9_host :: #system_library "c";
+MallocHost :: (size: usize) -> *u8 #foreign t9_host "malloc";
+FreeHost :: (pointer: *u8) #foreign t9_host "free";
+
+ClampInt :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+InitializeBuilder :: (builder: *TerminalPaneSixelBuilder, transparent: s32,
+    background: s32, palette: TerminalPaneSixelPaletteFn,
+    userdata: *void) {
+    index: s32 = 0
+    if builder == null { return }
+    builder.* = TerminalPaneSixelBuilder.{}
+    builder.max_x = -1
+    builder.max_y = -1
+    builder.pixel_aspect_num = 1
+    builder.pixel_aspect_den = 1
+    if transparent != 0 { builder.transparent = 1 } else { builder.transparent = 0 }
+    if transparent != 0 {
+        builder.background = TERMINAL_PANE_COLOR_DEFAULT
+    } else {
+        builder.background = background
+    }
+    while index < 256 {
+        if palette != null {
+            builder.palette[index] = palette(userdata, index)
+        } else {
+            builder.palette[index] = TerminalPaneDefaultPalettePixel(index)
+        }
+        index += 1
+    }
+}
+
+PixelCount :: (width: s32, height: s32) -> u64 {
+    return cast(u64)width * cast(u64)height
+}
+
+EnsureCanvas :: (builder: *TerminalPaneSixelBuilder,
+    width: s32, height: s32) -> bool {
+    new_width: s32
+    new_height: s32
+    row: s32 = 0
+    col: s32 = 0
+    pixels: *u8
+    pixel: *s32
+    if builder == null || width <= 0 || height <= 0 ||
+       builder.failed != 0 { return false }
+    if width > TERMINAL_PANE_SIXEL_MAX_DIMENSION ||
+       height > TERMINAL_PANE_SIXEL_MAX_DIMENSION ||
+       PixelCount(width, height) >
+       cast(u64)TERMINAL_PANE_SIXEL_MAX_PIXELS {
+        builder.failed = 1
+        return false
+    }
+    if width <= builder.width && height <= builder.height { return true }
+    if builder.width > 0 { new_width = builder.width } else { new_width = 1 }
+    if builder.height > 0 { new_height = builder.height } else { new_height = 1 }
+    while new_width < width { new_width *= 2 }
+    while new_height < height { new_height *= 2 }
+    if new_width > TERMINAL_PANE_SIXEL_MAX_DIMENSION { new_width = width }
+    if new_height > TERMINAL_PANE_SIXEL_MAX_DIMENSION { new_height = height }
+    if PixelCount(new_width, new_height) >
+       cast(u64)TERMINAL_PANE_SIXEL_MAX_PIXELS {
+        new_width = width
+        new_height = height
+    }
+    if PixelCount(new_width, new_height) >
+       cast(u64)TERMINAL_PANE_SIXEL_MAX_PIXELS {
+        builder.failed = 1
+        return false
+    }
+    pixels = MallocHost(cast(usize)(PixelCount(new_width, new_height) * 4))
+    if pixels == null {
+        builder.failed = 1
+        return false
+    }
+    pixel = cast(*s32)pixels
+    while row < new_height {
+        col = 0
+        while col < new_width {
+            pixel[row * new_width + col] = builder.background
+            col += 1
+        }
+        row += 1
+    }
+    if builder.pixels != null && builder.width > 0 {
+        row = 0
+        while row < builder.height {
+            col = 0
+            while col < builder.width {
+                pixel[row * new_width + col] =
+                    builder.pixels[row * builder.width + col]
+                col += 1
+            }
+            row += 1
+        }
+    }
+    FreeHost(cast(*u8)builder.pixels)
+    builder.pixels = pixel
+    builder.width = new_width
+    builder.height = new_height
+    return true
+}
+
+ReadNumber :: (text: *u8, cursor: *s32) -> s32 {
+    value: s32 = 0
+    seen: bool = false
+    if text == null || cursor == null { return -1 }
+    while text[cursor.*] >= 48 && text[cursor.*] <= 57 {
+        value = value * 10 + cast(s32)(text[cursor.*] - 48)
+        cursor.* += 1
+        seen = true
+    }
+    if seen { return value }
+    return -1
+}
+
+ReadParam :: (text: *u8, cursor: *s32, fallback: s32) -> s32 {
+    value: s32 = ReadNumber(text, cursor)
+    if text != null && cursor != null && text[cursor.*] == 59 {
+        cursor.* += 1
+    }
+    if value >= 0 { return value }
+    return fallback
+}
+
+PercentToByte :: (value: s32) -> s32 {
+    value = ClampInt(value, 0, 100)
+    return value * 255 / 100
+}
+
+AbsoluteValue :: (value: s32) -> s32 {
+    if value < 0 { return -value }
+    return value
+}
+
+HLSToRGB :: (hue: s32, lightness: s32, saturation: s32) -> s32 {
+    chroma: s32
+    secondary: s32
+    minimum: s32
+    segment: s32
+    remainder: s32
+    red: s32 = 0
+    green: s32 = 0
+    blue: s32 = 0
+    hue = hue % 360
+    if hue < 0 { hue += 360 }
+    lightness = ClampInt(lightness, 0, 100)
+    saturation = ClampInt(saturation, 0, 100)
+    chroma = (100 - AbsoluteValue(lightness * 2 - 100)) * saturation / 100
+    segment = hue / 60
+    remainder = hue % 120
+    secondary = chroma * (60 - AbsoluteValue(remainder - 60)) / 60
+    minimum = lightness - chroma / 2
+    if segment == 0 {
+        red = chroma
+        green = secondary
+    } else if segment == 1 {
+        red = secondary
+        green = chroma
+    } else if segment == 2 {
+        green = chroma
+        blue = secondary
+    } else if segment == 3 {
+        green = secondary
+        blue = chroma
+    } else if segment == 4 {
+        red = secondary
+        blue = chroma
+    } else {
+        red = chroma
+        blue = secondary
+    }
+    red = PercentToByte(red + minimum)
+    green = PercentToByte(green + minimum)
+    blue = PercentToByte(blue + minimum)
+    return TERMINAL_PANE_COLOR_TRUE_RGB |
+        (red << 16) | (green << 8) | blue
+}
+
+PutColumn :: (builder: *TerminalPaneSixelBuilder, bits: s32) {
+    bit: s32 = 0
+    y: s32
+    if builder == null || builder.failed != 0 { return }
+    if !EnsureCanvas(builder, builder.x + 1, builder.y + 6) { return }
+    while bit < 6 {
+        if (bits & (1 << bit)) != 0 {
+            y = builder.y + bit
+            builder.pixels[y * builder.width + builder.x] =
+                builder.palette[builder.color_index]
+            if builder.x > builder.max_x { builder.max_x = builder.x }
+            if y > builder.max_y { builder.max_y = y }
+        }
+        bit += 1
+    }
+    if builder.x > builder.max_x { builder.max_x = builder.x }
+    if builder.y + 5 > builder.max_y { builder.max_y = builder.y + 5 }
+    builder.x += 1
+}
+
+CopyResult :: (out: *TerminalPaneSixelImage,
+    builder: *TerminalPaneSixelBuilder, width: s32, height: s32) -> bool {
+    row: s32 = 0
+    col: s32 = 0
+    pixels: *u8
+    pixel: *s32
+    if out == null || builder == null || builder.pixels == null ||
+       width <= 0 || height <= 0 || builder.width < width ||
+       builder.height < height { return false }
+    pixels = MallocHost(cast(usize)(PixelCount(width, height) * 4))
+    if pixels == null { return false }
+    pixel = cast(*s32)pixels
+    while row < height {
+        col = 0
+        while col < width {
+            pixel[row * width + col] =
+                builder.pixels[row * builder.width + col]
+            col += 1
+        }
+        row += 1
+    }
+    out.pixels = pixel
+    out.width = width
+    out.height = height
+    if builder.pixel_aspect_num > 0 {
+        out.pixel_aspect_num = builder.pixel_aspect_num
+    } else {
+        out.pixel_aspect_num = 1
+    }
+    if builder.pixel_aspect_den > 0 {
+        out.pixel_aspect_den = builder.pixel_aspect_den
+    } else {
+        out.pixel_aspect_den = 1
+    }
+    return true
+}
+
+FindQ :: (payload: *u8) -> s32 {
+    index: s32 = 0
+    if payload == null { return -1 }
+    while payload[index] != 0 {
+        if payload[index] == 113 { return index }
+        index += 1
+    }
+    return -1
+}
+
+#scope_export
+
+#program_export
+DecodeTerminalPaneSixel :: (out: *TerminalPaneSixelImage,
+    payload: *u8, background: s32,
+    palette: TerminalPaneSixelPaletteFn, userdata: *void) -> s32 {
+    builder: TerminalPaneSixelBuilder
+    data: s32
+    cursor: s32
+    transparent: s32 = 1
+    param_index: s32 = 0
+    width: s32
+    height: s32
+    rows_used: s32 = 0
+    if out == null { return 0 }
+    out.* = TerminalPaneSixelImage.{}
+    data = FindQ(payload)
+    if payload == null || data < 0 { return 0 }
+    cursor = 0
+    while cursor < data {
+        value: s32 = ReadNumber(payload, *cursor)
+        if param_index == 1 && value == 2 { transparent = 0 }
+        if payload[cursor] == 59 {
+            cursor += 1
+            param_index += 1
+        } else if cursor < data {
+            cursor += 1
+        }
+    }
+    InitializeBuilder(*builder, transparent, background, palette, userdata)
+    cursor = data + 1
+    while payload[cursor] != 0 && builder.failed == 0 {
+        ch: s32 = cast(s32)payload[cursor]
+        cursor += 1
+        if ch >= 63 && ch <= 126 {
+            PutColumn(*builder, ch - 63)
+        } else if ch == 33 {
+            repeat: s32 = ReadNumber(payload, *cursor)
+            repeated: s32
+            index: s32
+            if repeat <= 0 { repeat = 1 }
+            if payload[cursor] == 0 { break }
+            repeated = cast(s32)payload[cursor]
+            cursor += 1
+            if repeated >= 63 && repeated <= 126 {
+                repeat = ClampInt(repeat, 1,
+                    TERMINAL_PANE_SIXEL_MAX_DIMENSION)
+                index = 0
+                while index < repeat && builder.failed == 0 {
+                    PutColumn(*builder, repeated - 63)
+                    index += 1
+                }
+            }
+        } else if ch == 36 {
+            builder.x = 0
+        } else if ch == 45 {
+            builder.x = 0
+            builder.y += 6
+            if builder.y > TERMINAL_PANE_SIXEL_MAX_DIMENSION {
+                builder.failed = 1
+            }
+        } else if ch == 35 {
+            index: s32 = ReadNumber(payload, *cursor)
+            if index >= 0 && index < 256 {
+                builder.color_index = index
+                if payload[cursor] == 59 {
+                    mode: s32
+                    red: s32
+                    green: s32
+                    blue: s32
+                    cursor += 1
+                    mode = ReadParam(payload, *cursor, 0)
+                    red = ReadParam(payload, *cursor, 0)
+                    green = ReadParam(payload, *cursor, 0)
+                    blue = ReadParam(payload, *cursor, 0)
+                    if mode == 2 {
+                        builder.palette[index] =
+                            TERMINAL_PANE_COLOR_TRUE_RGB |
+                            (PercentToByte(red) << 16) |
+                            (PercentToByte(green) << 8) |
+                            PercentToByte(blue)
+                    } else if mode == 1 {
+                        builder.palette[index] = HLSToRGB(red, green, blue)
+                    }
+                }
+            }
+        } else if ch == 34 {
+            pan: s32 = ReadParam(payload, *cursor, 0)
+            pad: s32 = ReadParam(payload, *cursor, 0)
+            raster_width: s32 = ReadParam(payload, *cursor, 0)
+            raster_height: s32 = ReadParam(payload, *cursor, 0)
+            if pan > 0 && pad > 0 {
+                builder.pixel_aspect_num = pan
+                builder.pixel_aspect_den = pad
+            }
+            if raster_width > 0 && raster_height > 0 {
+                builder.raster_width = raster_width
+                builder.raster_height = raster_height
+                EnsureCanvas(*builder, raster_width, raster_height)
+            }
+        }
+    }
+    width = builder.max_x + 1
+    height = builder.max_y + 1
+    if builder.raster_width > width { width = builder.raster_width }
+    if builder.raster_height > height { height = builder.raster_height }
+    if builder.failed == 0 && width > 0 && height > 0 &&
+       CopyResult(out, *builder, width, height) {
+        rows_used = (height + 5) / 6
+        if rows_used < 1 { rows_used = 1 }
+    }
+    FreeHost(cast(*u8)builder.pixels)
+    if rows_used == 0 { FreeTerminalPaneSixelImage(out) }
+    return rows_used
+}
+
+#program_export
+FreeTerminalPaneSixelImage :: (image: *TerminalPaneSixelImage) {
+    if image == null { return }
+    FreeHost(cast(*u8)image.pixels)
+    image.* = TerminalPaneSixelImage.{}
+}

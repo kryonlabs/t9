@@ -103,6 +103,11 @@ TerminalPaneColorToRGB :: (color: Color) -> s32 {
 }
 
 #program_export
+TerminalPaneDefaultPalettePixel :: (index: s32) -> s32 {
+    return TerminalPaneColorToRGB(DefaultPaletteColor(index))
+}
+
+#program_export
 ResolveTerminalPaneColor :: (palette: *TerminalPanePalette, value: s32,
     fallback: Color) -> Color {
     if value >= 0 && (value & TERMINAL_PANE_COLOR_TRUE_RGB) != 0 {
