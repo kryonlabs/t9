@@ -1,0 +1,62 @@
+#import "terminal_pane_mouse"
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+#program_export
+main :: () -> s32 {
+    output: [32]u8
+    mode: TerminalPaneMouseMode
+
+    mode.mode = 1000
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 1, 0, 0,
+            mode) != 6 || !Same(*output[0], "\x1b[M !!") { return 1 }
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 0, 0, 0,
+            mode) != 6 || !Same(*output[0], "\x1b[M#!!") { return 2 }
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 1, 0,
+            TERMINAL_PANE_MOD_SHIFT | TERMINAL_PANE_MOD_ALT |
+            TERMINAL_PANE_MOD_CTRL, mode) != 6 ||
+       !Same(*output[0], "\x1b[M<!!") { return 3 }
+
+    mode.sgr = 1
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, 10, 20, 1, 0, 0,
+            mode) != 9 || !Same(*output[0], "\x1b[<0;1;1M") { return 4 }
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, 10, 20, 0, 0, 0,
+            mode) != 9 || !Same(*output[0], "\x1b[<0;1;1m") { return 5 }
+
+    mode.sgr = 0
+    mode.pixels = 1
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, 10, 20, 1, 0, 0,
+            mode) != 11 || !Same(*output[0], "\x1b[<0;11;21M") { return 6 }
+
+    mode.pixels = 0
+    mode.urxvt = 1
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 1, 0, 0,
+            mode) != 9 || !Same(*output[0], "\x1b[32;1;1M") { return 7 }
+
+    mode.urxvt = 0
+    mode.utf8 = 1
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 100, 0, -1, -1, 1, 0, 0,
+            mode) != 7 || output[4] != 194 { return 8 }
+
+    mode.utf8 = 0
+    mode.mode = 9
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 1, 1, 0,
+            mode) != 0 || output[0] != 0 { return 9 }
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, 0, 0, -1, -1, 0, 0, 0,
+            mode) != 0 { return 10 }
+
+    mode.mode = 1000
+    if EncodeTerminalPaneMouse(*output[0], 32, 0, -1, 0, -1, -1, 1, 0, 0,
+            mode) != 0 { return 11 }
+    output[0] = 120
+    if EncodeTerminalPaneMouse(*output[0], 4, 0, 0, 0, -1, -1, 1, 0, 0,
+            mode) != 0 || output[0] != 0 { return 12 }
+    return 0
+}

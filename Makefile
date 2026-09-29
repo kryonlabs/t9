@@ -85,6 +85,10 @@ PANE_MODES_TEST = $(BUILD_DIR)/tests/terminal_pane_modes_test
 PANE_MODES_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_modes
 PANE_MODES_TEST_C = $(PANE_MODES_TEST_GEN)/terminal_pane_modes.c \
 	$(PANE_MODES_TEST_GEN)/terminal_pane_modes_test.c
+PANE_MOUSE_TEST = $(BUILD_DIR)/tests/terminal_pane_mouse_test
+PANE_MOUSE_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_mouse
+PANE_MOUSE_TEST_C = $(PANE_MOUSE_TEST_GEN)/terminal_pane_mouse.c \
+	$(PANE_MOUSE_TEST_GEN)/terminal_pane_mouse_test.c
 PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
@@ -240,6 +244,16 @@ $(PANE_MODES_TEST_C) &: tests/terminal_pane_modes_test.zi $(PANE_ZI)
 $(PANE_MODES_TEST): $(PANE_MODES_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_MODES_TEST_GEN) $(PANE_MODES_TEST_C) -o $@
 
+$(PANE_MOUSE_TEST_C) &: tests/terminal_pane_mouse_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_MOUSE_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_MOUSE_TEST_GEN) tests/terminal_pane_mouse_test.zi
+
+$(PANE_MOUSE_TEST): $(PANE_MOUSE_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_MOUSE_TEST_GEN) $(PANE_MOUSE_TEST_C) -o $@
+
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
 		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
@@ -314,9 +328,16 @@ $(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests $(BUILD_DI
 run: $(APP)
 	$(APP)
 
+ZIRAN_MIGRATION_TEST = tests/ziran_migration_test.sh
+
+.PHONY: ziran-migration-check
+ziran-migration-check:
+	$(ZIRAN_MIGRATION_TEST)
+
 test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
-	$(PANE_MODES_TEST) $(PROCESS_TEST)
+	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) $(PROCESS_TEST) \
+	ziran-migration-check
 	$(TEST)
 	$(SIMPLE_TEST)
 	$(PANE_POLICY_TEST)
@@ -325,6 +346,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_SGR_TEST)
 	$(PANE_CSI_TEST)
 	$(PANE_MODES_TEST)
+	$(PANE_MOUSE_TEST)
 	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
