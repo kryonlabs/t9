@@ -181,10 +181,8 @@ void SetClipboardText(const char *text)
     snprintf(test_clipboard, sizeof(test_clipboard), "%s", text);
 }
 
-const char *GetClipboardText(void)
-{
-    return test_clipboard;
-}
+/* GetClipboardText comes from the linked engine (raylib wrappers); the test
+ * still captures writes through SetClipboardText above. */
 
 bool IsKeyPressed(int key)
 {
