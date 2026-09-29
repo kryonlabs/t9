@@ -1,3 +1,5 @@
+#import "terminal_pane_profile"
+#import "terminal_pane_profile_types"
 #import "terminal_pane_profile_settings"
 
 
@@ -6,8 +8,6 @@ PanePromptInfo :: struct {
     setting: *u8
 }
 
-t9_host :: #system_library "c";
-FormatTerminalPaneProfileColorHost :: (output: *u8, output_size: s32, color: s32) -> s32 #foreign t9_host "FormatTerminalPaneProfileColor";
 
 AppendByte :: (output: *u8, output_size: s32, used: *s32, value: u8) -> bool {
     if output == null || used == null || used.* < 0 || used.* + 1 >= output_size { return false }
@@ -86,7 +86,7 @@ PanePrompt :: (prompt: s32) -> PanePromptInfo {
 PanePromptColor :: (output: *u8, output_size: s32, color: s32) -> s32 {
     if output == null || output_size <= 0 { return 0 }
     if color == TERMINAL_PANE_COLOR_DEFAULT { return CopyText(output, output_size, TerminalPaneTextBytes("default")) }
-    formatted: s32 = FormatTerminalPaneProfileColorHost(output, output_size, color)
+    formatted: s32 = FormatTerminalPaneProfileColor(output, output_size, color)
     if formatted > 0 { return formatted }
     output[0] = 0
     return 0

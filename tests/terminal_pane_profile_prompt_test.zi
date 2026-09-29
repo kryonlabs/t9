@@ -1,4 +1,8 @@
+#import "terminal_pane_profile_colors_theme"
+
+#import "terminal_pane_profile"
 #import "terminal_pane_profile_settings"
+#import "terminal_pane_profile_types"
 
 TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
 
@@ -30,21 +34,6 @@ CheckFormat :: (settings: *TerminalPaneProfileSettings, prompt: s32,
         settings, prompt)
     if length != cast(s32)expected.count { return false }
     return Same(*output[0], expected)
-}
-
-#program_export
-FormatTerminalPaneProfileColor :: (output: *u8, output_size: s32,
-    color: s32) -> s32 {
-    if output == null || output_size < 8 { return 0 }
-    output[0] = 35
-    output[1] = 49
-    output[2] = 49
-    output[3] = 49
-    output[4] = 49
-    output[5] = 49
-    output[6] = 49
-    output[7] = 0
-    return 7
 }
 
 #program_export
@@ -97,7 +86,7 @@ main :: () -> s32 {
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE, "-42") ||
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK, "5000") ||
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR, "default") ||
-       !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND, "#111111") ||
+       !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND, "#010101") ||
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE, "append") ||
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING, "control-h") ||
        !CheckFormat(*settings, TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING, "escape-sequence") ||

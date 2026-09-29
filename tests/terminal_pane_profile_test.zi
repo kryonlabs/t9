@@ -1,0 +1,179 @@
+#import "terminal_pane_profile_colors_theme"
+
+#import "terminal_pane_profile_colors"
+
+#import "terminal_pane_profile"
+#import "terminal_pane_profile_types"
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+CheckParseColor :: (value: string, expected: s32) -> bool {
+    text: [32]u8
+    parsed: s32 = 123
+    Fill(*text[0], value)
+    if ParseTerminalPaneProfileColor(*text[0], *parsed) != 1 {
+        return false
+    }
+    return parsed == expected
+}
+
+CheckFormatColor :: (color: s32, expected: string) -> bool {
+    output: [32]u8
+    length: s32 = FormatTerminalPaneProfileColor(*output[0], 32, color)
+    if length != cast(s32)expected.count { return false }
+    return Same(*output[0], expected)
+}
+
+CheckEscape :: (value: string, expected: string) -> bool {
+    input: [64]u8
+    output: [64]u8
+    Fill(*input[0], value)
+    if EscapeTerminalPaneText(*output[0], 64, *input[0]) !=
+       cast(s32)expected.count { return false }
+    return Same(*output[0], expected)
+}
+
+#program_export
+main :: () -> s32 {
+    state: TerminalPaneProfileState
+    colors: TerminalPaneProfileColors
+    old_colors: TerminalPaneProfileColors
+    new_colors: TerminalPaneProfileColors
+    output: [64]u8
+    style: s32 = -1
+    blink: s32 = -1
+    text: [32]u8
+
+    colors.foreground = 1
+    colors.background = 2
+    colors.cursor = 3
+    colors.selection_foreground = 4
+    colors.selection_background = 5
+    state.foreground = TERMINAL_PANE_COLOR_DEFAULT
+    state.background = TERMINAL_PANE_COLOR_DEFAULT
+    state.cursor = TERMINAL_PANE_COLOR_DEFAULT
+    state.selection_foreground = TERMINAL_PANE_COLOR_DEFAULT
+    state.selection_background = TERMINAL_PANE_COLOR_DEFAULT
+    TerminalPaneProfileStateApplyNew(*state, colors)
+    if state.base_foreground != 1 || state.base_background != 2 ||
+       state.base_cursor != 3 || state.foreground != 1 ||
+       state.background != 2 || state.cursor != 3 ||
+       state.selection_foreground != 4 ||
+       state.selection_background != 5 { return 1 }
+
+    state.foreground = TERMINAL_PANE_COLOR_DEFAULT
+    state.background = TERMINAL_PANE_COLOR_DEFAULT
+    TerminalPaneProfileStateSeedMissing(*state, colors)
+    if state.foreground != 1 || state.background != 2 { return 2 }
+
+    old_colors = colors
+    new_colors.foreground = 11
+    new_colors.background = 12
+    new_colors.cursor = 13
+    new_colors.selection_foreground = 14
+    new_colors.selection_background = 15
+    state.foreground = 99
+    state.background = 12
+    TerminalPaneProfileStateSyncChanged(*state, old_colors, new_colors)
+    if state.base_foreground != 11 || state.base_background != 12 ||
+       state.base_cursor != 13 || state.foreground != 99 ||
+       state.background != 12 || state.cursor != 13 ||
+       state.base_selection_foreground != 14 ||
+       state.base_selection_background != 15 ||
+       state.selection_foreground != 14 ||
+       state.selection_background != 15 { return 3 }
+
+    Fill(*text[0], "beam")
+    if ParseTerminalPaneCursorStyle(*text[0], 99) !=
+       TERMINAL_PANE_CURSOR_BAR { return 4 }
+    Fill(*text[0], "wide")
+    if ParseTerminalPaneCursorStyle(*text[0], 99) != 99 { return 5 }
+    if !Same(TerminalPaneCursorStyleName(TERMINAL_PANE_CURSOR_BLOCK),
+            "block") ||
+       !Same(TerminalPaneCursorStyleName(
+            TERMINAL_PANE_CURSOR_UNDERLINE), "underline") ||
+       !Same(TerminalPaneCursorStyleName(TERMINAL_PANE_CURSOR_BAR),
+            "bar") { return 6 }
+    if TerminalPaneCursorStyleReportCode(
+           TERMINAL_PANE_CURSOR_BLOCK, 1) != 1 ||
+       TerminalPaneCursorStyleReportCode(
+           TERMINAL_PANE_CURSOR_BLOCK, 0) != 2 ||
+       TerminalPaneCursorStyleReportCode(
+           TERMINAL_PANE_CURSOR_UNDERLINE, 1) != 3 ||
+       TerminalPaneCursorStyleReportCode(
+           TERMINAL_PANE_CURSOR_BAR, 0) != 6 ||
+       TerminalPaneCursorStyleReportCode(99, 1) != 0 { return 7 }
+    if DecodeTerminalPaneCursorStyleRequest(0, *style, *blink) != 1 ||
+       style != TERMINAL_PANE_CURSOR_DEFAULT || blink != 1 { return 8 }
+    if DecodeTerminalPaneCursorStyleRequest(6, *style, *blink) != 1 ||
+       style != TERMINAL_PANE_CURSOR_BAR || blink != 0 { return 9 }
+    if DecodeTerminalPaneCursorStyleRequest(7, *style, *blink) != 0 {
+        return 10
+    }
+
+    if !CheckParseColor("#010203",
+           TERMINAL_PANE_COLOR_TRUE_RGB | 0x010203) ||
+       !CheckParseColor("aabbcc",
+           TERMINAL_PANE_COLOR_TRUE_RGB | 0xaabbcc) ||
+       !CheckParseColor("040506",
+           TERMINAL_PANE_COLOR_TRUE_RGB | 0x040506) ||
+       !CheckParseColor("default", TERMINAL_PANE_COLOR_DEFAULT) ||
+       !CheckParseColor("system", TERMINAL_PANE_COLOR_DEFAULT) ||
+       !CheckParseColor("theme", TERMINAL_PANE_COLOR_DEFAULT) ||
+       !CheckParseColor("7", 7) { return 11 }
+    Fill(*text[0], "zzzzzz")
+    parsed: s32 = 123
+    if ParseTerminalPaneProfileColor(*text[0], *parsed) != 0 ||
+       parsed != 123 { return 12 }
+    if ParseTerminalPaneProfileColor(null, *parsed) != 0 { return 13 }
+
+    if !CheckFormatColor(7, "7") ||
+       !CheckFormatColor(255, "255") ||
+       !CheckFormatColor(
+           TERMINAL_PANE_COLOR_TRUE_RGB | 0x010203, "#010203") ||
+       !CheckFormatColor(
+           TERMINAL_PANE_COLOR_TRUE_RGB | 0xaabbcc, "#aabbcc") {
+        return 14
+    }
+    if FormatTerminalPaneProfileColor(*output[0], 64,
+           TERMINAL_PANE_COLOR_DEFAULT) != 0 ||
+       FormatTerminalPaneProfileColor(null, 64, 7) != 0 ||
+       FormatTerminalPaneProfileColor(*output[0], 0, 7) != 0 ||
+       FormatTerminalPaneProfileColor(*output[0], 64, 999) != 0 {
+        return 15
+    }
+
+    if !CheckEscape("a\\b", "a\\\\b") ||
+       !CheckEscape("tab\\t", "tab\\\\t") ||
+       !CheckEscape("line\\n", "line\\\\n") ||
+       !CheckEscape("cr\\r", "cr\\\\r") { return 16 }
+    Fill(*text[0], "a\\tb\\nc\\rd\\\\e")
+    if UnescapeTerminalPaneText(*output[0], 64, *text[0]) != 9 ||
+       !Same(*output[0], "a\tb\nc\rd\\e") { return 17 }
+    Fill(*text[0], "unknown\\q")
+    if UnescapeTerminalPaneText(*output[0], 64, *text[0]) != 8 ||
+       !Same(*output[0], "unknownq") { return 18 }
+    if EscapeTerminalPaneText(null, 64, *text[0]) != 0 ||
+       EscapeTerminalPaneText(*output[0], 0, *text[0]) != 0 ||
+       UnescapeTerminalPaneText(null, 64, *text[0]) != 0 ||
+       UnescapeTerminalPaneText(*output[0], 0, *text[0]) != 0 {
+        return 19
+    }
+    return 0
+}

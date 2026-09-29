@@ -1,0 +1,380 @@
+#import "terminal_pane_profile_colors"
+#import "terminal_pane_profile_types"
+
+TerminalPaneProfileState :: struct {
+    base_foreground: s32
+    base_background: s32
+    base_cursor: s32
+    base_selection_foreground: s32
+    base_selection_background: s32
+    foreground: s32
+    background: s32
+    cursor: s32
+    selection_foreground: s32
+    selection_background: s32
+}
+
+#scope_file
+SameText :: (left: *u8, right: *u8) -> bool {
+    index: s32 = 0
+    if left == null || right == null { return false }
+    while left[index] != 0 && left[index] == right[index] { index += 1 }
+    return left[index] == right[index]
+}
+
+NameIs :: (value: *u8, expected: string) -> bool {
+    if value == null { return false }
+    return SameText(value, TerminalPaneTextBytes(expected))
+}
+
+HexValue :: (value: u8) -> s32 {
+    if value >= 48 && value <= 57 { return cast(s32)value - 48 }
+    if value >= 97 && value <= 102 { return 10 + cast(s32)value - 97 }
+    if value >= 65 && value <= 70 { return 10 + cast(s32)value - 65 }
+    return -1
+}
+
+AppendByte :: (output: *u8, output_size: s32, used: *s32,
+    value: u8) -> bool {
+    if output == null || used == null || used.* < 0 ||
+       used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendDecimal :: (output: *u8, output_size: s32, used: *s32,
+    value: s32) -> bool {
+    digits: [4]u8
+    next: s32 = 3
+    digits[next] = 0
+    next -= 1
+    while true {
+        digits[next] = cast(u8)(48 + value % 10)
+        value /= 10
+        if value == 0 { break }
+        next -= 1
+    }
+    while next < 3 {
+        if !AppendByte(output, output_size, used, digits[next]) {
+            return false
+        }
+        next += 1
+    }
+    return true
+}
+
+AppendHexDigit :: (output: *u8, output_size: s32, used: *s32,
+    value: s32) -> bool {
+    digit: s32 = value & 15
+    byte: u8
+    if digit < 10 {
+        byte = cast(u8)(48 + digit)
+    } else {
+        byte = cast(u8)(87 + digit)
+    }
+    return AppendByte(output, output_size, used, byte)
+}
+#scope_export
+
+#program_export
+TerminalPaneProfileStateApplyNew :: (
+    state: *TerminalPaneProfileState,
+    colors: TerminalPaneProfileColors) {
+    if state == null { return }
+    state.base_foreground = colors.foreground
+    state.base_background = colors.background
+    state.base_cursor = colors.cursor
+    state.base_selection_foreground = colors.selection_foreground
+    state.base_selection_background = colors.selection_background
+    state.foreground = colors.foreground
+    state.background = colors.background
+    if state.cursor == TERMINAL_PANE_COLOR_DEFAULT {
+        state.cursor = state.base_cursor
+    }
+    if state.selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_foreground = state.base_selection_foreground
+    }
+    if state.selection_background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_background = state.base_selection_background
+    }
+}
+
+#program_export
+TerminalPaneProfileStateSeedMissing :: (
+    state: *TerminalPaneProfileState,
+    colors: TerminalPaneProfileColors) {
+    if state == null { return }
+    state.base_foreground = colors.foreground
+    state.base_background = colors.background
+    state.base_cursor = colors.cursor
+    state.base_selection_foreground = colors.selection_foreground
+    state.base_selection_background = colors.selection_background
+    if state.foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.foreground = state.base_foreground
+    }
+    if state.background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.background = state.base_background
+    }
+    if state.cursor == TERMINAL_PANE_COLOR_DEFAULT {
+        state.cursor = state.base_cursor
+    }
+    if state.selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_foreground = state.base_selection_foreground
+    }
+    if state.selection_background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_background = state.base_selection_background
+    }
+}
+
+#program_export
+TerminalPaneProfileStateSyncChanged :: (
+    state: *TerminalPaneProfileState,
+    old_colors: TerminalPaneProfileColors,
+    new_colors: TerminalPaneProfileColors) {
+    if state == null { return }
+    if state.base_foreground == old_colors.foreground ||
+       state.base_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.base_foreground = new_colors.foreground
+    }
+    if state.base_background == old_colors.background ||
+       state.base_background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.base_background = new_colors.background
+    }
+    if state.base_cursor == old_colors.cursor ||
+       state.base_cursor == TERMINAL_PANE_COLOR_DEFAULT {
+        state.base_cursor = new_colors.cursor
+    }
+    if state.foreground == old_colors.foreground ||
+       state.foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.foreground = new_colors.foreground
+    }
+    if state.background == old_colors.background ||
+       state.background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.background = new_colors.background
+    }
+    if state.cursor == old_colors.cursor ||
+       state.cursor == TERMINAL_PANE_COLOR_DEFAULT {
+        state.cursor = new_colors.cursor
+    }
+    if state.base_selection_foreground == old_colors.selection_foreground ||
+       state.base_selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.base_selection_foreground = new_colors.selection_foreground
+    }
+    if state.base_selection_background == old_colors.selection_background ||
+       state.base_selection_background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.base_selection_background = new_colors.selection_background
+    }
+    if state.selection_foreground == old_colors.selection_foreground ||
+       state.selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_foreground = new_colors.selection_foreground
+    }
+    if state.selection_background == old_colors.selection_background ||
+       state.selection_background == TERMINAL_PANE_COLOR_DEFAULT {
+        state.selection_background = new_colors.selection_background
+    }
+}
+
+#program_export
+ParseTerminalPaneCursorStyle :: (text: *u8, fallback: s32) -> s32 {
+    if text == null || text[0] == 0 { return fallback }
+    if NameIs(text, "default") || NameIs(text, "0") {
+        return TERMINAL_PANE_CURSOR_DEFAULT
+    }
+    if NameIs(text, "block") || NameIs(text, "1") {
+        return TERMINAL_PANE_CURSOR_BLOCK
+    }
+    if NameIs(text, "underline") || NameIs(text, "2") {
+        return TERMINAL_PANE_CURSOR_UNDERLINE
+    }
+    if NameIs(text, "bar") || NameIs(text, "beam") ||
+       NameIs(text, "3") {
+        return TERMINAL_PANE_CURSOR_BAR
+    }
+    return fallback
+}
+
+#program_export
+TerminalPaneCursorStyleName :: (style: s32) -> *u8 {
+    if style == TERMINAL_PANE_CURSOR_UNDERLINE {
+        return TerminalPaneTextBytes("underline")
+    }
+    if style == TERMINAL_PANE_CURSOR_BAR {
+        return TerminalPaneTextBytes("bar")
+    }
+    return TerminalPaneTextBytes("block")
+}
+
+#program_export
+TerminalPaneCursorStyleReportCode :: (style: s32, blink: s32) -> s32 {
+    if style == TERMINAL_PANE_CURSOR_BLOCK { return ifx blink != 0 then 1 else 2 }
+    if style == TERMINAL_PANE_CURSOR_UNDERLINE {
+        return ifx blink != 0 then 3 else 4
+    }
+    if style == TERMINAL_PANE_CURSOR_BAR {
+        return ifx blink != 0 then 5 else 6
+    }
+    return 0
+}
+
+#program_export
+DecodeTerminalPaneCursorStyleRequest :: (
+    code: s32, style: *s32, blink: *s32) -> s32 {
+    decoded_style: s32
+    decoded_blink: s32
+    if code <= 0 {
+        decoded_style = TERMINAL_PANE_CURSOR_DEFAULT
+        decoded_blink = 1
+    } else if code == 1 {
+        decoded_style = TERMINAL_PANE_CURSOR_BLOCK
+        decoded_blink = 1
+    } else if code == 2 {
+        decoded_style = TERMINAL_PANE_CURSOR_BLOCK
+        decoded_blink = 0
+    } else if code == 3 || code == 4 {
+        decoded_style = TERMINAL_PANE_CURSOR_UNDERLINE
+        decoded_blink = ifx code == 3 then 1 else 0
+    } else if code == 5 || code == 6 {
+        decoded_style = TERMINAL_PANE_CURSOR_BAR
+        decoded_blink = ifx code == 5 then 1 else 0
+    } else {
+        return 0
+    }
+    if style != null { style.* = decoded_style }
+    if blink != null { blink.* = decoded_blink }
+    return 1
+}
+
+#program_export
+ParseTerminalPaneProfileColor :: (text: *u8, output: *s32) -> s32 {
+    index: s32 = 0
+    channel: s32 = 0
+    digit_count: s32 = 0
+    result: s32 = 0
+    channels: [6]s32
+    if text == null || output == null { return 0 }
+    if NameIs(text, "default") || NameIs(text, "system") ||
+       NameIs(text, "theme") {
+        output.* = TERMINAL_PANE_COLOR_DEFAULT
+        return 1
+    }
+    while text[index] >= 48 && text[index] <= 57 {
+        result = result * 10 + cast(s32)(text[index] - 48)
+        if result > 255 { result = 999 }
+        digit_count += 1
+        index += 1
+    }
+    if text[index] == 0 && digit_count > 0 && result <= 255 {
+        output.* = result
+        return 1
+    }
+    index = 0
+    if text[index] == 35 { index += 1 }
+    while channel < 6 {
+        if text[index] == 0 { return 0 }
+        channels[channel] = HexValue(text[index])
+        if channels[channel] < 0 { return 0 }
+        index += 1
+        channel += 1
+    }
+    if text[index] != 0 { return 0 }
+    output.* = TERMINAL_PANE_COLOR_TRUE_RGB |
+        ((channels[0] << 20) | (channels[1] << 16)) |
+        ((channels[2] << 12) | (channels[3] << 8)) |
+        ((channels[4] << 4) | channels[5])
+    return 1
+}
+
+#program_export
+FormatTerminalPaneProfileColor :: (
+    output: *u8, output_size: s32, color: s32) -> s32 {
+    used: s32 = 0
+    rgb: s32
+    if output == null || output_size <= 0 ||
+       color == TERMINAL_PANE_COLOR_DEFAULT { return 0 }
+    if color >= 0 && color < 256 {
+        if !AppendDecimal(output, output_size, *used, color) {
+            output[0] = 0
+            return 0
+        }
+        return used
+    }
+    if (color & TERMINAL_PANE_COLOR_TRUE_RGB) == 0 { return 0 }
+    if output_size < 8 { return 0 }
+    output[used] = 35
+    used += 1
+    rgb = color & 0xffffff
+    if !AppendHexDigit(output, output_size, *used, rgb >> 20) ||
+       !AppendHexDigit(output, output_size, *used, rgb >> 16) ||
+       !AppendHexDigit(output, output_size, *used, rgb >> 12) ||
+       !AppendHexDigit(output, output_size, *used, rgb >> 8) ||
+       !AppendHexDigit(output, output_size, *used, rgb >> 4) ||
+       !AppendHexDigit(output, output_size, *used, rgb) {
+        output[0] = 0
+        return 0
+    }
+    return used
+}
+
+#program_export
+EscapeTerminalPaneText :: (
+    output: *u8, output_size: s32, text: *u8) -> s32 {
+    used: s32 = 0
+    index: s32 = 0
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    while text != null && text[index] != 0 && used < output_size - 1 {
+        if text[index] == 92 || text[index] == 9 || text[index] == 10 ||
+           text[index] == 13 {
+            if used + 2 >= output_size { break }
+            output[used] = 92
+            if text[index] == 9 {
+                output[used + 1] = 116
+            } else if text[index] == 10 {
+                output[used + 1] = 110
+            } else if text[index] == 13 {
+                output[used + 1] = 114
+            } else {
+                output[used + 1] = 92
+            }
+            used += 2
+        } else {
+            output[used] = text[index]
+            used += 1
+        }
+        index += 1
+    }
+    output[used] = 0
+    return used
+}
+
+#program_export
+UnescapeTerminalPaneText :: (
+    output: *u8, output_size: s32, text: *u8) -> s32 {
+    used: s32 = 0
+    index: s32 = 0
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if text == null { return 0 }
+    while text[index] != 0 && used < output_size - 1 {
+        if text[index] == 92 && text[index + 1] != 0 {
+            index += 1
+            if text[index] == 116 {
+                output[used] = 9
+            } else if text[index] == 110 {
+                output[used] = 10
+            } else if text[index] == 114 {
+                output[used] = 13
+            } else {
+                output[used] = text[index]
+            }
+        } else {
+            output[used] = text[index]
+        }
+        used += 1
+        index += 1
+    }
+    output[used] = 0
+    return used
+}

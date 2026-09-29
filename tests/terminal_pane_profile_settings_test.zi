@@ -1,4 +1,7 @@
+#import "terminal_pane_profile_colors_theme"
+
 #import "terminal_pane_profile_settings"
+#import "terminal_pane_profile_types"
 
 Fill :: (output: *u8, value: string) {
     index: s32 = 0

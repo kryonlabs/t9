@@ -1,0 +1,90 @@
+TERMINAL_PANE_CURSOR_DEFAULT :: 0;
+TERMINAL_PANE_CURSOR_BLOCK :: 1;
+TERMINAL_PANE_CURSOR_UNDERLINE :: 2;
+TERMINAL_PANE_CURSOR_BAR :: 3;
+
+TERMINAL_PANE_COLOR_DEFAULT :: -1;
+TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
+TERMINAL_PANE_TITLE_REPLACE :: 0;
+TERMINAL_PANE_TITLE_PREPEND :: 1;
+TERMINAL_PANE_TITLE_APPEND :: 2;
+TERMINAL_PANE_TITLE_IGNORE :: 3;
+TERMINAL_PANE_KEY_BINDING_AUTO :: 0;
+TERMINAL_PANE_KEY_BINDING_ASCII_DELETE :: 1;
+TERMINAL_PANE_KEY_BINDING_CONTROL_H :: 2;
+TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_NONE :: 0;
+TERMINAL_PANE_PROFILE_PROMPT_SHELL :: 1;
+TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY :: 2;
+TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT :: 3;
+TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE :: 4;
+TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK :: 5;
+TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND :: 6;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND :: 7;
+TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR :: 8;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND :: 9;
+TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND :: 10;
+TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE :: 11;
+TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING :: 12;
+TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING :: 13;
+TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH :: 14;
+TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD :: 15;
+TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK :: 16;
+TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE :: 17;
+TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB :: 18;
+TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS :: 19;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS :: 20;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT :: 21;
+TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT :: 22;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY :: 23;
+TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE :: 24;
+
+TerminalPaneProfileLimits :: struct {
+    default_font_size: s32
+    min_font_size: s32
+    max_font_size: s32
+    default_scrollback_limit: s32
+    min_scrollback_limit: s32
+    max_scrollback_limit: s32
+    default_cursor_style: s32
+}
+
+TerminalPaneProfileSettings :: struct {
+    font_size: s32
+    scrollback_limit: s32
+    unlimited_scrollback: s32
+    cursor_style: s32
+    dynamic_title_mode: s32
+    backspace_binding: s32
+    delete_binding: s32
+    ambiguous_width_wide: s32
+    allow_bold: s32
+    auto_hide_mouse: s32
+    middle_click_closes_tab: s32
+    always_show_tabs: s32
+    disable_menu_mnemonics: s32
+    disable_menu_shortcut: s32
+    disable_help_shortcut: s32
+    background_opacity: s32
+    terminal_foreground: s32
+    terminal_background: s32
+    terminal_cursor: s32
+    terminal_selection_foreground: s32
+    terminal_selection_background: s32
+    shell: [512]u8
+    working_directory: [1024]u8
+    command: [1024]u8
+    terminal_font: [1024]u8
+    background_image: [1024]u8
+}
+
+TerminalPaneTextDescriptor :: struct {
+    data: *u8
+    length: usize
+}
+
+#program_export
+TerminalPaneTextBytes :: (value: string) -> *u8 {
+    descriptor: *TerminalPaneTextDescriptor = cast(*TerminalPaneTextDescriptor)(*value)
+    return descriptor.data
+}

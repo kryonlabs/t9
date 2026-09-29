@@ -1,5 +1,5 @@
-TERMINAL_PANE_COLOR_DEFAULT :: -1;
-TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
+#import "terminal_pane_profile_types"
+
 
 Color :: struct {
     r: u8

@@ -1,93 +1,5 @@
-TERMINAL_PANE_CURSOR_DEFAULT :: 0;
-TERMINAL_PANE_CURSOR_BLOCK :: 1;
-TERMINAL_PANE_CURSOR_UNDERLINE :: 2;
-TERMINAL_PANE_CURSOR_BAR :: 3;
-
-TERMINAL_PANE_COLOR_DEFAULT :: -1;
-TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
-TERMINAL_PANE_TITLE_REPLACE :: 0;
-TERMINAL_PANE_TITLE_PREPEND :: 1;
-TERMINAL_PANE_TITLE_APPEND :: 2;
-TERMINAL_PANE_TITLE_IGNORE :: 3;
-TERMINAL_PANE_KEY_BINDING_AUTO :: 0;
-TERMINAL_PANE_KEY_BINDING_ASCII_DELETE :: 1;
-TERMINAL_PANE_KEY_BINDING_CONTROL_H :: 2;
-TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE :: 3;
-TERMINAL_PANE_PROFILE_PROMPT_NONE :: 0;
-TERMINAL_PANE_PROFILE_PROMPT_SHELL :: 1;
-TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY :: 2;
-TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT :: 3;
-TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE :: 4;
-TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK :: 5;
-TERMINAL_PANE_PROFILE_PROMPT_FOREGROUND :: 6;
-TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND :: 7;
-TERMINAL_PANE_PROFILE_PROMPT_CURSOR_COLOR :: 8;
-TERMINAL_PANE_PROFILE_PROMPT_SELECTION_FOREGROUND :: 9;
-TERMINAL_PANE_PROFILE_PROMPT_SELECTION_BACKGROUND :: 10;
-TERMINAL_PANE_PROFILE_PROMPT_DYNAMIC_TITLE_MODE :: 11;
-TERMINAL_PANE_PROFILE_PROMPT_BACKSPACE_BINDING :: 12;
-TERMINAL_PANE_PROFILE_PROMPT_DELETE_BINDING :: 13;
-TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH :: 14;
-TERMINAL_PANE_PROFILE_PROMPT_ALLOW_BOLD :: 15;
-TERMINAL_PANE_PROFILE_PROMPT_UNLIMITED_SCROLLBACK :: 16;
-TERMINAL_PANE_PROFILE_PROMPT_AUTO_HIDE_MOUSE :: 17;
-TERMINAL_PANE_PROFILE_PROMPT_MIDDLE_CLICK_CLOSE_TAB :: 18;
-TERMINAL_PANE_PROFILE_PROMPT_ALWAYS_SHOW_TABS :: 19;
-TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_MNEMONICS :: 20;
-TERMINAL_PANE_PROFILE_PROMPT_DISABLE_MENU_SHORTCUT :: 21;
-TERMINAL_PANE_PROFILE_PROMPT_DISABLE_HELP_SHORTCUT :: 22;
-TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_OPACITY :: 23;
-TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE :: 24;
-
-TerminalPaneProfileLimits :: struct {
-    default_font_size: s32
-    min_font_size: s32
-    max_font_size: s32
-    default_scrollback_limit: s32
-    min_scrollback_limit: s32
-    max_scrollback_limit: s32
-    default_cursor_style: s32
-}
-
-TerminalPaneProfileSettings :: struct {
-    font_size: s32
-    scrollback_limit: s32
-    unlimited_scrollback: s32
-    cursor_style: s32
-    dynamic_title_mode: s32
-    backspace_binding: s32
-    delete_binding: s32
-    ambiguous_width_wide: s32
-    allow_bold: s32
-    auto_hide_mouse: s32
-    middle_click_closes_tab: s32
-    always_show_tabs: s32
-    disable_menu_mnemonics: s32
-    disable_menu_shortcut: s32
-    disable_help_shortcut: s32
-    background_opacity: s32
-    terminal_foreground: s32
-    terminal_background: s32
-    terminal_cursor: s32
-    terminal_selection_foreground: s32
-    terminal_selection_background: s32
-    shell: [512]u8
-    working_directory: [1024]u8
-    command: [1024]u8
-    terminal_font: [1024]u8
-    background_image: [1024]u8
-}
-
-TerminalPaneTextDescriptor :: struct {
-    data: *u8
-    length: usize
-}
-
-#program_export
-TerminalPaneTextBytes :: (value: string) -> *u8 {
-    descriptor: *TerminalPaneTextDescriptor = cast(*TerminalPaneTextDescriptor)(*value)
-    return descriptor.data
-}
+#import "terminal_pane_profile"
+#import "terminal_pane_profile_types"
 
 #scope_file
 
@@ -198,71 +110,6 @@ ParsePercent :: (value: *u8, output: *s32) -> bool {
     return true
 }
 
-ParsePaletteIndex :: (value: *u8, output: *s32) -> bool {
-    index: s32 = 0
-    result: s32 = 0
-    if value == null || output == null || value[index] == 0 { return false }
-    while value[index] >= 48 && value[index] <= 57 {
-        result = result * 10 + cast(s32)(value[index] - 48)
-        if result > 255 { return false }
-        index += 1
-    }
-    if value[index] != 0 { return false }
-    output.* = result
-    return true
-}
-
-HexValue :: (value: u8) -> s32 {
-    if value >= 48 && value <= 57 { return cast(s32)value - 48 }
-    if value >= 97 && value <= 102 { return 10 + cast(s32)value - 97 }
-    if value >= 65 && value <= 70 { return 10 + cast(s32)value - 65 }
-    return -1
-}
-
-ParseProfileColor :: (value: *u8, output: *s32) -> bool {
-    index: s32 = 0
-    channel: s32 = 0
-    channels: [6]s32
-    if value == null || output == null { return false }
-    if NameIs(value, "default") || NameIs(value, "system") ||
-       NameIs(value, "theme") {
-        output.* = TERMINAL_PANE_COLOR_DEFAULT
-        return true
-    }
-    if ParsePaletteIndex(value, output) { return true }
-    if value[index] == 35 { index += 1 }
-    while channel < 6 {
-        if value[index] == 0 { return false }
-        channels[channel] = HexValue(value[index])
-        if channels[channel] < 0 { return false }
-        index += 1
-        channel += 1
-    }
-    if channel != 6 || value[index] != 0 { return false }
-    output.* = TERMINAL_PANE_COLOR_TRUE_RGB |
-        ((channels[0] << 20) | (channels[1] << 16)) |
-        ((channels[2] << 12) | (channels[3] << 8)) |
-        ((channels[4] << 4) | channels[5])
-    return true
-}
-
-ParseCursorStyle :: (value: *u8, fallback: s32) -> s32 {
-    if value == null || value[0] == 0 { return fallback }
-    if NameIs(value, "default") || NameIs(value, "0") {
-        return TERMINAL_PANE_CURSOR_DEFAULT
-    }
-    if NameIs(value, "block") || NameIs(value, "1") {
-        return TERMINAL_PANE_CURSOR_BLOCK
-    }
-    if NameIs(value, "underline") || NameIs(value, "2") {
-        return TERMINAL_PANE_CURSOR_UNDERLINE
-    }
-    if NameIs(value, "bar") || NameIs(value, "beam") ||
-       NameIs(value, "3") {
-        return TERMINAL_PANE_CURSOR_BAR
-    }
-    return fallback
-}
 #scope_export
 
 #program_export
@@ -356,7 +203,7 @@ ApplyTerminalPaneProfileSetting :: (
         return 1
     }
     if NameIs(name, "cursor_style") || NameIs(name, "cursor-style") {
-        settings.cursor_style = ParseCursorStyle(value, settings.cursor_style)
+        settings.cursor_style = ParseTerminalPaneCursorStyle(value, settings.cursor_style)
         return 1
     }
     if NameIs(name, "dynamic_title_mode") ||
@@ -492,20 +339,20 @@ ApplyTerminalPaneProfileSetting :: (
     }
     if NameIs(name, "terminal_foreground") ||
        NameIs(name, "terminal-foreground") || NameIs(name, "foreground") {
-        if !ParseProfileColor(value, *parsed) { return 0 }
+        if ParseTerminalPaneProfileColor(value, *parsed) != 1 { return 0 }
         settings.terminal_foreground = parsed
         return 1
     }
     if NameIs(name, "terminal_background") ||
        NameIs(name, "terminal-background") || NameIs(name, "background") {
-        if !ParseProfileColor(value, *parsed) { return 0 }
+        if ParseTerminalPaneProfileColor(value, *parsed) != 1 { return 0 }
         settings.terminal_background = parsed
         return 1
     }
     if NameIs(name, "terminal_cursor") ||
        NameIs(name, "terminal-cursor") || NameIs(name, "cursor") ||
        NameIs(name, "cursor_color") || NameIs(name, "cursor-color") {
-        if !ParseProfileColor(value, *parsed) { return 0 }
+        if ParseTerminalPaneProfileColor(value, *parsed) != 1 { return 0 }
         settings.terminal_cursor = parsed
         return 1
     }
@@ -513,7 +360,7 @@ ApplyTerminalPaneProfileSetting :: (
        NameIs(name, "terminal-selection-foreground") ||
        NameIs(name, "selection_foreground") ||
        NameIs(name, "selection-foreground") {
-        if !ParseProfileColor(value, *parsed) { return 0 }
+        if ParseTerminalPaneProfileColor(value, *parsed) != 1 { return 0 }
         settings.terminal_selection_foreground = parsed
         return 1
     }
@@ -521,7 +368,7 @@ ApplyTerminalPaneProfileSetting :: (
        NameIs(name, "terminal-selection-background") ||
        NameIs(name, "selection_background") ||
        NameIs(name, "selection-background") {
-        if !ParseProfileColor(value, *parsed) { return 0 }
+        if ParseTerminalPaneProfileColor(value, *parsed) != 1 { return 0 }
         settings.terminal_selection_background = parsed
         return 1
     }
