@@ -1,0 +1,171 @@
+#import "terminal_pane_selection"
+
+SelectionFixture :: struct {
+    lines: [4][64]u8
+    wrapped: [4]s32
+    count: s32
+}
+
+primary_value: [256]u8;
+clipboard_value: [256]u8;
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+CopyText :: (destination: *u8, source: *u8) {
+    index: s32 = 0
+    destination[0] = 0
+    if source == null { return }
+    while source[index] != 0 && index < 255 {
+        destination[index] = source[index]
+        index += 1
+    }
+    destination[index] = 0
+}
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+#program_export
+SetPrimarySelectionFromText :: (text: *u8) -> s32 {
+    CopyText(*primary_value[0], text)
+    return 1
+}
+
+#program_export
+CopySelectionTextToClipboard :: (clipboard: *void, text: *u8) -> s32 {
+    if clipboard != null || text == null { return 0 }
+    CopyText(*clipboard_value[0], text)
+    return 1
+}
+
+FixtureLineText :: (userdata: *void, row: s32, out: *u8,
+    out_size: s32) -> s32 {
+    fixture: *SelectionFixture
+    index: s32 = 0
+    if userdata == null || out == null || out_size <= 0 ||
+       row < 0 || row >= 4 { return 0 }
+    fixture = cast(*SelectionFixture)userdata
+    while fixture.lines[row][index] != 0 && index < out_size - 1 {
+        out[index] = fixture.lines[row][index]
+        index += 1
+    }
+    out[index] = 0
+    return 1
+}
+
+FixtureWrapped :: (userdata: *void, row: s32) -> s32 {
+    fixture: *SelectionFixture
+    if userdata == null || row < 0 || row >= 4 { return 0 }
+    fixture = cast(*SelectionFixture)userdata
+    return fixture.wrapped[row]
+}
+
+#program_export
+main :: () -> s32 {
+    fixture: SelectionFixture
+    selection: TerminalPaneSelection
+    text: [256]u8
+    match: TerminalPaneSearchMatch
+    controller: TerminalPaneSearchController
+    scroll_offset: s32 = 99
+
+    Fill(*fixture.lines[0][0], "open /tmp/ktrem-test.txt now")
+    Fill(*fixture.lines[1][0], "second line")
+    Fill(*fixture.lines[2][0], "abcdefghijklmnop")
+    Fill(*fixture.lines[3][0], "q")
+    fixture.wrapped[2] = 1
+    fixture.count = 4
+
+    TerminalPaneSelectionClear(*selection)
+    TerminalPaneSelectionSelectWord(*selection, FixtureLineText,
+        cast(*void)*fixture, 0, 8)
+    if TerminalPaneSelectionContains(*selection, 0, 5) != 1 ||
+       TerminalPaneSelectionContains(*selection, 0, 23) != 1 ||
+       TerminalPaneSelectionContains(*selection, 0, 24) != 0 { return 1 }
+    if TerminalPaneSelectionCollectText(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture, *text[0], 256) != 1 ||
+       !Same(*text[0], "/tmp/ktrem-test.txt") { return 2 }
+
+    TerminalPaneSelectionSelectLine(*selection, FixtureLineText,
+        cast(*void)*fixture, 1)
+    if TerminalPaneSelectionCollectText(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture, *text[0], 256) != 1 ||
+       !Same(*text[0], "second line") { return 3 }
+
+    TerminalPaneSelectionSelectWord(*selection, FixtureLineText,
+        cast(*void)*fixture, 0, 7)
+    TerminalPaneSelectionUpdateEnd(*selection, FixtureLineText,
+        cast(*void)*fixture, 0, 1)
+    if TerminalPaneSelectionCollectText(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture, *text[0], 256) != 1 ||
+       !Same(*text[0], "open /tmp/ktrem-test.txt") { return 4 }
+
+    TerminalPaneSelectionSetRange(*selection,
+        TERMINAL_PANE_SELECTION_CHAR, 0, 2, 0, 3, 1)
+    if TerminalPaneSelectionCollectText(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture, *text[0], 256) != 1 ||
+       !Same(*text[0], "abcdefghijklmnopq") { return 5 }
+    if TerminalPaneSelectionUpdatePrimary(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture) != 1 ||
+       !Same(*primary_value[0], "abcdefghijklmnopq") { return 6 }
+    if TerminalPaneSelectionCopyToClipboard(*selection, FixtureLineText,
+            FixtureWrapped, cast(*void)*fixture, null) != 1 ||
+       !Same(*clipboard_value[0], "abcdefghijklmnopq") { return 7 }
+
+    Fill(*fixture.lines[0][0], "Alpha beta")
+    Fill(*fixture.lines[1][0], "gamma ALPHA")
+    Fill(*fixture.lines[2][0], "needle middle needle")
+    Fill(*fixture.lines[3][0], "final Beta")
+    fixture.wrapped[2] = 0
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 0, 0, 1, 0, *match) != 0 { return 8 }
+    Fill(*text[0], "alpha")
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 0, 0, 1, 0, *match) != 1 || match.row != 0 ||
+       match.col != 0 || match.length != 5 { return 9 }
+    Fill(*text[0], "ALPHA")
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 0, 0, 1, 0, *match) != 1 || match.row != 1 ||
+       match.col != 6 { return 10 }
+    Fill(*text[0], "needle")
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 2, 20, -1, 0, *match) != 1 || match.row != 2 ||
+       match.col != 14 { return 11 }
+    Fill(*text[0], "beta")
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 3, 7, 1, 1, *match) != 1 || match.row != 0 ||
+       match.col != 6 { return 12 }
+
+    TerminalPaneSelectionClear(*selection)
+    controller = MakeTerminalPaneSearchController(FixtureLineText,
+        cast(*void)*fixture, *selection, 4, 2, 1, *scroll_offset)
+    Fill(*text[0], "needle")
+    if TerminalPaneSearchFindInitial(controller, *text[0], *match) != 1 ||
+       match.row != 2 || match.col != 14 || selection.active != 1 ||
+       selection.start_col != 14 || selection.end_col != 20 ||
+       scroll_offset != 0 { return 13 }
+    Fill(*text[0], "alpha")
+    if TerminalPaneSearchFindNext(controller, *text[0], 1, *match) != 1 ||
+       match.row != 0 || match.col != 0 || scroll_offset != 2 { return 14 }
+    Fill(*text[0], "beta")
+    if TerminalPaneSearchFindNext(controller, *text[0], -1, *match) != 1 ||
+       match.row != 3 || match.col != 6 { return 15 }
+    Fill(*text[0], "beta")
+    if TerminalPaneSearchLines(FixtureLineText, cast(*void)*fixture, 4,
+            *text[0], 0, 0, -1, 1, *match) != 1 || match.row != 3 ||
+       match.col != 6 { return 16 }
+    return 0
+}

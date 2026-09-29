@@ -100,6 +100,10 @@ PANE_SIXEL_TEST_C = $(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel_test.c
+PANE_SELECTION_TEST_ZIRAN = $(BUILD_DIR)/tests/terminal_pane_selection_ziran_test
+PANE_SELECTION_TEST_ZIRAN_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_selection_ziran
+PANE_SELECTION_TEST_ZIRAN_C = $(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection.c \
+	$(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection_test.c
 PANE_PROFILE_COLORS_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_colors_test
 PANE_PROFILE_COLORS_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_colors
 PANE_PROFILE_COLORS_TEST_C = $(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_types.c \
@@ -329,6 +333,17 @@ $(PANE_SIXEL_TEST): $(PANE_SIXEL_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_SIXEL_TEST_GEN) \
 		$(PANE_SIXEL_TEST_C) -o $@
 
+$(PANE_SELECTION_TEST_ZIRAN_C) &: tests/terminal_pane_selection_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_SELECTION_TEST_ZIRAN_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_SELECTION_TEST_ZIRAN_GEN) tests/terminal_pane_selection_test.zi
+
+$(PANE_SELECTION_TEST_ZIRAN): $(PANE_SELECTION_TEST_ZIRAN_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_SELECTION_TEST_ZIRAN_GEN) \
+		$(PANE_SELECTION_TEST_ZIRAN_C) -o $@
+
 $(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_COLORS_TEST_GEN)
@@ -498,6 +513,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_DCS_TEST) $(PANE_SIXEL_TEST) \
+	$(PANE_SELECTION_TEST_ZIRAN) \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
 	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
 	$(PANE_PROFILE_PROMPT_TEST) $(PANE_PROFILE_SETTINGS_TEST) \
@@ -513,6 +529,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_MOUSE_TEST)
 	$(PANE_DCS_TEST)
 	$(PANE_SIXEL_TEST)
+	$(PANE_SELECTION_TEST_ZIRAN)
 	$(PANE_PROFILE_COLORS_TEST)
 	$(PANE_SESSION_TEST)
 	$(PANE_RENDER_TEST)
