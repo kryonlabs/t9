@@ -18,6 +18,7 @@ same `.zi` implementation.
 - `src/terminal_pane/terminal_pane_csi.zi`
 - `src/terminal_pane/terminal_pane_modes.zi`
 - `src/terminal_pane/terminal_pane_mouse.zi`
+- `src/terminal_pane/terminal_pane_profile_colors.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

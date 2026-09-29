@@ -1,0 +1,196 @@
+TERMINAL_PANE_COLOR_DEFAULT :: -1;
+TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
+
+Color :: struct {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+TerminalPaneColors :: struct {
+    background: Color
+    text: Color
+    muted_text: Color
+    selection: Color
+    selection_text: Color
+    cursor: Color
+    link: Color
+    border: Color
+    scroll_indicator: Color
+    scroll_indicator_text: Color
+    bell_overlay: Color
+    bell_border: Color
+}
+
+TerminalPanePalette :: struct {
+    ansi: [256]Color
+}
+
+TerminalPaneProfileColors :: struct {
+    foreground: s32
+    background: s32
+    cursor: s32
+    selection_foreground: s32
+    selection_background: s32
+}
+
+TerminalPaneViewColors :: struct {
+    foreground: Color
+    background: Color
+    cursor: Color
+    selection_foreground: Color
+    selection_background: Color
+}
+
+#scope_file
+t9_host :: #system_library "c";
+ResolveTerminalPaneThemeColorsHost :: (colors: TerminalPaneColors) -> TerminalPaneColors #foreign t9_host "ResolveTerminalPaneThemeColors";
+
+PaneColorVisible :: (color: Color) -> bool {
+    return color.a != 0
+}
+
+DefaultPaletteColor :: (index: s32) -> Color {
+    if index <= 0 { return Color.{24, 24, 24, 255} }
+    if index == 1 { return Color.{205, 49, 49, 255} }
+    if index == 2 { return Color.{13, 188, 121, 255} }
+    if index == 3 { return Color.{229, 229, 16, 255} }
+    if index == 4 { return Color.{36, 114, 200, 255} }
+    if index == 5 { return Color.{188, 63, 188, 255} }
+    if index == 6 { return Color.{17, 168, 205, 255} }
+    if index == 7 { return Color.{229, 229, 229, 255} }
+    if index == 8 { return Color.{102, 102, 102, 255} }
+    if index == 9 { return Color.{241, 76, 76, 255} }
+    if index == 10 { return Color.{35, 209, 139, 255} }
+    if index == 11 { return Color.{245, 245, 67, 255} }
+    if index == 12 { return Color.{59, 142, 234, 255} }
+    if index == 13 { return Color.{214, 112, 214, 255} }
+    if index == 14 { return Color.{41, 184, 219, 255} }
+    if index == 15 { return Color.{255, 255, 255, 255} }
+    if index >= 16 && index <= 231 {
+        offset: s32 = index - 16
+        red: s32 = offset / 36
+        green: s32 = (offset / 6) % 6
+        blue: s32 = offset % 6
+        return Color.{
+            cast(u8)(ifx red == 0 then 0 else 55 + red * 40),
+            cast(u8)(ifx green == 0 then 0 else 55 + green * 40),
+            cast(u8)(ifx blue == 0 then 0 else 55 + blue * 40),
+            255
+        }
+    }
+    if index >= 232 && index <= 255 {
+        gray: u8 = cast(u8)(8 + (index - 232) * 10)
+        return Color.{gray, gray, gray, 255}
+    }
+    return Color.{24, 24, 24, 255}
+}
+
+PaneResolveProfileColor :: (configured: s32, fallback: Color) -> s32 {
+    if configured != TERMINAL_PANE_COLOR_DEFAULT { return configured }
+    if PaneColorVisible(fallback) { return TerminalPaneColorToRGB(fallback) }
+    return TERMINAL_PANE_COLOR_DEFAULT
+}
+#scope_export
+
+#program_export
+TerminalPaneColorToRGB :: (color: Color) -> s32 {
+    if !PaneColorVisible(color) { return TERMINAL_PANE_COLOR_DEFAULT }
+    return TERMINAL_PANE_COLOR_TRUE_RGB |
+        (cast(s32)color.r << 16) | (cast(s32)color.g << 8) |
+        cast(s32)color.b
+}
+
+#program_export
+ResolveTerminalPaneColor :: (palette: *TerminalPanePalette, value: s32,
+    fallback: Color) -> Color {
+    if value >= 0 && (value & TERMINAL_PANE_COLOR_TRUE_RGB) != 0 {
+        rgb: s32 = value & 0xffffff
+        return Color.{
+            cast(u8)((rgb >> 16) & 255),
+            cast(u8)((rgb >> 8) & 255),
+            cast(u8)(rgb & 255),
+            255
+        }
+    }
+    if value >= 0 && value < 256 {
+        if palette != null { return palette.ansi[value] }
+        return DefaultPaletteColor(value)
+    }
+    return fallback
+}
+
+#program_export
+ResolveTerminalPaneColorWithOverrides :: (
+    palette: *TerminalPanePalette, overrides: *s32, value: s32,
+    fallback: Color) -> Color {
+    resolved_value: s32 = value
+    if overrides != null && value >= 0 && value < 256 &&
+       overrides[value] != TERMINAL_PANE_COLOR_DEFAULT {
+        resolved_value = overrides[value]
+    }
+    return ResolveTerminalPaneColor(palette, resolved_value, fallback)
+}
+
+#program_export
+ResolveTerminalPaneViewColors :: (
+    palette: *TerminalPanePalette, overrides: *s32,
+    colors: TerminalPaneProfileColors,
+    fallback: TerminalPaneColors) -> TerminalPaneViewColors {
+    resolved_fallback: TerminalPaneColors =
+        ResolveTerminalPaneThemeColorsHost(fallback)
+    foreground: Color = ResolveTerminalPaneColorWithOverrides(
+        palette, overrides, colors.foreground, resolved_fallback.text)
+    background: Color = ResolveTerminalPaneColorWithOverrides(
+        palette, overrides, colors.background,
+        resolved_fallback.background)
+    cursor: Color = ResolveTerminalPaneColorWithOverrides(
+        palette, overrides, colors.cursor, foreground)
+    selection_foreground: Color = ResolveTerminalPaneColorWithOverrides(
+        palette, overrides, colors.selection_foreground, background)
+    selection_background: Color = ResolveTerminalPaneColorWithOverrides(
+        palette, overrides, colors.selection_background,
+        resolved_fallback.selection)
+    return TerminalPaneViewColors.{
+        foreground, background, cursor, selection_foreground,
+        selection_background
+    }
+}
+
+#program_export
+TerminalPaneProfileColorsFromTheme :: (
+    colors: TerminalPaneColors) -> TerminalPaneProfileColors {
+    profile: TerminalPaneProfileColors
+    profile.foreground = TerminalPaneColorToRGB(colors.text)
+    profile.background = TerminalPaneColorToRGB(colors.background)
+    profile.cursor = TerminalPaneColorToRGB(colors.cursor)
+    profile.selection_foreground = TerminalPaneColorToRGB(
+        colors.selection_text)
+    if profile.selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        profile.selection_foreground = profile.background
+    }
+    profile.selection_background = TerminalPaneColorToRGB(colors.selection)
+    return profile
+}
+
+#program_export
+ResolveTerminalPaneProfileColors :: (
+    configured: TerminalPaneProfileColors,
+    fallback: TerminalPaneColors) -> TerminalPaneProfileColors {
+    colors: TerminalPaneProfileColors
+    colors.foreground = PaneResolveProfileColor(
+        configured.foreground, fallback.text)
+    colors.background = PaneResolveProfileColor(
+        configured.background, fallback.background)
+    colors.cursor = PaneResolveProfileColor(
+        configured.cursor, fallback.cursor)
+    colors.selection_foreground = PaneResolveProfileColor(
+        configured.selection_foreground, fallback.selection_text)
+    if colors.selection_foreground == TERMINAL_PANE_COLOR_DEFAULT {
+        colors.selection_foreground = colors.background
+    }
+    colors.selection_background = PaneResolveProfileColor(
+        configured.selection_background, fallback.selection)
+    return colors
+}

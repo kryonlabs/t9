@@ -1,0 +1,100 @@
+#import "terminal_pane_profile_colors"
+#import "terminal_pane_profile_colors_theme"
+
+SameColor :: (value: Color, red: u8, green: u8, blue: u8) -> bool {
+    return value.r == red && value.g == green && value.b == blue &&
+        value.a == 255
+}
+
+#program_export
+main :: () -> s32 {
+    palette: TerminalPanePalette
+    palette.ansi[1] = Color.{205, 49, 49, 255}
+    fallback: Color = Color.{1, 2, 3, 255}
+    theme: TerminalPaneColors
+
+    theme.text = Color.{4, 5, 6, 255}
+    theme.background = Color.{7, 8, 9, 255}
+    theme.cursor = Color.{10, 11, 12, 255}
+    theme.selection = Color.{13, 14, 15, 255}
+    theme.selection_text = Color.{16, 17, 18, 255}
+
+    if TerminalPaneColorToRGB(Color.{17, 34, 51, 255}) !=
+       (TERMINAL_PANE_COLOR_TRUE_RGB | 0x112233) { return 1 }
+    if TerminalPaneColorToRGB(Color.{0, 0, 0, 0}) !=
+       TERMINAL_PANE_COLOR_DEFAULT { return 2 }
+
+    true_color: Color = ResolveTerminalPaneColor(
+        *palette, TERMINAL_PANE_COLOR_TRUE_RGB | 0x0a141e, fallback)
+    if !SameColor(true_color, 10, 20, 30) { return 3 }
+    palette_color: Color = ResolveTerminalPaneColor(*palette, 1, fallback)
+    if !SameColor(palette_color, 205, 49, 49) { return 4 }
+    default_color: Color = ResolveTerminalPaneColor(
+        null, 1, fallback)
+    if !SameColor(default_color, 205, 49, 49) { return 5 }
+    default_cube: Color = ResolveTerminalPaneColor(null, 16, fallback)
+    if !SameColor(default_cube, 0, 0, 0) { return 6 }
+    default_gray: Color = ResolveTerminalPaneColor(null, 232, fallback)
+    if !SameColor(default_gray, 8, 8, 8) { return 7 }
+    fallback_color: Color = ResolveTerminalPaneColor(
+        *palette, TERMINAL_PANE_COLOR_DEFAULT, fallback)
+    if !SameColor(fallback_color, 1, 2, 3) { return 8 }
+
+    overrides: [256]s32
+    index: s32 = 0
+    while index < 256 {
+        overrides[index] = TERMINAL_PANE_COLOR_DEFAULT
+        index += 1
+    }
+    overrides[1] = TERMINAL_PANE_COLOR_TRUE_RGB | 0x223344
+    overrides[2] = TERMINAL_PANE_COLOR_TRUE_RGB | 0x778899
+    overridden: Color = ResolveTerminalPaneColorWithOverrides(
+        *palette, *overrides[0], 1, fallback)
+    if !SameColor(overridden, 34, 51, 68) { return 9 }
+
+    view_configured: TerminalPaneProfileColors
+    view_configured.foreground = 1
+    view_configured.background = TERMINAL_PANE_COLOR_TRUE_RGB | 0x445566
+    view_configured.cursor = TERMINAL_PANE_COLOR_DEFAULT
+    view_configured.selection_foreground = TERMINAL_PANE_COLOR_DEFAULT
+    view_configured.selection_background = 2
+    view: TerminalPaneViewColors = ResolveTerminalPaneViewColors(
+        *palette, *overrides[0], view_configured, theme)
+    if !SameColor(view.foreground, 34, 51, 68) { return 10 }
+    if !SameColor(view.background, 68, 85, 102) { return 11 }
+    if !SameColor(view.cursor, 34, 51, 68) { return 12 }
+    if !SameColor(view.selection_foreground, 68, 85, 102) { return 13 }
+    if !SameColor(view.selection_background, 119, 136, 153) { return 14 }
+
+    configured: TerminalPaneProfileColors
+    configured.foreground = TERMINAL_PANE_COLOR_DEFAULT
+    configured.background = TERMINAL_PANE_COLOR_TRUE_RGB | 0x445566
+    configured.cursor = TERMINAL_PANE_COLOR_DEFAULT
+    configured.selection_foreground =
+        TERMINAL_PANE_COLOR_TRUE_RGB | 0xaabbcc
+    configured.selection_background = TERMINAL_PANE_COLOR_DEFAULT
+
+    resolved: TerminalPaneProfileColors =
+        ResolveTerminalPaneProfileColors(configured, theme)
+    if resolved.foreground != (TERMINAL_PANE_COLOR_TRUE_RGB | 0x040506) {
+        return 15
+    }
+    if resolved.background != (TERMINAL_PANE_COLOR_TRUE_RGB | 0x445566) {
+        return 16
+    }
+    if resolved.cursor != (TERMINAL_PANE_COLOR_TRUE_RGB | 0x0a0b0c) {
+        return 17
+    }
+    if resolved.selection_foreground !=
+       (TERMINAL_PANE_COLOR_TRUE_RGB | 0xaabbcc) { return 18 }
+    if resolved.selection_background !=
+       (TERMINAL_PANE_COLOR_TRUE_RGB | 0x0d0e0f) { return 19 }
+
+    from_theme: TerminalPaneProfileColors =
+        TerminalPaneProfileColorsFromTheme(theme)
+    if from_theme.foreground != (TERMINAL_PANE_COLOR_TRUE_RGB | 0x040506) ||
+       from_theme.background != (TERMINAL_PANE_COLOR_TRUE_RGB | 0x070809) {
+        return 20
+    }
+    return 0
+}
