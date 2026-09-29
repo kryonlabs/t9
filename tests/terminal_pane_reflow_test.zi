@@ -1,0 +1,100 @@
+#import "terminal_pane_reflow"
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    while index < 12 {
+        output[index] = 32
+        index += 1
+    }
+}
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+CharBlank :: (cell: *void, userdata: *void) -> s32 {
+    value: *u8 = cast(*u8)cell
+    if userdata != null || value == null { return 0 }
+    return cast(s32)(value[0] == 32)
+}
+
+#program_export
+main :: () -> s32 {
+    input: [3][8]u8
+    wrapped: [3]u8
+    output: [4][12]u8
+    output_wrapped: [4]u8
+    blank: u8 = 32
+    spec: TerminalPaneReflowSpec
+    cursor_col: s32 = -1
+    cursor_row: s32 = -1
+    row_count: s32 = -1
+
+    Fill(*input[0][0], "abcdefgh")
+    Fill(*input[1][0], "ijkl    ")
+    Fill(*input[2][0], "        ")
+    wrapped[0] = 1
+    spec.input_cells = cast(*void)*input[0][0]
+    spec.input_wrapped = *wrapped[0]
+    spec.input_cols = 8
+    spec.input_rows = 3
+    spec.output_cells = cast(*void)*output[0][0]
+    spec.output_wrapped = *output_wrapped[0]
+    spec.output_cols = 12
+    spec.output_rows = 4
+    spec.cell_size = 1
+    spec.blank_cell = cast(*void)*blank
+    spec.is_blank = CharBlank
+    spec.trim_blank_rows_after_cursor = 1
+    spec.cursor_input_col = 2
+    spec.cursor_input_row = 1
+    spec.cursor_output_col = *cursor_col
+    spec.cursor_output_row = *cursor_row
+    spec.output_row_count = *row_count
+    if TerminalPaneReflowRows(*spec) != 1 { return 1 }
+    if !Same(*output[0][0], "abcdefghijkl") ||
+       !Same(*output[1][0], "            ") { return 2 }
+    if row_count != 1 || cursor_row != 0 || cursor_col != 10 ||
+       output_wrapped[0] != 0 { return 3 }
+
+    input2: [1][12]u8
+    output2: [3][5]u8
+    output_wrapped2: [3]u8
+    Fill(*input2[0][0], "abcdefghijkl")
+    spec = TerminalPaneReflowSpec.{}
+    spec.input_cells = cast(*void)*input2[0][0]
+    spec.input_cols = 12
+    spec.input_rows = 1
+    spec.output_cells = cast(*void)*output2[0][0]
+    spec.output_wrapped = *output_wrapped2[0]
+    spec.output_cols = 5
+    spec.output_rows = 3
+    spec.cell_size = 1
+    spec.blank_cell = cast(*void)*blank
+    spec.is_blank = CharBlank
+    spec.cursor_input_col = 11
+    spec.cursor_input_row = 0
+    spec.cursor_output_col = *cursor_col
+    spec.cursor_output_row = *cursor_row
+    spec.output_row_count = *row_count
+    if TerminalPaneReflowRows(*spec) != 1 { return 4 }
+    if !Same(*output2[0][0], "abcde") ||
+       !Same(*output2[1][0], "fghij") ||
+       !Same(*output2[2][0], "kl   ") { return 5 }
+    if output_wrapped2[0] != 1 || output_wrapped2[1] != 1 ||
+       output_wrapped2[2] != 0 || row_count != 3 ||
+       cursor_row != 2 || cursor_col != 1 { return 6 }
+
+    spec.output_cols = 0
+    if TerminalPaneReflowRows(*spec) != 0 { return 7 }
+    return 0
+}

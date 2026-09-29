@@ -21,6 +21,7 @@ same `.zi` implementation.
 - `src/terminal_pane/terminal_pane_profile_colors.zi`
 - `src/terminal_pane/terminal_pane_session.zi`
 - `src/terminal_pane/terminal_pane_render.zi`
+- `src/terminal_pane/terminal_pane_reflow.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

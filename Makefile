@@ -103,6 +103,10 @@ PANE_RENDER_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_render
 PANE_RENDER_TEST_C = $(PANE_RENDER_TEST_GEN)/terminal_pane_render.c \
 	$(PANE_RENDER_TEST_GEN)/terminal_pane_render_theme.c \
 	$(PANE_RENDER_TEST_GEN)/terminal_pane_render_test.c
+PANE_REFLOW_TEST = $(BUILD_DIR)/tests/terminal_pane_reflow_test
+PANE_REFLOW_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_reflow
+PANE_REFLOW_TEST_C = $(PANE_REFLOW_TEST_GEN)/terminal_pane_reflow.c \
+	$(PANE_REFLOW_TEST_GEN)/terminal_pane_reflow_test.c
 PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
@@ -303,6 +307,17 @@ $(PANE_RENDER_TEST): $(PANE_RENDER_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_RENDER_TEST_GEN) \
 		$(PANE_RENDER_TEST_C) -o $@
 
+$(PANE_REFLOW_TEST_C) &: tests/terminal_pane_reflow_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_REFLOW_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_REFLOW_TEST_GEN) tests/terminal_pane_reflow_test.zi
+
+$(PANE_REFLOW_TEST): $(PANE_REFLOW_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_REFLOW_TEST_GEN) \
+		$(PANE_REFLOW_TEST_C) -o $@
+
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
 		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
@@ -387,8 +402,8 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
-	$(PANE_RENDER_TEST) $(PROCESS_TEST) \
-	ziran-migration-check
+	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
+	$(PROCESS_TEST) ziran-migration-check
 	$(TEST)
 	$(SIMPLE_TEST)
 	$(PANE_POLICY_TEST)
@@ -401,6 +416,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_PROFILE_COLORS_TEST)
 	$(PANE_SESSION_TEST)
 	$(PANE_RENDER_TEST)
+	$(PANE_REFLOW_TEST)
 	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
