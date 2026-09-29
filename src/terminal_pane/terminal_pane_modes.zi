@@ -1,0 +1,199 @@
+TERMINAL_PANE_MODE_ACTION_NONE :: 0;
+TERMINAL_PANE_MODE_ACTION_ORIGIN_CURSOR :: 1;
+TERMINAL_PANE_MODE_ACTION_SAVE_CURSOR :: 2;
+TERMINAL_PANE_MODE_ACTION_RESTORE_CURSOR :: 4;
+TERMINAL_PANE_MODE_ACTION_CLEAR_SCREEN :: 8;
+TERMINAL_PANE_MODE_ACTION_CLEAR_ALTERNATE :: 16;
+
+TerminalPaneModeState :: struct {
+    cursor_blink: s32
+    cursor_visible: s32
+    origin_mode: s32
+    autowrap: s32
+    application_cursor_keys: s32
+    mouse_mode: s32
+    focus_reporting: s32
+    mouse_utf8: s32
+    mouse_sgr: s32
+    alternate_scroll: s32
+    mouse_urxvt: s32
+    mouse_pixels: s32
+    bracketed_paste: s32
+    alternate_screen: s32
+    insert_mode: s32
+    newline_mode: s32
+}
+
+#program_export
+TerminalPaneModeStateSetMode :: (state: *TerminalPaneModeState,
+    mode: s32, enabled: s32) -> s32 {
+    if state == null { return TERMINAL_PANE_MODE_ACTION_NONE }
+    if mode == 4 {
+        state.insert_mode = cast(s32)(enabled != 0)
+    } else if mode == 20 {
+        state.newline_mode = cast(s32)(enabled != 0)
+    }
+    return TERMINAL_PANE_MODE_ACTION_NONE
+}
+
+#program_export
+TerminalPaneModeStateSetPrivateMode :: (state: *TerminalPaneModeState,
+    mode: s32, enabled: s32) -> s32 {
+    if state == null { return TERMINAL_PANE_MODE_ACTION_NONE }
+    on: bool = enabled != 0
+    value: s32 = cast(s32)on
+    if mode == 12 {
+        state.cursor_blink = value
+    } else if mode == 25 {
+        state.cursor_visible = value
+    } else if mode == 6 {
+        state.origin_mode = value
+        return TERMINAL_PANE_MODE_ACTION_ORIGIN_CURSOR
+    } else if mode == 7 {
+        state.autowrap = value
+    } else if mode == 1 {
+        state.application_cursor_keys = value
+    } else if mode == 9 || mode == 1000 || mode == 1002 || mode == 1003 {
+        if on {
+            state.mouse_mode = mode
+        } else if state.mouse_mode == mode {
+            state.mouse_mode = 0
+        }
+    } else if mode == 1004 {
+        state.focus_reporting = value
+    } else if mode == 1005 {
+        if on {
+            state.mouse_sgr = 0
+            state.mouse_urxvt = 0
+            state.mouse_pixels = 0
+        }
+        state.mouse_utf8 = value
+    } else if mode == 1006 {
+        if on {
+            state.mouse_utf8 = 0
+            state.mouse_urxvt = 0
+            state.mouse_pixels = 0
+        }
+        state.mouse_sgr = value
+    } else if mode == 1007 {
+        state.alternate_scroll = value
+    } else if mode == 1015 {
+        if on {
+            state.mouse_utf8 = 0
+            state.mouse_sgr = 0
+            state.mouse_pixels = 0
+        }
+        state.mouse_urxvt = value
+    } else if mode == 1016 {
+        if on {
+            state.mouse_utf8 = 0
+            state.mouse_sgr = 0
+            state.mouse_urxvt = 0
+        }
+        state.mouse_pixels = value
+    } else if mode == 2004 {
+        state.bracketed_paste = value
+    } else if mode == 1048 {
+        if on { return TERMINAL_PANE_MODE_ACTION_SAVE_CURSOR }
+        return TERMINAL_PANE_MODE_ACTION_RESTORE_CURSOR
+    } else if mode == 47 {
+        state.alternate_screen = value
+    } else if mode == 1047 {
+        if on {
+            state.alternate_screen = 1
+            return TERMINAL_PANE_MODE_ACTION_CLEAR_SCREEN
+        }
+        state.alternate_screen = 0
+        return TERMINAL_PANE_MODE_ACTION_CLEAR_ALTERNATE
+    } else if mode == 1049 {
+        if on {
+            state.alternate_screen = 1
+            return TERMINAL_PANE_MODE_ACTION_SAVE_CURSOR |
+                TERMINAL_PANE_MODE_ACTION_CLEAR_SCREEN
+        }
+        state.alternate_screen = 0
+        return TERMINAL_PANE_MODE_ACTION_CLEAR_ALTERNATE |
+            TERMINAL_PANE_MODE_ACTION_RESTORE_CURSOR
+    }
+    return TERMINAL_PANE_MODE_ACTION_NONE
+}
+
+#program_export
+TerminalPaneModeReportStatus :: (state: TerminalPaneModeState,
+    private_mode: s32, mode: s32) -> s32 {
+    if private_mode == 0 {
+        if mode == 4 { return 2 - cast(s32)(state.insert_mode != 0) }
+        if mode == 20 { return 2 - cast(s32)(state.newline_mode != 0) }
+        return 0
+    }
+    if mode == 12 { return 2 - cast(s32)(state.cursor_blink != 0) }
+    if mode == 25 { return 2 - cast(s32)(state.cursor_visible != 0) }
+    if mode == 6 { return 2 - cast(s32)(state.origin_mode != 0) }
+    if mode == 7 { return 2 - cast(s32)(state.autowrap != 0) }
+    if mode == 1 { return 2 - cast(s32)(state.application_cursor_keys != 0) }
+    if mode == 9 || mode == 1000 || mode == 1002 || mode == 1003 {
+        return 2 - cast(s32)(state.mouse_mode == mode)
+    }
+    if mode == 1004 { return 2 - cast(s32)(state.focus_reporting != 0) }
+    if mode == 1005 { return 2 - cast(s32)(state.mouse_utf8 != 0) }
+    if mode == 1006 { return 2 - cast(s32)(state.mouse_sgr != 0) }
+    if mode == 1007 { return 2 - cast(s32)(state.alternate_scroll != 0) }
+    if mode == 1015 { return 2 - cast(s32)(state.mouse_urxvt != 0) }
+    if mode == 1016 { return 2 - cast(s32)(state.mouse_pixels != 0) }
+    if mode == 2004 { return 2 - cast(s32)(state.bracketed_paste != 0) }
+    if mode == 1048 { return 2 }
+    if mode == 47 || mode == 1047 || mode == 1049 {
+        return 2 - cast(s32)(state.alternate_screen != 0)
+    }
+    return 0
+}
+
+AppendByte :: (output: *u8, output_size: s32, used: *s32, value: u8) -> bool {
+    if output == null || used == null || used.* < 0 ||
+       used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendNumber :: (output: *u8, output_size: s32, used: *s32, value: s32) -> bool {
+    digits: [16]u8
+    next: s32 = 15
+    remaining: u32 = cast(u32)value
+    digits[next] = 0
+    next -= 1
+    while true {
+        digits[next] = cast(u8)(48 + remaining % 10)
+        remaining /= 10
+        if remaining == 0 { break }
+        next -= 1
+    }
+    while next < 15 {
+        if !AppendByte(output, output_size, used, digits[next]) { return false }
+        next += 1
+    }
+    return true
+}
+
+#program_export
+FormatTerminalPaneModeReport :: (output: *u8, output_size: s32,
+    state: TerminalPaneModeState, private_mode: s32, mode: s32) -> s32 {
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    used: s32 = 0
+    status: s32 = TerminalPaneModeReportStatus(state, private_mode, mode)
+    if !AppendByte(output, output_size, *used, 27) ||
+       !AppendByte(output, output_size, *used, 91) ||
+       (private_mode != 0 &&
+        !AppendByte(output, output_size, *used, 63)) ||
+       !AppendNumber(output, output_size, *used, mode) ||
+       !AppendByte(output, output_size, *used, 59) ||
+       !AppendNumber(output, output_size, *used, status) ||
+       !AppendByte(output, output_size, *used, 36) ||
+       !AppendByte(output, output_size, *used, 121) {
+        output[0] = 0
+        return 0
+    }
+    return used
+}
