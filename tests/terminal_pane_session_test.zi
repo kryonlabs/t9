@@ -1,0 +1,103 @@
+#import "terminal_pane_session"
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+CheckTitle :: (value: string, fallback: string, expected: string,
+    expected_length: s32) -> bool {
+    title: [32]u8
+    value_bytes: [256]u8
+    fallback_bytes: [32]u8
+    Fill(*value_bytes[0], value)
+    Fill(*fallback_bytes[0], fallback)
+    if FormatTerminalPaneSessionTitle(*title[0], 32, *value_bytes[0],
+            *fallback_bytes[0]) != expected_length { return false }
+    return Same(*title[0], expected)
+}
+
+#program_export
+main :: () -> s32 {
+    title: [32]u8
+    line: [8192]u8
+    title_bytes: [256]u8
+    fallback_bytes: [32]u8
+    active_bytes: [16]u8
+    old_bytes: [128]u8
+    bad_bytes: [64]u8
+    bad_active_bytes: [16]u8
+    record: TerminalPaneSessionRecord
+    parsed: TerminalPaneSessionRecord
+    active: s32 = -1
+
+    if !CheckTitle("/home/wao/Projects/ktrem", "terminal", "ktrem", 5) {
+        return 1
+    }
+    if !CheckTitle("/home/wao/Projects/ktrem///", "terminal", "ktrem", 5) {
+        return 2
+    }
+    if !CheckTitle("wao@omega:/mnt/storage/Projects/tools", "terminal",
+            "tools", 5) { return 3 }
+    if !CheckTitle("wao@omega:~/Projects/ktrem Test", "terminal",
+            "ktrem Test", 10) { return 4 }
+    if !CheckTitle("/", "terminal", "/", 1) { return 5 }
+    if !CheckTitle("", "terminal", "terminal", 8) { return 6 }
+
+    Fill(*title_bytes[0], "/tmp/abcdef")
+    Fill(*fallback_bytes[0], "terminal")
+    if FormatTerminalPaneSessionTitle(*title[0], 5, *title_bytes[0],
+            *fallback_bytes[0]) != 4 || !Same(*title[0], "abcd") {
+        return 7
+    }
+
+    Fill(*record.cwd[0], "/tmp/with\ttab")
+    Fill(*record.shell[0], "/bin/sh")
+    Fill(*record.title[0], "work\none")
+    Fill(*record.command[0], "printf '\\t'")
+    record.title_override = 1
+    record.scroll_offset = 42
+    if FormatTerminalPaneSessionRecord(*line[0], 8192, record) <= 0 {
+        return 8
+    }
+    if ParseTerminalPaneSessionRecord(*line[0], *parsed) != 1 ||
+       !Same(*parsed.cwd[0], "/tmp/with\ttab") ||
+       !Same(*parsed.shell[0], "/bin/sh") ||
+       !Same(*parsed.title[0], "work\none") ||
+       !Same(*parsed.command[0], "printf '\\t'") ||
+       parsed.title_override != 1 || parsed.scroll_offset != 42 {
+        return 9
+    }
+
+    Fill(*active_bytes[0], "active=3")
+    if ParseTerminalPaneSessionActive(*active_bytes[0], *active) != 1 ||
+       active != 3 { return 10 }
+    if ParseTerminalPaneSessionActive(*line[0], *active) != 0 {
+        return 11
+    }
+
+    Fill(*old_bytes[0], "tab\t/tmp\t/bin/sh\tstale")
+    if ParseTerminalPaneSessionRecord(*old_bytes[0], *parsed) != 1 ||
+       !Same(*parsed.title[0], "stale") ||
+       parsed.title_override != 0 { return 12 }
+    Fill(*bad_bytes[0], "bad\t/tmp")
+    Fill(*bad_active_bytes[0], "tab=1")
+    if ParseTerminalPaneSessionRecord(*bad_bytes[0], *parsed) != 0 ||
+       ParseTerminalPaneSessionActive(*bad_active_bytes[0], *active) != 0 {
+        return 13
+    }
+    return 0
+}
