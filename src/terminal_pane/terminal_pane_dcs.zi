@@ -1,0 +1,355 @@
+TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES :: 4194304;
+
+TerminalPaneDCSBuffer :: struct {
+    text: *u8
+    length: s32
+    capacity: s32
+    ignored: s32
+    max_bytes: s32
+}
+
+#scope_file
+t9_host :: #system_library "c";
+ReallocHost :: (pointer: *u8, size: usize) -> *u8 #foreign t9_host "realloc";
+FreeHost :: (pointer: *u8) #foreign t9_host "free";
+
+HexValue :: (value: u8) -> s32 {
+    if value >= 48 && value <= 57 { return cast(s32)value - 48 }
+    if value >= 97 && value <= 102 { return 10 + cast(s32)value - 97 }
+    if value >= 65 && value <= 70 { return 10 + cast(s32)value - 65 }
+    return -1
+}
+
+SameRaw :: (left: *u8, right: string) -> bool {
+    index: s32 = 0
+    if left == null { return false }
+    while index < cast(s32)right.count {
+        if left[index] != right[index] { return false }
+        index += 1
+    }
+    return left[index] == 0
+}
+
+AppendByte :: (output: *u8, output_size: s32, used: *s32,
+    value: u8) -> bool {
+    if output == null || used == null || used.* < 0 ||
+       used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendText :: (output: *u8, output_size: s32, used: *s32,
+    value: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        if !AppendByte(output, output_size, used, value[index]) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+HexDigit :: (value: u8) -> u8 {
+    if value < 10 { return cast(u8)(48 + value) }
+    return cast(u8)(87 + value)
+}
+
+AppendHexByte :: (output: *u8, output_size: s32, used: *s32,
+    value: u8) -> bool {
+    if !AppendByte(output, output_size, used, HexDigit(value >> 4)) ||
+       !AppendByte(output, output_size, used, HexDigit(value & 15)) {
+        return false
+    }
+    return true
+}
+
+AppendHexRaw :: (output: *u8, output_size: s32, used: *s32,
+    value: *u8) -> bool {
+    index: s32 = 0
+    if value == null { return false }
+    while value[index] != 0 {
+        if !AppendHexByte(output, output_size, used, value[index]) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+DecodeHexName :: (output: *u8, output_size: s32, text: *u8,
+    text_length: s32) -> bool {
+    index: s32 = 0
+    used: s32 = 0
+    high: s32
+    low: s32
+    if output == null || output_size <= 0 || text == null ||
+       text_length <= 0 || (text_length & 1) != 0 { return false }
+    while index < text_length {
+        high = HexValue(text[index])
+        low = HexValue(text[index + 1])
+        if high < 0 || low < 0 || used >= output_size - 1 {
+            return false
+        }
+        output[used] = cast(u8)((high << 4) | low)
+        used += 1
+        index += 2
+    }
+    output[used] = 0
+    return used > 0
+}
+
+CopyTermInfoValue :: (name: *u8, output: *u8,
+    output_size: s32) -> bool {
+    value: string
+    if SameRaw(name, "TN") { value = "xterm-256color" }
+    else if SameRaw(name, "Co") { value = "256" }
+    else if SameRaw(name, "RGB") { value = "8/8/8" }
+    else if SameRaw(name, "kbs") { value = "\x7f" }
+    else if SameRaw(name, "kcuu1") { value = "\x1b[A" }
+    else if SameRaw(name, "kcud1") { value = "\x1b[B" }
+    else if SameRaw(name, "kcuf1") { value = "\x1b[C" }
+    else if SameRaw(name, "kcub1") { value = "\x1b[D" }
+    else if SameRaw(name, "khome") { value = "\x1b[H" }
+    else if SameRaw(name, "kend") { value = "\x1b[F" }
+    else if SameRaw(name, "kich1") { value = "\x1b[2~" }
+    else if SameRaw(name, "kdch1") { value = "\x1b[3~" }
+    else if SameRaw(name, "kpp") { value = "\x1b[5~" }
+    else if SameRaw(name, "knp") { value = "\x1b[6~" }
+    else if SameRaw(name, "ka1") { value = "\x1bOw" }
+    else if SameRaw(name, "ka3") { value = "\x1bOy" }
+    else if SameRaw(name, "kb2") { value = "\x1bOu" }
+    else if SameRaw(name, "kc1") { value = "\x1bOq" }
+    else if SameRaw(name, "kc3") { value = "\x1bOs" }
+    else if SameRaw(name, "kent") { value = "\x1bOM" }
+    else if SameRaw(name, "kf1") { value = "\x1bOP" }
+    else if SameRaw(name, "kf2") { value = "\x1bOQ" }
+    else if SameRaw(name, "kf3") { value = "\x1bOR" }
+    else if SameRaw(name, "kf4") { value = "\x1bOS" }
+    else if SameRaw(name, "kf5") { value = "\x1b[15~" }
+    else if SameRaw(name, "kf6") { value = "\x1b[17~" }
+    else if SameRaw(name, "kf7") { value = "\x1b[18~" }
+    else if SameRaw(name, "kf8") { value = "\x1b[19~" }
+    else if SameRaw(name, "kf9") { value = "\x1b[20~" }
+    else if SameRaw(name, "kf10") { value = "\x1b[21~" }
+    else if SameRaw(name, "kf11") { value = "\x1b[23~" }
+    else if SameRaw(name, "kf12") { value = "\x1b[24~" }
+    else if SameRaw(name, "kf13") { value = "\x1b[1;2P" }
+    else if SameRaw(name, "kf14") { value = "\x1b[1;2Q" }
+    else if SameRaw(name, "kf15") { value = "\x1b[1;2R" }
+    else if SameRaw(name, "kf16") { value = "\x1b[1;2S" }
+    else if SameRaw(name, "kf17") { value = "\x1b[15;2~" }
+    else if SameRaw(name, "kf18") { value = "\x1b[17;2~" }
+    else if SameRaw(name, "kf19") { value = "\x1b[18;2~" }
+    else if SameRaw(name, "kf20") { value = "\x1b[19;2~" }
+    else if SameRaw(name, "kf21") { value = "\x1b[20;2~" }
+    else if SameRaw(name, "kf22") { value = "\x1b[21;2~" }
+    else if SameRaw(name, "kf23") { value = "\x1b[23;2~" }
+    else if SameRaw(name, "kf24") { value = "\x1b[24;2~" }
+    else { return false }
+    if cast(s32)value.count >= output_size { return false }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+    return true
+}
+
+AppendUTF8 :: (output: *u8, output_size: s32, used: *s32,
+    codepoint: u32) -> bool {
+    if output == null || used == null || output_size <= 0 { return false }
+    if codepoint < 0x80 {
+        if !AppendByte(output, output_size, used,
+                cast(u8)codepoint) { return false }
+    } else if codepoint < 0x800 {
+        if !AppendByte(output, output_size, used,
+                cast(u8)(0xc0 | (codepoint >> 6))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | (codepoint & 0x3f))) { return false }
+    } else if codepoint < 0x10000 {
+        if !AppendByte(output, output_size, used,
+                cast(u8)(0xe0 | (codepoint >> 12))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | (codepoint & 0x3f))) { return false }
+    } else if codepoint <= 0x10ffff {
+        if !AppendByte(output, output_size, used,
+                cast(u8)(0xf0 | (codepoint >> 18))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | ((codepoint >> 12) & 0x3f))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))) ||
+           !AppendByte(output, output_size, used,
+                cast(u8)(0x80 | (codepoint & 0x3f))) { return false }
+    } else {
+        return false
+    }
+    return true
+}
+
+FormatFailure :: (output: *u8, output_size: s32) -> s32 {
+    used: s32 = 0
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if !AppendText(output, output_size, *used, "\x1bP0+r\x1b\\") {
+        output[0] = 0
+        return 0
+    }
+    return used
+}
+#scope_export
+
+#program_export
+InitTerminalPaneDCSBuffer :: (
+    buffer: *TerminalPaneDCSBuffer, max_bytes: s32) {
+    if buffer == null { return }
+    buffer.text = null
+    buffer.length = 0
+    buffer.capacity = 0
+    buffer.ignored = 0
+    if max_bytes > 0 {
+        buffer.max_bytes = max_bytes
+    } else {
+        buffer.max_bytes = TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+    }
+}
+
+#program_export
+ResetTerminalPaneDCSBuffer :: (buffer: *TerminalPaneDCSBuffer) {
+    if buffer == null { return }
+    buffer.length = 0
+    buffer.ignored = 0
+    if buffer.text != null { buffer.text[0] = 0 }
+    if buffer.max_bytes <= 0 {
+        buffer.max_bytes = TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+    }
+}
+
+#program_export
+FreeTerminalPaneDCSBuffer :: (buffer: *TerminalPaneDCSBuffer) {
+    if buffer == null { return }
+    FreeHost(buffer.text)
+    buffer.text = null
+    buffer.length = 0
+    buffer.capacity = 0
+    buffer.ignored = 0
+    buffer.max_bytes = 0
+}
+
+#program_export
+AppendTerminalPaneDCSCodepoint :: (
+    buffer: *TerminalPaneDCSBuffer, codepoint: u32) -> s32 {
+    bytes: [8]u8
+    used: s32 = 0
+    index: s32 = 0
+    capacity: s32
+    text: *u8
+    required: s32
+    if buffer == null || buffer.ignored != 0 { return 0 }
+    if buffer.max_bytes <= 0 {
+        buffer.max_bytes = TERMINAL_PANE_DCS_DEFAULT_MAX_BYTES
+    }
+    if !AppendUTF8(*bytes[0], 8, *used, codepoint) {
+        buffer.ignored = 1
+        return 0
+    }
+    required = buffer.length + used + 1
+    if buffer.capacity <= required {
+        if buffer.capacity > 0 {
+            capacity = buffer.capacity * 2
+        } else {
+            capacity = 1024
+        }
+        while capacity <= required && capacity < buffer.max_bytes {
+            capacity *= 2
+        }
+        if capacity > buffer.max_bytes { capacity = buffer.max_bytes }
+        if capacity <= required {
+            buffer.ignored = 1
+            return 0
+        }
+        text = ReallocHost(buffer.text, cast(usize)capacity)
+        if text == null {
+            buffer.ignored = 1
+            return 0
+        }
+        buffer.text = text
+        buffer.capacity = capacity
+    }
+    while index < used {
+        buffer.text[buffer.length] = bytes[index]
+        buffer.length += 1
+        index += 1
+    }
+    buffer.text[buffer.length] = 0
+    return used
+}
+
+#program_export
+GetTerminalPaneDCSBufferText :: (
+    buffer: *TerminalPaneDCSBuffer) -> *u8 {
+    if buffer == null || buffer.ignored != 0 || buffer.text == null {
+        return null
+    }
+    buffer.text[buffer.length] = 0
+    return buffer.text
+}
+
+#program_export
+TerminalPaneDCSBufferIgnored :: (
+    buffer: *TerminalPaneDCSBuffer) -> s32 {
+    if buffer != null && buffer.ignored != 0 { return 1 }
+    return 0
+}
+
+#program_export
+FormatTerminalPaneXTGETTCAPResponse :: (
+    output: *u8, output_size: s32, payload: *u8) -> s32 {
+    cursor: s32 = 2
+    used: s32 = 0
+    first: s32 = 1
+    name: [32]u8
+    value: [64]u8
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if payload == null || payload[0] != 43 || payload[1] != 113 {
+        return 0
+    }
+    if !AppendText(output, output_size, *used, "\x1bP1+r") {
+        return 0
+    }
+    while payload[cursor] != 0 {
+        end: s32 = cursor
+        length: s32
+        while payload[end] != 0 && payload[end] != 59 { end += 1 }
+        length = end - cursor
+        if !DecodeHexName(*name[0], 32, *payload[cursor], length) {
+            return FormatFailure(output, output_size)
+        }
+        if !CopyTermInfoValue(*name[0], *value[0], 64) {
+            return FormatFailure(output, output_size)
+        }
+        if first == 0 && !AppendText(output, output_size, *used, ";") {
+            output[0] = 0
+            return 0
+        }
+        if !AppendHexRaw(output, output_size, *used, *name[0]) ||
+           !AppendText(output, output_size, *used, "=") ||
+           !AppendHexRaw(output, output_size, *used, *value[0]) {
+            output[0] = 0
+            return 0
+        }
+        first = 0
+        if payload[end] == 0 { break }
+        cursor = end + 1
+    }
+    if !AppendText(output, output_size, *used, "\x1b\\") {
+        return 0
+    }
+    return used
+}

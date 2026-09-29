@@ -1,0 +1,77 @@
+#import "terminal_pane_dcs"
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+CheckResponse :: (payload: string, output_size: s32, expected: string,
+    expected_length: s32) -> bool {
+    output: [128]u8
+    payload_bytes: [64]u8
+    Fill(*payload_bytes[0], payload)
+    output[0] = 120
+    if FormatTerminalPaneXTGETTCAPResponse(*output[0], output_size,
+            *payload_bytes[0]) != expected_length { return false }
+    return Same(*output[0], expected)
+}
+
+#program_export
+main :: () -> s32 {
+    output: [128]u8
+    payload: [64]u8
+    buffer: TerminalPaneDCSBuffer
+
+    if !CheckResponse("+q544e", 128,
+            "\x1bP1+r544e=787465726d2d323536636f6c6f72\x1b\\", 40) {
+        return 1
+    }
+    if !CheckResponse(
+            "+q436f;6b63757531;6b6635", 128,
+            "\x1bP1+r436f=323536;6b63757531=1b5b41;6b6635=1b5b31357e\x1b\\",
+            54) {
+        return 2
+    }
+    if !CheckResponse("+q5858", 128, "\x1bP0+r\x1b\\", 7) {
+        return 3
+    }
+
+    Fill(*payload[0], "$qm")
+    output[0] = 120
+    if FormatTerminalPaneXTGETTCAPResponse(*output[0], 128,
+            *payload[0]) != 0 || output[0] != 0 { return 4 }
+    Fill(*payload[0], "+q544e")
+    output[0] = 120
+    if FormatTerminalPaneXTGETTCAPResponse(*output[0], 8,
+            *payload[0]) != 0 || output[0] != 0 { return 5 }
+
+    InitTerminalPaneDCSBuffer(*buffer, 8)
+    if AppendTerminalPaneDCSCodepoint(*buffer, 113) != 1 ||
+       AppendTerminalPaneDCSCodepoint(*buffer, 0x00e9) != 2 ||
+       !Same(GetTerminalPaneDCSBufferText(*buffer), "q\xc3\xa9") ||
+       TerminalPaneDCSBufferIgnored(*buffer) != 0 { return 6 }
+    ResetTerminalPaneDCSBuffer(*buffer)
+    if !Same(GetTerminalPaneDCSBufferText(*buffer), "") ||
+       TerminalPaneDCSBufferIgnored(*buffer) != 0 { return 7 }
+    if AppendTerminalPaneDCSCodepoint(*buffer, 0x1f600) != 4 ||
+       AppendTerminalPaneDCSCodepoint(*buffer, 0x1f600) != 0 ||
+       TerminalPaneDCSBufferIgnored(*buffer) != 1 ||
+       GetTerminalPaneDCSBufferText(*buffer) != null { return 8 }
+    FreeTerminalPaneDCSBuffer(*buffer)
+    if buffer.text != null || buffer.length != 0 || buffer.capacity != 0 ||
+       buffer.ignored != 0 || buffer.max_bytes != 0 { return 9 }
+    return 0
+}
