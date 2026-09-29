@@ -1,0 +1,104 @@
+AppendByte :: (output: *u8, output_size: s32, used: *s32, value: u8) -> bool {
+    if output == null || used == null || used.* < 0 ||
+       used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendNumber :: (output: *u8, output_size: s32, used: *s32, value: s32) -> bool {
+    digits: [16]u8
+    next: s32 = 15
+    remaining: u32 = cast(u32)value
+    digits[next] = 0
+    next -= 1
+    while true {
+        digits[next] = cast(u8)(48 + remaining % 10)
+        remaining /= 10
+        if remaining == 0 { break }
+        next -= 1
+    }
+    while next < 15 {
+        if !AppendByte(output, output_size, used, digits[next]) { return false }
+        next += 1
+    }
+    return true
+}
+
+AppendText :: (output: *u8, output_size: s32, used: *s32,
+    value: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        if !AppendByte(output, output_size, used, value[index]) { return false }
+        index += 1
+    }
+    return true
+}
+
+ClearReport :: (output: *u8) -> s32 {
+    if output != null { output[0] = 0 }
+    return 0
+}
+
+#program_export
+FormatTerminalPaneDeviceStatusReport :: (output: *u8, output_size: s32,
+    private_mode: s32, request: s32, cursor_row: s32,
+    cursor_col: s32) -> s32 {
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    used: s32 = 0
+    if private_mode != 0 {
+        if request == 6 {
+            if !AppendByte(output, output_size, *used, 27) ||
+               !AppendByte(output, output_size, *used, 91) ||
+               !AppendByte(output, output_size, *used, 63) ||
+               !AppendNumber(output, output_size, *used, cursor_row + 1) ||
+               !AppendByte(output, output_size, *used, 59) ||
+               !AppendNumber(output, output_size, *used, cursor_col + 1) ||
+               !AppendByte(output, output_size, *used, 82) {
+                return ClearReport(output)
+            }
+            return used
+        }
+        literal: string = ""
+        if request == 15 {
+            literal = "\x1b[?10n"
+        } else if request == 25 {
+            literal = "\x1b[?20n"
+        } else if request == 26 {
+            literal = "\x1b[?27;1;0;0n"
+        } else if request == 55 {
+            literal = "\x1b[?53n"
+        } else if request == 56 {
+            literal = "\x1b[?57;0n"
+        } else if request == 75 {
+            literal = "\x1b[?70n"
+        } else if request == 85 {
+            literal = "\x1b[?83n"
+        }
+        if literal.count == 0 { return 0 }
+        if !AppendText(output, output_size, *used, literal) {
+            return ClearReport(output)
+        }
+        return used
+    }
+    if request == 5 {
+        if !AppendText(output, output_size, *used, "\x1b[0n") {
+            return ClearReport(output)
+        }
+        return used
+    }
+    if request == 6 {
+        if !AppendByte(output, output_size, *used, 27) ||
+           !AppendByte(output, output_size, *used, 91) ||
+           !AppendNumber(output, output_size, *used, cursor_row + 1) ||
+           !AppendByte(output, output_size, *used, 59) ||
+           !AppendNumber(output, output_size, *used, cursor_col + 1) ||
+           !AppendByte(output, output_size, *used, 82) {
+            return ClearReport(output)
+        }
+        return used
+    }
+    return 0
+}
