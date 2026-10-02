@@ -1,0 +1,292 @@
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Session :: #import "app_session";
+Input :: #import "app_input";
+Engine :: #import "terminal";
+Keys :: #import "terminal_pane_keys";
+Types :: #import "terminal_pane_profile_types";
+Clipboard :: #import "app_clipboard";
+Data :: #import "terminal_clipboard";
+Select :: #import "terminal_pane_selection";
+Host :: #import "terminal_clipboard_host";
+PaintHost :: #import "terminal_pane_widget_host";
+Frames :: #import "kryon/session";
+UI :: #import "kryon/tree_input";
+Geometry :: #import "kryon/geometry";
+Text :: #import "std/byte_text_linux";
+#if #defined(PLAN9) {
+    Transport :: #import "terminal_pty_plan9";
+} else {
+    Transport :: #import "terminal_pty_linux";
+}
+#scope_file
+libc :: #system_library "c";
+#if #defined(PLAN9) {
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+    Shell :: () -> string { return "/bin/rc" }
+} else {
+    Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)(milliseconds * 1000)) }
+    Shell :: () -> string { return Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("T9_TEST_SHELL"))) }
+}
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Failure :: (message: string) -> bool { print("%\n", message); return false }
+Application :: () -> *State.State {
+    app := State.Allocate()
+    if app != null {
+        Session.CopyText(app.config.shell[:], Shell())
+        Session.CopyText(app.config.working_directory[:], "/")
+        app.launch.geometry_cols = 20; app.launch.geometry_rows = 8
+        app.viewport = Geometry.Rectangle.{0.0, 0.0, 200.0, 80.0}
+        app.cell_w = 10; app.line_h = 10; app.visible_rows = 8
+    }
+    return app
+}
+Open :: (app: *State.State) -> bool {
+    command: string
+    #if #defined(PLAN9) {
+        command = "exec /bin/cat"
+    } else {
+        command = "stty raw -echo; exec /bin/cat"
+    }
+    return Sessions.Open(app, command)
+}
+Observe :: (terminal: *Engine.Terminal, expected: string) -> bool {
+    output: [512]u8
+    used: s32
+    for attempt: 0..99 {
+        count := Transport.TerminalPtyRead(terminal.fd, cast(*void)(*output[used]), 512 - used)
+        if count < 0 { return Failure("Input child exited") }
+        if count > 0 { used += count }
+        if cast(s64)used > expected.count { return Failure("Unexpected extra input bytes") }
+        if cast(s64)used == expected.count {
+            if TextView(output[0:used]) != expected { return Failure("Unexpected input protocol bytes") }
+            return true
+        }
+        Pause(10)
+    }
+    return Failure("Input child did not receive the expected bytes")
+}
+NoBytes :: (terminal: *Engine.Terminal) -> bool {
+    output: [64]u8
+    for attempt: 0..4 {
+        Pause(10)
+        if Transport.TerminalPtyRead(terminal.fd, cast(*void)(*output[0]), 64) != 0 { return false }
+    }
+    return true
+}
+Device :: () -> Input.Frame {
+    frame: Input.Frame
+    frame.focused = true; frame.x = 75.0; frame.y = 35.0; frame.now = 1.0
+    return frame
+}
+SendKey :: (app: *State.State, key: s32, mods: s32 = 0) -> Input.Result {
+    keys: [1]s32 = .{key}
+    frame := Device(); frame.keyboard.keys = keys[:]; frame.keyboard.mods = mods
+    return Input.Handle(app, frame, false)
+}
+Feed :: (terminal: *Engine.Terminal, value: string) { Engine.terminal_feed(terminal, cast(*void)Bytes(value), cast(s32)value.count) }
+
+CheckKeyboard :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    if !Open(app) { return Failure("Open input transport") }
+    terminal := *app.sessions[0].terminal
+    Pause(30)
+    keys: [1]s32 = .{#char "A"}
+    typed: [1]u32 = .{#char "a"}
+    frame := Device()
+    frame.keyboard.keys = keys[:]; frame.keyboard.codepoints = typed[:]; frame.keyboard.mods = Keys.TERMINAL_PANE_MOD_CTRL
+    if Input.Handle(app, frame, false).wrote != 1 || !Observe(terminal, "\x01") { return Failure("Control key and typed-text deduplication") }
+    frame.keyboard.keys = keys[0:0]; frame.keyboard.codepoints = typed[0:0]; frame.keyboard.down = keys[:]
+    if Input.Handle(app, frame, false).wrote != 0 || !NoBytes(terminal) { return Failure("Held Control key flooded input") }
+    frame.keyboard.repeated = keys[:]
+    if Input.Handle(app, frame, false).wrote != 1 || !Observe(terminal, "\x01") { return Failure("Repeated Control key") }
+    unicode: [2]u32 = .{0x4e00, #char "x"}
+    frame = Device(); frame.keyboard.codepoints = unicode[:]
+    if Input.Handle(app, frame, false).wrote != 4 || !Observe(terminal, "一x") { return Failure("Unicode keyboard input") }
+    app.config.backspace_binding = Types.TERMINAL_PANE_KEY_BINDING_CONTROL_H
+    app.sessions[0].scroll_offset = 3
+    if SendKey(app, UI.KeyBackspace).wrote != 1 || app.sessions[0].scroll_offset != 0 || !Observe(terminal, "\x08") {
+        return Failure("Configured Backspace binding and scroll reset")
+    }
+    app.config.delete_binding = Types.TERMINAL_PANE_KEY_BINDING_ASCII_DELETE
+    if SendKey(app, UI.KeyDelete).wrote != 1 || !Observe(terminal, "\x7f") { return Failure("Configured Delete binding") }
+    Host.HostClipboardReset("insert paste")
+    SendKey(app, UI.KeyInsert, Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_SHIFT)
+    if !Observe(terminal, "insert paste") { return Failure("Shift-Insert paste takes priority over Control-Insert copy") }
+    terminal.focus_reporting = 1
+    frame = Device(); frame.focused = false
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[O") { return Failure("Terminal focus loss") }
+    frame.focused = true
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[I") { return Failure("Terminal focus gain") }
+    terminal.focus_reporting = 0
+    app.search_visible = true
+    if SendKey(app, UI.KeyEnter).wrote != 0 || !NoBytes(terminal) { return Failure("Dialog keyboard ownership") }
+    app.search_visible = false
+    keys[0] = #char "F"; typed[0] = #char "f"
+    frame = Device(); frame.keyboard.keys = keys[:]; frame.keyboard.codepoints = typed[:]
+    frame.keyboard.mods = Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_SHIFT
+    if Input.Handle(app, frame, false).wrote != 0 || !app.search_visible || !NoBytes(terminal) {
+        return Failure("Search shortcut leaked into the terminal")
+    }
+    app.search_visible = false
+    keys[0] = #char "T"; typed[0] = #char "t"
+    if Input.Handle(app, frame, false).wrote != 0 || app.session_count != 2 || app.active != 1 { return Failure("New-tab shortcut") }
+    frame.keyboard.keys = keys[0:0]; frame.keyboard.codepoints = typed[0:0]; frame.keyboard.repeated = keys[:]
+    if Input.Handle(app, frame, false).wrote != 0 || app.session_count != 2 || !NoBytes(terminal) {
+        return Failure("Held new-tab shortcut repeated or leaked")
+    }
+    return true
+}
+CheckPointerProtocols :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    if !Open(app) { return false }
+    terminal := *app.sessions[0].terminal
+    Pause(30)
+    frame := Device(); frame.x = 15.0; frame.y = 15.0
+    terminal.mouse_mode = 1000; terminal.mouse_sgr = 1
+    frame.left = .{true, true, true}
+    Input.Handle(app, frame, false)
+    if app.mouse_report_button != 3 || !Observe(terminal, "\x1b[<0;2;2M\x1b[<0;2;2m") { return Failure("Both edges of a quick terminal click") }
+    frame.left = Input.ButtonFrame.{}; frame.middle = .{true, true, true}
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[<1;2;2M\x1b[<1;2;2m") { return Failure("Middle-button protocol") }
+    frame.middle = Input.ButtonFrame.{}; frame.right = .{true, true, true}
+    Input.Handle(app, frame, false)
+    if app.context_menu_open || !Observe(terminal, "\x1b[<2;2;2M\x1b[<2;2;2m") { return Failure("Right-button protocol owns the menu gesture") }
+    frame.right = Input.ButtonFrame.{}; frame.wheel = 1.0
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[<64;2;2M") { return Failure("Wheel mouse protocol") }
+    terminal.mouse_mode = 1003; terminal.mouse_pixels = 1
+    frame.wheel = 0.0; frame.x = 16.0; frame.y = 17.0
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[<35;17;18M") { return Failure("Pixel motion protocol") }
+    terminal.mouse_mode = 0; terminal.mouse_pixels = 0
+    terminal.alternate_screen = 1; terminal.alternate_scroll = 1
+    frame.wheel = 1.0
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "\x1b[A") { return Failure("Alternate-screen wheel input") }
+    terminal.alternate_screen = 0; terminal.alternate_scroll = 0
+    Host.HostClipboardReset("system paste")
+    Data.SetPrimarySelectionFromText(Bytes(""))
+    frame.wheel = 0.0; frame.middle = .{true, true, true}
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "system paste") { return Failure("Middle-button clipboard fallback") }
+    Data.SetPrimarySelectionFromText(Bytes("primary paste"))
+    Input.Handle(app, frame, false)
+    if !Observe(terminal, "primary paste") { return Failure("Middle-button primary preference") }
+    frame.middle = Input.ButtonFrame.{}; frame.right.released = true
+    Input.Handle(app, frame, false)
+    if !app.context_menu_open || app.context_menu_x != 16 || app.context_menu_y != 17 || !NoBytes(terminal) {
+        return Failure("Application context-menu gesture")
+    }
+    return true
+}
+CheckSelectionAndScroll :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    app.session_count = 1; app.active = 0
+    terminal := *app.sessions[0].terminal
+    Engine.terminal_resize(terminal, 20, 8)
+    Feed(terminal, "row0\r\nrow1\r\nrow2\r\nalpha beta gamma")
+    frame := Device(); frame.left = .{true, true, true}
+    Input.Handle(app, frame, false)
+    frame.now = 1.2
+    Input.Handle(app, frame, false)
+    output: [128]u8
+    if app.selection.dragging != 0 || Clipboard.CollectSelection(app, output[:]) == 0 || Text.TextFromCString(*output[0]) != "beta" {
+        return Failure("Double-click word selection")
+    }
+    frame.now = 1.3
+    Input.Handle(app, frame, false)
+    if Clipboard.CollectSelection(app, output[:]) == 0 || Text.TextFromCString(*output[0]) != "alpha beta gamma" {
+        return Failure("Triple-click line selection")
+    }
+    app.selection.active = 0
+    for index: 0..29 { Feed(terminal, "\r\nmore") }
+    frame = Device(); frame.wheel = 1000000.0
+    Input.Handle(app, frame, false)
+    maximum := Engine.terminal_visible_line_count(terminal) - app.visible_rows
+    if app.sessions[0].scroll_offset != maximum { return Failure("Wheel scroll bounds") }
+    frame.wheel = -1000000.0
+    Input.Handle(app, frame, false)
+    if app.sessions[0].scroll_offset != 0 { return Failure("Wheel scroll lower bound") }
+    frame.wheel = 0.1
+    Input.Handle(app, frame, false)
+    if app.sessions[0].scroll_offset != 0 { return Failure("Fractional wheel scroll") }
+    SendKey(app, UI.KeyPageUp, Keys.TERMINAL_PANE_MOD_SHIFT)
+    if app.sessions[0].scroll_offset != app.visible_rows { return Failure("Shift-PageUp scroll") }
+    SendKey(app, UI.KeyPageDown, Keys.TERMINAL_PANE_MOD_SHIFT)
+    if app.sessions[0].scroll_offset != 0 { return Failure("Shift-PageDown scroll") }
+    frame = Device(); frame.left.down = true; frame.y = -30.0
+    Select.TerminalPaneSelectionBeginChar(*app.selection, 10, 0)
+    Input.Handle(app, frame, false)
+    if app.sessions[0].scroll_offset <= 0 || app.sessions[0].scroll_offset > maximum || app.selection.end_row < 0 {
+        return Failure("Selection edge scroll")
+    }
+    app.selection.dragging = 0
+    Feed(terminal, "\x1b[H\x1b]8;;https://example.org\x07link\x1b]8;;\x07")
+    app.first_visible_row = Engine.terminal_visible_line_count(terminal) - terminal.rows
+    frame = Device(); frame.x = 5.0; frame.y = 5.0; frame.left.pressed = true
+    frame.keyboard.mods = Keys.TERMINAL_PANE_MOD_CTRL
+    if Input.Handle(app, frame, false).hyperlink != "https://example.org" || app.selection.active != 0 {
+        return Failure("Control-click hyperlink routing")
+    }
+    app.config.auto_hide_mouse = 1
+    frame = Device()
+    Input.Handle(app, frame, false)
+    typed: [1]u32 = .{#char "x"}; frame.keyboard.codepoints = typed[:]
+    result := Input.Handle(app, frame, false)
+    if !result.cursor_hidden || !result.cursor_changed { return Failure("Typing hides the pointer") }
+    frame.keyboard.codepoints = typed[0:0]; frame.x += 1.0
+    result = Input.Handle(app, frame, false)
+    if result.cursor_hidden || !result.cursor_changed { return Failure("Moving reveals the pointer") }
+    app.cell_w = 0
+    Input.Handle(app, frame, false)
+    return true
+}
+CheckCapture :: () -> bool {
+    session := Frames.SessionOpen()
+    if !Frames.SessionValid(session) { return false }
+    defer Frames.SessionClose(session)
+    UI.KeyboardSend(session, #char "A")
+    UI.KeyboardModifiersSend(session, UI.KeyModifierControl | UI.KeyModifierAlt)
+    UI.TypedCodepointSend(session, 0x4e00)
+    UI.TreePointerUpdate(session, UI.PointerFrame.{12.0, 13.0, true, true, false})
+    UI.TreeSecondaryPointerUpdate(session, UI.SecondaryPointerFrame.{false, false, true})
+    UI.PointerWheelSend(session, 12.0, 13.0, 2.0)
+    keys: [1]s32; typed: [32]u32
+    frame := Input.Capture(session, keys[:], typed[:], Geometry.Rectangle.{0.0, 0.0, 100.0, 100.0}, .{true, true, false}, 1.0, true)
+    if frame.keyboard.keys.count != 1 || frame.keyboard.keys[0] != #char "A" ||
+        frame.keyboard.mods != (Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_ALT) ||
+        frame.keyboard.codepoints.count != 1 || frame.keyboard.codepoints[0] != 0x4e00 ||
+        !frame.left.pressed || !frame.middle.pressed || !frame.right.released || frame.x != 12.0 || frame.wheel != 2.0 {
+        return Failure("Current Kryon input capture")
+    }
+    frame = Input.Capture(session, keys[:], typed[:], Geometry.Rectangle.{0.0, 0.0, 100.0, 100.0}, Input.ButtonFrame.{}, 2.0, true)
+    if frame.keyboard.keys.count != 0 || frame.keyboard.codepoints.count != 0 || frame.wheel != 0.0 {
+        return Failure("Captured input survived into another frame")
+    }
+    return true
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    if !CheckKeyboard() { return 1 }
+    if !CheckPointerProtocols() { return 2 }
+    if !CheckSelectionAndScroll() { return 3 }
+    if !CheckCapture() { return 4 }
+    return 0
+}

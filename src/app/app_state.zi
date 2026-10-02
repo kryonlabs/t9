@@ -6,6 +6,7 @@ Colors :: #import "app_palette";
 Sessions :: #import "app_session";
 Selection :: #import "terminal_pane_selection";
 Mouse :: #import "terminal_pane_mouse";
+Keys :: #import "terminal_pane_keys";
 
 #scope_file
 libc :: #system_library "c";
@@ -58,10 +59,7 @@ State :: struct {
     context_menu_open: bool
     context_menu_x: s32
     context_menu_y: s32
-    paste_shortcut_down: bool
-    copy_shortcut_down: bool
-    new_tab_shortcut_down: bool
-    close_tab_shortcut_down: bool
+    keyboard_state: Keys.TerminalPaneInputState
     mouse_hidden: bool
     last_mouse_x: s32
     last_mouse_y: s32

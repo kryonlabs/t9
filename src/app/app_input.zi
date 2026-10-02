@@ -1,0 +1,295 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Session :: #import "app_session";
+Selection :: #import "app_selection";
+Clipboard :: #import "app_clipboard";
+Commands :: #import "app_commands";
+Engine :: #import "terminal";
+Keys :: #import "terminal_pane_keys";
+Mouse :: #import "terminal_pane_mouse";
+Select :: #import "terminal_pane_selection";
+Types :: #import "terminal_pane_profile_types";
+Keyboard :: #import "terminal_keyboard";
+UI :: #import "kryon/tree_input";
+Frames :: #import "kryon/session";
+Geometry :: #import "kryon/geometry";
+Text :: #import "std/byte_text_linux";
+
+#scope_export
+ButtonFrame :: struct { down: bool; pressed: bool; released: bool; }
+// Hosts gather device facts. Terminal owns their application/protocol routing.
+Frame :: struct {
+    keyboard: Keys.KeyboardFrame
+    x: float32
+    y: float32
+    left: ButtonFrame
+    middle: ButtonFrame
+    right: ButtonFrame
+    wheel: float32
+    now: float64
+    focused: bool
+}
+Result :: struct {
+    wrote: s32
+    hyperlink: string
+    cursor_changed: bool
+    cursor_hidden: bool
+}
+ModalActive :: (app: *State.State) -> bool {
+    return app != null && (app.about_visible || app.rename_index >= 0 ||
+        app.search_visible || app.profile_prompt != 0 || app.context_menu_open || app.top_menu_index >= 0)
+}
+// Capture only when the application owns keyboard input; dialogs and menus
+// consume the session's events themselves while they are open.
+Capture :: (session: Frames.Session, keys: []s32, codepoints: []u32,
+    bounds: Geometry.Rectangle, middle: ButtonFrame, now: float64, focused: bool) -> Frame {
+    result: Frame
+    result.keyboard = Keyboard.CaptureKeyboardFrame(session, keys, codepoints)
+    pointer := UI.PointerSample(session)
+    secondary := UI.SecondaryPointerSample(session)
+    result.x = pointer.x; result.y = pointer.y
+    result.left = .{pointer.down, pointer.pressed, pointer.released}
+    result.middle = middle
+    result.right = .{secondary.down, secondary.pressed, secondary.released}
+    result.wheel = UI.PointerWheelTake(session, bounds)
+    result.now = now; result.focused = focused
+    return result
+}
+
+#scope_file
+Clamp :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+Inside :: (app: *State.State, frame: Frame) -> bool {
+    return app != null && app.cell_w > 0 && app.line_h > 0 && app.visible_rows > 0 &&
+        app.viewport.width > 0.0 && app.viewport.height > 0.0 &&
+        frame.x >= app.viewport.x && frame.y >= app.viewport.y &&
+        frame.x < app.viewport.x + app.viewport.width && frame.y < app.viewport.y + app.viewport.height
+}
+MaximumScroll :: (app: *State.State, session: *Session.Session) -> s32 {
+    maximum := Engine.terminal_visible_line_count(*session.terminal) - app.visible_rows
+    if maximum < 0 { maximum = 0 }
+    return maximum
+}
+ScrollBy :: (app: *State.State, session: *Session.Session, delta: s64) {
+    value := cast(s64)session.scroll_offset + delta
+    maximum := MaximumScroll(app, session)
+    if value < 0 { value = 0 }
+    if value > cast(s64)maximum { value = cast(s64)maximum }
+    session.scroll_offset = cast(s32)value
+}
+Contains :: (keys: []s32, key: s32) -> bool {
+    for index: cast(s64)0..keys.count - 1 { if keys[index] == key { return true } }
+    return false
+}
+WheelSteps :: (wheel: float32) -> s32 {
+    if wheel == 0.0 { return 0 }
+    value := wheel
+    if value < 0.0 { value = -value }
+    // Bound a device's burst before converting it to an integer or looping.
+    if value > 120.0 { value = 120.0 }
+    steps := cast(s32)(value + 0.5)
+    if steps < 1 { steps = 1 }
+    return steps
+}
+WheelScrollDelta :: (wheel: float32) -> s64 {
+    if wheel > 120.0 { wheel = 120.0 }
+    if wheel < -120.0 { wheel = -120.0 }
+    return cast(s64)(wheel * 3.0)
+}
+AutoHide :: (app: *State.State, frame: Frame) {
+    x := cast(s32)frame.x; y := cast(s32)frame.y
+    pointer_event := frame.left.pressed || frame.middle.pressed || frame.right.pressed
+    if app.config.auto_hide_mouse == 0 || !frame.focused || ModalActive(app) {
+        app.mouse_hidden = false
+    } else if x != app.last_mouse_x || y != app.last_mouse_y || pointer_event {
+        app.mouse_hidden = false
+    } else if Inside(app, frame) && (frame.keyboard.keys.count > 0 ||
+        frame.keyboard.repeated.count > 0 || frame.keyboard.codepoints.count > 0) {
+        app.mouse_hidden = true
+    }
+    app.last_mouse_x = x; app.last_mouse_y = y
+}
+RememberMouse :: (app: *State.State, col: s32, row: s32, x: s32, y: s32) {
+    app.mouse_report_col = col; app.mouse_report_row = row
+    app.mouse_report_x = x; app.mouse_report_y = y
+}
+SendButton :: (app: *State.State, terminal: *Engine.Terminal, edge: ButtonFrame,
+    button: s32, col: s32, row: s32, x: s32, y: s32, mods: s32) -> bool {
+    consumed: bool
+    if edge.pressed {
+        app.mouse_report_button = button
+        RememberMouse(app, col, row, x, y)
+        consumed = Engine.terminal_send_mouse_pixels(terminal, button, col, row, x, y, 1, 0, mods) > 0
+    }
+    // A quick click carries both edges in one frame; neither may be lost.
+    if edge.released {
+        if Engine.terminal_send_mouse_pixels(terminal, button, col, row, x, y, 0, 0, mods) > 0 { consumed = true }
+        if app.mouse_report_button == button { app.mouse_report_button = Mouse.TERMINAL_PANE_MOUSE_RELEASE }
+        RememberMouse(app, col, row, x, y)
+    }
+    return consumed
+}
+TerminalMouse :: (app: *State.State, session: *Session.Session, frame: Frame) -> bool {
+    terminal := *session.terminal
+    if terminal.mouse_mode == 0 || (frame.keyboard.mods & Keys.TERMINAL_PANE_MOD_SHIFT) != 0 || !Inside(app, frame) {
+        return false
+    }
+    col := Clamp(cast(s32)((frame.x - app.viewport.x) / cast(float32)app.cell_w), 0, terminal.cols - 1)
+    viewport_row := cast(s32)((frame.y - app.viewport.y) / cast(float32)app.line_h)
+    if viewport_row >= app.visible_rows { return false }
+    row := Clamp(viewport_row, 0, terminal.rows - 1)
+    x := Clamp(cast(s32)(frame.x - app.viewport.x), 0, cast(s32)app.viewport.width - 1)
+    y := Clamp(cast(s32)(frame.y - app.viewport.y), 0, cast(s32)app.viewport.height - 1)
+    mods := frame.keyboard.mods
+    consumed: bool
+    button: s32 = ifx frame.wheel > 0.0 then Mouse.TERMINAL_PANE_MOUSE_WHEEL_UP else Mouse.TERMINAL_PANE_MOUSE_WHEEL_DOWN
+    for step: 0..WheelSteps(frame.wheel) - 1 {
+        if Engine.terminal_send_mouse_pixels(terminal, button, col, row, x, y, 1, 0, mods) > 0 { consumed = true }
+    }
+    if SendButton(app, terminal, frame.left, Mouse.TERMINAL_PANE_MOUSE_LEFT, col, row, x, y, mods) { consumed = true }
+    if SendButton(app, terminal, frame.middle, Mouse.TERMINAL_PANE_MOUSE_MIDDLE, col, row, x, y, mods) { consumed = true }
+    if SendButton(app, terminal, frame.right, Mouse.TERMINAL_PANE_MOUSE_RIGHT, col, row, x, y, mods) { consumed = true }
+    if (terminal.mouse_mode == 1002 && app.mouse_report_button != Mouse.TERMINAL_PANE_MOUSE_RELEASE) || terminal.mouse_mode == 1003 {
+        moved := col != app.mouse_report_col || row != app.mouse_report_row ||
+            (terminal.mouse_pixels != 0 && (x != app.mouse_report_x || y != app.mouse_report_y))
+        if moved {
+            if Engine.terminal_send_mouse_pixels(terminal, app.mouse_report_button, col, row, x, y, 1, 1, mods) > 0 { consumed = true }
+            RememberMouse(app, col, row, x, y)
+        }
+    }
+    return consumed
+}
+HandleSelection :: (app: *State.State, session: *Session.Session, frame: Frame) {
+    if app.cell_w <= 0 || app.line_h <= 0 || app.visible_rows <= 0 || app.viewport.width <= 0.0 || app.viewport.height <= 0.0 { return }
+    row: s32 = -1; col: s32
+    if Inside(app, frame) {
+        viewport_row := cast(s32)((frame.y - app.viewport.y) / cast(float32)app.line_h)
+        if viewport_row < app.visible_rows { row = app.first_visible_row + viewport_row }
+        col = Clamp(cast(s32)((frame.x - app.viewport.x) / cast(float32)app.cell_w), 0, session.terminal.cols - 1)
+    }
+    if row >= 0 && frame.left.pressed {
+        elapsed := frame.now - app.selection_click_time
+        if row == app.selection_click_row && col == app.selection_click_col && elapsed >= 0.0 && elapsed < 0.45 {
+            app.selection_click_count = Clamp(app.selection_click_count + 1, 1, 3)
+        } else { app.selection_click_count = 1 }
+        app.selection_click_time = frame.now; app.selection_click_row = row; app.selection_click_col = col
+        if app.selection_click_count >= 3 { Selection.SelectLine(*app.selection, *session.terminal, row) }
+        else if app.selection_click_count == 2 { Selection.SelectWord(*app.selection, *session.terminal, row, col) }
+        else { Select.TerminalPaneSelectionBeginChar(*app.selection, row, col) }
+    }
+    if app.selection.dragging != 0 && frame.left.down {
+        delta := Select.TerminalPaneSelectionEdgeScrollDelta(frame.y, app.viewport.y, app.viewport.height, 24.0 * app.scale)
+        if row < 0 || delta != 0 {
+            if delta != 0 {
+                ScrollBy(app, session, cast(s64)delta)
+                app.first_visible_row = Select.TerminalPaneSelectionFirstVisibleRow(
+                    Engine.terminal_visible_line_count(*session.terminal), app.visible_rows, session.scroll_offset)
+            }
+            row = Select.TerminalPaneSelectionEdgeScrollRow(app.first_visible_row, app.visible_rows, delta)
+            if row < 0 { row = ifx frame.y < app.viewport.y then app.first_visible_row else app.first_visible_row + app.visible_rows - 1 }
+            col = Clamp(cast(s32)((frame.x - app.viewport.x) / cast(float32)app.cell_w), 0, session.terminal.cols - 1)
+        }
+        if row >= 0 { Selection.UpdateEnd(*app.selection, *session.terminal, row, col) }
+    }
+    if app.selection.dragging != 0 && frame.left.released {
+        app.selection.dragging = 0
+        Clipboard.UpdatePrimary(app)
+    }
+}
+Sink :: struct { app: *State.State; keys: []s32; wrote: s32; persist: bool; }
+Write :: (userdata: *void, value: *u8, length: s32) -> s32 {
+    sink := cast(*Sink)userdata
+    session := Sessions.Active(sink.app)
+    if session == null || value == null || length <= 0 { return 0 }
+    replacement: [1]u8
+    if length == 1 && value[0] == 127 && sink.app.config.backspace_binding == Types.TERMINAL_PANE_KEY_BINDING_CONTROL_H {
+        replacement[0] = 8; value = *replacement[0]
+    } else if length == 4 && value[0] == 27 && value[1] == #char "[" && value[2] == #char "3" && value[3] == #char "~" &&
+        sink.app.config.delete_binding == Types.TERMINAL_PANE_KEY_BINDING_ASCII_DELETE {
+        replacement[0] = 127; value = *replacement[0]; length = 1
+    }
+    count := Engine.terminal_write(*session.terminal, cast(*void)value, length)
+    if count > 0 { sink.wrote += count }
+    return count
+}
+FilterKey :: (userdata: *void, key: s32, mods: s32) -> s32 {
+    sink := cast(*Sink)userdata
+    if Commands.HandleShortcut(sink.app, key, mods, sink.persist, Contains(sink.keys, key)) { return 1 }
+    session := Sessions.Active(sink.app)
+    if session != null && (mods & Keys.TERMINAL_PANE_MOD_SHIFT) != 0 {
+        if key == UI.KeyPageUp { ScrollBy(sink.app, session, cast(s64)sink.app.visible_rows); return 1 }
+        if key == UI.KeyPageDown { ScrollBy(sink.app, session, -cast(s64)sink.app.visible_rows); return 1 }
+    }
+    return 0
+}
+PumpKeyboard :: (app: *State.State, frame: Keys.KeyboardFrame, persist: bool) -> s32 {
+    session := Sessions.Active(app)
+    if session == null { return 0 }
+    sink: Sink
+    sink.app = app; sink.keys = frame.keys; sink.persist = persist
+    input: Keys.TerminalPaneInput
+    input.mode = .{session.terminal.application_cursor_keys, session.terminal.application_keypad, session.terminal.modify_other_keys}
+    input.write_text = Write; input.userdata = cast(*void)(*sink); input.state = *app.keyboard_state
+    Keys.PumpTerminalPaneKeyboardInputFiltered(input, frame, FilterKey, cast(*void)(*sink))
+    session = Sessions.Active(app)
+    if session != null && sink.wrote > 0 && (Contains(frame.keys, UI.KeyEnter) || Contains(frame.keys, UI.KeyBackspace) ||
+        Contains(frame.keys, UI.KeyTab) || Contains(frame.repeated, UI.KeyEnter) || Contains(frame.repeated, UI.KeyBackspace) ||
+        Contains(frame.repeated, UI.KeyTab)) { session.scroll_offset = 0 }
+    return sink.wrote
+}
+
+#scope_export
+Handle :: (app: *State.State, frame: Frame, persist: bool = true) -> Result {
+    result: Result
+    if app == null { return result }
+    hidden := app.mouse_hidden
+    AutoHide(app, frame)
+    result.cursor_hidden = app.mouse_hidden; result.cursor_changed = hidden != app.mouse_hidden
+    if frame.focused != app.window_focused {
+        app.window_focused = frame.focused
+        session := Sessions.Active(app)
+        if session != null { Engine.terminal_send_focus(*session.terminal, ifx frame.focused then 1 else 0) }
+    }
+    session := Sessions.Active(app)
+    if session == null || !frame.focused || ModalActive(app) {
+        app.keyboard_state = Keys.TerminalPaneInputState.{}
+        return result
+    }
+    if TerminalMouse(app, session, frame) {
+        app.selection.active = 0; session.scroll_offset = 0; app.context_menu_open = false
+    } else {
+        if Inside(app, frame) && frame.wheel != 0.0 {
+            consumed: bool
+            direction: s32 = ifx frame.wheel > 0.0 then 1 else -1
+            for step: 0..WheelSteps(frame.wheel) - 1 {
+                if Engine.terminal_send_alternate_scroll(*session.terminal, direction, frame.keyboard.mods) > 0 { consumed = true }
+            }
+            if consumed { session.scroll_offset = 0 }
+            else { ScrollBy(app, session, WheelScrollDelta(frame.wheel)) }
+        }
+        if session.terminal.mouse_mode == 0 && Inside(app, frame) && frame.left.pressed &&
+            (frame.keyboard.mods & Keys.TERMINAL_PANE_MOD_CTRL) != 0 {
+            col := Clamp(cast(s32)((frame.x - app.viewport.x) / cast(float32)app.cell_w), 0, session.terminal.cols - 1)
+            viewport_row := cast(s32)((frame.y - app.viewport.y) / cast(float32)app.line_h)
+            cell: *Engine.Cell
+            if viewport_row < app.visible_rows {
+                cell = Engine.terminal_visible_cell(*session.terminal, col, app.first_visible_row + viewport_row)
+            }
+            if cell != null && cell.hyperlink > 0 { result.hyperlink = Text.TextFromCString(Engine.terminal_hyperlink(*session.terminal, cell.hyperlink)) }
+        }
+        if result.hyperlink != "" { app.selection.active = 0; session.scroll_offset = 0 }
+        else {
+            if session.terminal.mouse_mode == 0 && Inside(app, frame) && frame.middle.pressed { Clipboard.PastePreferred(app, session) }
+            HandleSelection(app, session, frame)
+        }
+        if Inside(app, frame) && frame.right.released {
+            app.context_menu_open = true; app.context_menu_x = cast(s32)frame.x; app.context_menu_y = cast(s32)frame.y
+        }
+    }
+    if !app.context_menu_open { result.wrote = PumpKeyboard(app, frame.keyboard, persist) }
+    return result
+}

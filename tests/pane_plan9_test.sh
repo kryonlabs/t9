@@ -13,6 +13,7 @@ case "$suite" in
     session) module=terminal_session_test ;;
     launch) module=terminal_launch_options_test ;;
     application) module=terminal_application_test ;;
+    input) module=terminal_input_test ;;
     *) echo "Unknown Terminal suite: $suite" >&2; exit 2 ;;
 esac
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY

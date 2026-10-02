@@ -10,8 +10,8 @@ clipboard storage/protocol handling, both platform process transports, and
 the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
 tab lifecycle, selection/clipboard routing, palette and profile changes,
-commands, search dialogs and the context menu.
-There are five legacy `.kry`
+commands, search dialogs, the context menu and application input routing.
+There are four legacy `.kry`
 inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -27,7 +27,7 @@ original terminal sources and local compatibility fixes; those older C
 implementations are not restored alongside the maintained ports.
 
 `make pane-ziran-test` runs the engine, configuration, sessions, launch options,
-application state and tab lifecycle,
+application state, tab lifecycle and input routing,
 widget, theme/profile, clipboard, selection, keyboard, OSC,
 pane sizing, and Linux PTY suites without the legacy application. Keyboard protocol and current
 Kryon session input are
@@ -64,7 +64,7 @@ complete application clipboard integration remain whole-application gates.
 bits explicitly. Application shortcuts consume their physical and typed
 input before terminal writes. Input frames distinguish fresh/repeated events
 from held keys so Control input repeats without flooding held snapshots.
-The remaining legacy application must migrate to this explicit frame API;
+The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
@@ -248,9 +248,29 @@ so an overlay cannot leave text queued for the terminal.
 C/C++ and native Plan 9 8c/8l execution, including actual retained-tree clicks
 on dialog and menu actions, disabled rows and outside dismissal. The three
 corresponding `.kry` implementations are removed. These checks do not yet
-establish the graphical application, its application input boundary, or Rill.
+establish the graphical application or Rill.
 
-The next source boundary is application input, the menu bar and the graphical
+## Application input routing
+
+`app_input.zi` replaces the legacy global-polling input module with borrowed
+device frames. It routes app shortcuts before terminal bytes, honors configured
+Backspace/Delete bindings, emits both edges of a quick mouse click, and retains
+mouse reporting, pixel motion, alternate-screen wheel keys, primary-selection
+paste, word/line selection, edge scrolling, hyperlinks and focus reports.
+Keyboard state belongs to the application. Repeated app shortcuts are consumed
+without repeating their action, while repeated terminal Control keys still write.
+The old held-shortcut flags are removed from the typed app state.
+
+`make input-test input-plan9-test` executes source and saved-IR C/C++ and
+native Plan 9 8c/8l behavior. It checks actual bytes through controlled child
+processes, Unicode, held/repeated keys, selection, scroll limits, current Kryon
+input capture, dialog ownership and pointer visibility decisions. Hosts supply
+middle-button edges, time and focus and apply the returned hyperlink/cursor
+decisions. Complete hosts must also distinguish fresh and repeated device keys;
+the protocol fixture verifies that distinction at the explicit frame boundary.
+These module checks do not certify the remaining graphical host or live OS input.
+
+The next source boundary is the menu bar and the graphical
 view. Migrate their consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
@@ -300,6 +320,7 @@ those whole-application gates pass.
 - `src/app/app_search.zi`
 - `src/app/app_dialog.zi`
 - `src/app/app_context_menu.zi`
+- `src/app/app_input.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

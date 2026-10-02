@@ -97,7 +97,7 @@ Execute :: (app: *State.State, command: Command, persist: bool = true) -> bool {
     return true
 }
 
-HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = true) -> bool {
+HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = true, fresh: bool = true) -> bool {
     if Sessions.Active(app) == null { return false }
     if key >= #char "a" && key <= #char "z" { key -= 32 }
     control := (modifiers & Keys.TERMINAL_PANE_MOD_CTRL) != 0
@@ -105,7 +105,10 @@ HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = 
     alt := (modifiers & Keys.TERMINAL_PANE_MOD_ALT) != 0
     if alt {
         for index: cast(s32)0..app.session_count - 1 {
-            if key == #char "1" + index || key == 321 + index { Sessions.SetActive(app, index); return true }
+            if key == #char "1" + index || key == 321 + index {
+                if fresh { Sessions.SetActive(app, index) }
+                return true
+            }
         }
     }
     command := Command.None
@@ -116,8 +119,8 @@ HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = 
     else if control && (key == #char "=" || key == 334) { command = Command.FontIncrease }
     else if control && (key == #char "-" || key == 333) { command = Command.FontDecrease }
     else if control && (key == #char "0" || key == 320) { command = Command.FontReset }
-    else if control && key == 260 { command = Command.Copy }
     else if shift && key == 260 { command = Command.Paste }
+    else if control && key == 260 { command = Command.Copy }
     else if control && shift && key == #char "C" { command = Command.Copy }
     else if control && shift && key == #char "V" { command = Command.Paste }
     else if control && shift && key == #char "A" { command = Command.SelectAll }
@@ -126,5 +129,6 @@ HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = 
     else if control && shift && key == #char "B" { command = Command.FindPrevious }
     else if control && shift && key == #char "Q" { command = Command.Quit }
     if command == Command.None { return false }
+    if !fresh { return true }
     return Execute(app, command, persist)
 }
