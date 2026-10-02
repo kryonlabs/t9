@@ -135,6 +135,11 @@ Cases :: () -> s32 {
     Reset()
     if WriteClipboardTextPaste(*clipboard, Bytes("a\t\r\nb\a\x1b[0m"), 0, WriteInput, null) != 1 ||
        Captured() != "a\t\r\nb" { return 24 }
+    // A string view can end before its backing storage, without a terminator.
+    borrowed: [8]u8 = .{#char "x", 27, #char "[", #char "0", #char "m", #char "y", #char "z", #char "!"}
+    Reset(); write_limit = 1
+    if PasteText(*clipboard, TextView(borrowed[0:6]), 1, WriteInput, null) != 1 ||
+       Captured() != "\x1b[200~xy\x1b[201~" { return 31 }
     Reset()
     if WriteClipboardTextPaste(*clipboard, Bytes("x\xc2\x9b31my\xc2\x9d2;title\xc2\x9cz"), 0, WriteInput, null) != 1 ||
        Captured() != "xyz" { return 28 }

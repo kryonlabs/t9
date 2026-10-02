@@ -5,10 +5,12 @@ migration input only: each one is removed after its behavior has a current
 Ziran implementation and focused hosted/Plan 9 checks. No compatibility
 compiler path, dual product module, or `.kry` restore is part of the target.
 
-Current status: 47 maintained Ziran sources include 22 pane modules,
+Current status: maintained Ziran sources include the pane modules,
 clipboard storage/protocol handling, both platform process transports, and
 the full terminal engine and its typed state, application configuration,
-command-line options, sessions and their persistence. There are 14 legacy `.kry`
+command-line options, sessions and their persistence, plus application state,
+tab lifecycle, selection/clipboard routing, palette and profile changes.
+There are eight legacy `.kry`
 inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -24,6 +26,7 @@ original terminal sources and local compatibility fixes; those older C
 implementations are not restored alongside the maintained ports.
 
 `make pane-ziran-test` runs the engine, configuration, sessions, launch options,
+application state and tab lifecycle,
 widget, theme/profile, clipboard, selection, keyboard, OSC,
 pane sizing, and Linux PTY suites without the legacy application. Keyboard protocol and current
 Kryon session input are
@@ -193,9 +196,39 @@ containing spaces and apostrophes through the actual platform shell. File
 fixtures stay inside disposable test-output directories. Native QEMU gates
 also cap the translation buffer at 32 MB.
 
-The next source boundary is application state and its consumers. Migrate
-them to `Terminal`, `Session`, launch options and current pane/clipboard contracts, then
-migrate app
+## Application state and tab lifecycle
+
+`app_state.zi` owns the application's typed state on the heap.
+`app_sessions.zi` uses the canonical `Session` records and process transports
+for launch tabs, active focus, reordering, closing and replacement, exit,
+save and restore. Closing a moved tab clears the vacated record so application
+disposal cannot close the remaining tab's process twice. Chrome sizing uses
+current Kryon tab metrics and explicit scale.
+
+`app_selection.zi` and `app_clipboard.zi` route selection, copy, paste and host
+sync through Terminal's existing controllers and clipboard policy.
+`terminal_clipboard.PasteText` consumes a bounded Ziran string view, including
+unterminated slices, with the same control filtering and bracketed-paste
+framing as the raw-buffer API. There is one paste-policy implementation.
+
+`app_palette.zi` reads the installed Kryon style rules;
+`app_profile.zi` applies configuration and theme defaults while retaining
+terminal-provided color overrides. Profile prompts propagate scrollback,
+width and color changes to existing tabs, and report font-file changes for
+the application host to load. The six corresponding `.kry` implementations
+are removed.
+
+`make application-test` checks source and saved-IR C/C++ behavior using the
+actual engine, configuration, clipboard and process transports. It covers
+theme roles, profile updates, selection copying, tab moves and closes, live
+child I/O after movement, persistence and restored child sessions, last-tab
+replacement and exit. `make application-plan9-test` checks the same fixture
+with actual native 8c/8l execution. Fixtures use controlled shells and keep
+files inside their disposable generated-output folders. These checks do not
+yet establish the full graphical application or its Rill host.
+
+The next source boundary is application input, commands and the graphical
+view. Migrate their consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
 release gates. Independent module checks remain separate evidence until
@@ -233,6 +266,13 @@ those whole-application gates pass.
 - `src/app/app_session.zi`
 - `src/app/app_session_store.zi`
 - `src/app/app_launch_options.zi`
+- `src/app/app_state.zi`
+- `src/app/app_sessions.zi`
+- `src/app/app_selection.zi`
+- `src/app/app_clipboard.zi`
+- `src/app/app_palette.zi`
+- `src/app/app_profile.zi`
+- `src/app/app_chrome.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

@@ -1,0 +1,98 @@
+using Geometry :: #import "kryon/geometry";
+Config :: #import "app_config";
+Types :: #import "terminal_pane_profile_types";
+Launch :: #import "app_launch_options";
+Colors :: #import "app_palette";
+Sessions :: #import "app_session";
+Selection :: #import "terminal_pane_selection";
+Mouse :: #import "terminal_pane_mouse";
+
+#scope_file
+libc :: #system_library "c";
+AllocateHost :: (count: usize, size: usize) -> *void #foreign libc "calloc";
+FreeHost :: (pointer: *void) #foreign libc "free";
+FillHost :: (pointer: *void, value: s32, size: usize) -> *void #foreign libc "memset";
+
+#scope_export
+State :: struct {
+    config: Types.TerminalPaneProfileSettings
+    launch: Launch.LaunchOptions
+    palette: Colors.Palette
+    sessions: [8]Sessions.Session
+    session_count: s32
+    active: s32
+    selection: Selection.TerminalPaneSelection
+    viewport: Rectangle
+    first_visible_row: s32
+    visible_rows: s32
+    cell_w: s32
+    line_h: s32
+    scale: float32
+    top_menu_index: s32
+    tab_scroll: s32
+    quit_requested: bool
+    window_focused: bool
+    about_visible: bool
+    rename_index: s32
+    rename_cursor: s32
+    rename_focused: bool
+    rename_anchor: Rectangle
+    rename_text: [128]u8
+    search_visible: bool
+    search_cursor: s32
+    search_focused: bool
+    search_text: [128]u8
+    mouse_report_col: s32
+    mouse_report_row: s32
+    mouse_report_x: s32
+    mouse_report_y: s32
+    mouse_report_button: s32
+    selection_click_time: float64
+    selection_click_row: s32
+    selection_click_col: s32
+    selection_click_count: s32
+    context_menu_open: bool
+    context_menu_x: s32
+    context_menu_y: s32
+    paste_shortcut_down: bool
+    copy_shortcut_down: bool
+    new_tab_shortcut_down: bool
+    close_tab_shortcut_down: bool
+    mouse_hidden: bool
+    last_mouse_x: s32
+    last_mouse_y: s32
+    profile_prompt: s32
+    profile_cursor: s32
+    profile_focused: bool
+    profile_text: [1024]u8
+    window_title: [160]u8
+    bell_until: float64
+    next_theme_refresh: float64
+}
+
+Init :: (app: *State) {
+    if app == null { return }
+    // Eight terminal buffers belong on the heap, including initialization.
+    FillHost(cast(*void)app, 0, cast(usize)size_of(State))
+    Config.Defaults(*app.config); Launch.Defaults(*app.launch); Colors.Defaults(*app.palette)
+    for tab: cast(s32)0..cast(s32)7 { Sessions.Init(*app.sessions[tab]) }
+    app.active = -1; app.rename_index = -1; app.top_menu_index = -1
+    app.mouse_report_col = -1; app.mouse_report_row = -1
+    app.mouse_report_x = -1; app.mouse_report_y = -1
+    app.mouse_report_button = Mouse.TERMINAL_PANE_MOUSE_RELEASE
+    app.selection_click_row = -1; app.selection_click_col = -1
+    app.window_focused = true; app.scale = 1.0
+    app.viewport = Rectangle.{0.0, 0.0, 800.0, 600.0}
+}
+
+Allocate :: () -> *State {
+    app := cast(*State)AllocateHost(cast(usize)1, cast(usize)size_of(State))
+    if app != null { Init(app) }
+    return app
+}
+
+Dispose :: (app: *State) {
+    if app == null { return }
+    for tab: cast(s32)0..cast(s32)7 { Sessions.Close(*app.sessions[tab]) }
+    FreeHost(cast(*void)app)
+}

@@ -549,7 +549,14 @@ pane-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN) build --project $(LOCK_FLAGS) \
 		--target=plan9-c --no-main -o $(PLAN9_GENERATED)/pane src/terminal_pane/terminal_pane_widget.zi
 
-pane-ziran-test: terminal-test config-test widget-test profile-test session-test launch-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
+.PHONY: application-test application-plan9-test
+application-test:
+	ZIRAN="$(ZIRAN)" sh tests/application_test.sh
+
+application-plan9-test:
+	ZIRAN="$(ZIRAN)" sh tests/pane_plan9_test.sh application
+
+pane-ziran-test: terminal-test config-test widget-test profile-test session-test launch-test application-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
 
 clipboard-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c \

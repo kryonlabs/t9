@@ -1,0 +1,274 @@
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Session :: #import "app_session";
+Chrome :: #import "app_chrome";
+Palette :: #import "app_palette";
+Profile :: #import "app_profile";
+Selection :: #import "app_selection";
+Clipboard :: #import "app_clipboard";
+Engine :: #import "terminal";
+Config :: #import "app_config";
+Types :: #import "terminal_pane_profile_types";
+PaneColors :: #import "terminal_pane_profile_colors";
+Sheet :: #import "kryon/style_sheet";
+Controls :: #import "kryon/control_props";
+using Drawing :: #import "kryon/drawing_props";
+Text :: #import "std/byte_text_linux";
+Host :: #import "terminal_clipboard_host";
+PaintHost :: #import "terminal_pane_widget_host";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    File :: #import "std/file_linux";
+}
+
+#scope_file
+libc :: #system_library "c";
+#if #defined(PLAN9) {
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+} else {
+    Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)(milliseconds * 1000)) }
+}
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Value :: (bytes: []u8) -> string { return Text.TextFromCString(*bytes[0]) }
+Shell :: () -> string {
+    #if #defined(PLAN9) {
+        return "/bin/rc"
+    } else {
+        return Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("T9_TEST_SHELL")))
+    }
+}
+Application :: () -> *State.State {
+    app := State.Allocate()
+    if app != null {
+        Session.CopyText(app.config.shell[:], Shell())
+        Session.CopyText(app.config.working_directory[:], "/")
+        app.launch.geometry_cols = 80; app.launch.geometry_rows = 4
+    }
+    return app
+}
+SameColor :: (first: Color, second: Color) -> bool {
+    return first.r == second.r && first.g == second.g && first.b == second.b && first.a == second.a
+}
+Failure :: (message: string) -> bool { print("%\n", message); return false }
+Rule :: (rules: *Sheet.StyleRules, kind: s32, background: u32, foreground: u32) {
+    rule := *rules.items[rules.count]
+    rule.selector = Sheet.StyleDefaultSelector(); rule.selector.kind = kind
+    rule.style.fields = cast(u32)Controls.StyleField.StyleBackground | cast(u32)Controls.StyleField.StyleForeground
+    rule.style.background = background; rule.style.foreground = foreground
+    rules.count += 1
+}
+ClearRules :: () {
+    rules: Sheet.StyleRules
+    Sheet.InstallStyleRules(rules)
+}
+CheckPalette :: () -> bool {
+    rules: Sheet.StyleRules
+    Rule(*rules, Sheet.StyleKindApp(), 0x0a141eff, 0xd2dce6ff)
+    Rule(*rules, Sheet.StyleKindSurface(), 0x28323cff, 0xd2dce6ff)
+    Rule(*rules, Sheet.StyleKindText(), 0x28323cff, 0xd2dce6ff)
+    Rule(*rules, Sheet.StyleKindLink(), 0x28323cff, 0x1978dcff)
+    if !Sheet.InstallStyleRules(rules) { return false }
+    defer ClearRules()
+    palette: Palette.Palette
+    Palette.Defaults(*palette)
+    colors := PaneColors.GetTerminalPaneThemeColors()
+    if !SameColor(palette.background, Color.{10, 20, 30, 255}) ||
+        !SameColor(palette.chrome, Color.{40, 50, 60, 255}) ||
+        !SameColor(palette.menu_text, Color.{210, 220, 230, 255}) ||
+        !SameColor(palette.link, colors.link) ||
+        !SameColor(palette.terminal_background, colors.background) ||
+        !SameColor(palette.selection, colors.selection) ||
+        !SameColor(palette.selection_text, colors.selection_text) ||
+        !SameColor(palette.bell_overlay, colors.bell_overlay) ||
+        !SameColor(palette.terminal_palette.ansi[1], Color.{205, 49, 49, 255}) ||
+        !SameColor(palette.terminal_palette.ansi[232], Color.{8, 8, 8, 255}) { return false }
+    if !SameColor(Palette.Mix(Color.{0, 0, 0, 255}, Color.{100, 100, 100, 255}, 2.0), Color.{100, 100, 100, 255}) {
+        return false
+    }
+    return true
+}
+CheckStateAndProfile :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    if app.active != -1 || app.rename_index != -1 || app.session_count != 0 ||
+        app.top_menu_index != -1 || app.mouse_report_col != -1 || app.mouse_report_row != -1 ||
+        app.mouse_report_x != -1 || app.mouse_report_y != -1 || app.mouse_report_button != 3 ||
+        app.selection_click_row != -1 || app.selection_click_col != -1 ||
+        !app.window_focused || app.scale != 1.0 || Sessions.Active(app) != null { return Failure("Initial application state") }
+    for tab: cast(s32)0..cast(s32)7 {
+        if app.sessions[tab].terminal.fd != -1 || !app.sessions[tab].initialized || app.sessions[tab].used { return Failure("Initial tab ownership") }
+    }
+    if Chrome.MenuBarHeight(app) != 34 || Chrome.TabBarVisible(app) { return Failure("Initial chrome") }
+    app.session_count = 2
+    if !Chrome.TabBarVisible(app) || Chrome.TabBarHeight(app) <= 0 { return Failure("Multiple-tab chrome") }
+    app.scale = 2.0
+    if Chrome.MenuBarHeight(app) != 68 { return Failure("Scaled chrome") }
+    app.launch.show_menubar = false; app.launch.show_toolbar = false
+    if Chrome.Height(app) != 0 || Chrome.Height(null) != 0 { return Failure("Hidden chrome") }
+    app.active = 0
+    if Config.Apply(*app.config, Bytes("terminal-foreground"), Bytes("#101010")) == 0 ||
+        Config.Apply(*app.config, Bytes("terminal-background"), Bytes("#202020")) == 0 ||
+        Config.Apply(*app.config, Bytes("terminal-cursor"), Bytes("#303030")) == 0 { return Failure("Configured profile colors") }
+    for tab: cast(s32)0..cast(s32)1 { Profile.ApplyNew(*app.config, *app.palette, *app.sessions[tab].terminal) }
+    terminal := *app.sessions[0].terminal
+    terminal.default_fg = Engine.COLOR_TRUE_RGB | 0x010203
+    terminal.cursor_color = Engine.COLOR_TRUE_RGB | 0x040506
+    terminal.selection_bg = Engine.COLOR_TRUE_RGB | 0x070809
+    old := Profile.ColorsFor(*app.config, *app.palette)
+    Config.Apply(*app.config, Bytes("terminal-foreground"), Bytes("#aaaaaa"))
+    Config.Apply(*app.config, Bytes("terminal-background"), Bytes("#bbbbbb"))
+    Config.Apply(*app.config, Bytes("terminal-cursor"), Bytes("#cccccc"))
+    Profile.SyncThemeDefaults(app, old)
+    if terminal.base_fg != (Engine.COLOR_TRUE_RGB | 0xaaaaaa) ||
+        terminal.default_bg != (Engine.COLOR_TRUE_RGB | 0xbbbbbb) ||
+        terminal.default_fg != (Engine.COLOR_TRUE_RGB | 0x010203) ||
+        terminal.cursor_color != (Engine.COLOR_TRUE_RGB | 0x040506) ||
+        terminal.selection_bg != (Engine.COLOR_TRUE_RGB | 0x070809) ||
+        app.sessions[1].terminal.default_fg != (Engine.COLOR_TRUE_RGB | 0xaaaaaa) { return Failure("Preserved profile overrides") }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_SCROLLBACK)
+    Session.CopyText(app.profile_text[:], "3210")
+    change := Profile.ApplyPrompt(app, false)
+    if !change.applied || change.font || change.colors ||
+        app.sessions[0].terminal.scrollback_limit != 3210 ||
+        app.sessions[1].terminal.scrollback_limit != 3210 { return Failure("Applied scrollback prompt") }
+    Session.CopyText(app.profile_text[:], "invalid")
+    if Profile.ApplyPrompt(app, false).applied || app.config.scrollback_limit != 3210 { return Failure("Rejected invalid scrollback prompt") }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE)
+    Session.CopyText(app.profile_text[:], "22")
+    change = Profile.ApplyPrompt(app, false)
+    if !change.applied || change.font || change.colors || app.config.font_size != 22 { return Failure("Applied font size prompt") }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT)
+    Session.CopyText(app.profile_text[:], "/tmp/font.ttf")
+    change = Profile.ApplyPrompt(app, false)
+    if !change.applied || !change.font || change.colors || Value(app.config.terminal_font[:]) != "/tmp/font.ttf" {
+        return Failure("Applied font file prompt")
+    }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH)
+    Session.CopyText(app.profile_text[:], "wide")
+    change = Profile.ApplyPrompt(app, false)
+    if !change.applied || app.sessions[0].terminal.ambiguous_width_wide != 1 ||
+        app.sessions[1].terminal.ambiguous_width_wide != 1 { return Failure("Applied width prompt") }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND)
+    Session.CopyText(app.profile_text[:], "#123456")
+    change = Profile.ApplyPrompt(app, false)
+    if !change.applied || !change.colors || app.sessions[0].terminal.default_bg != (Engine.COLOR_TRUE_RGB | 0x123456) ||
+        app.sessions[1].terminal.default_bg != (Engine.COLOR_TRUE_RGB | 0x123456) { return Failure("Applied color prompt") }
+    app.config.shell[0] = 0
+    Session.CopyText(app.sessions[0].shell[:], "/bin/custom")
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_SHELL)
+    if Value(app.profile_text[:]) != "/bin/custom" || app.profile_cursor != 11 { return Failure("Shell prompt fallback") }
+    return true
+}
+CheckSelectionAndClipboard :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    app.session_count = 1; app.active = 0
+    session := *app.sessions[0]
+    terminal := *session.terminal
+    Engine.terminal_resize(terminal, 20, 4)
+    sample := "first word\r\nsecond row"
+    Engine.terminal_feed(terminal, cast(*void)Bytes(sample), cast(s32)sample.count)
+    Selection.SelectWord(*app.selection, terminal, 0, 7)
+    output: [256]u8
+    collected := Selection.Collect(*app.selection, terminal, output[:])
+    if collected == 0 || Value(output[:]) != "word" {
+        print("Selected word: bytes %, text %, cursor %/%\n", collected, Value(output[:]), terminal.cursor_col, terminal.cursor_row)
+        return false
+    }
+    Host.HostClipboardReset("old")
+    Clipboard.UpdatePrimary(app)
+    Clipboard.CopySelection(app)
+    Clipboard.FlushToHost(session)
+    if Host.HostClipboardText() != "word" || Clipboard.CollectSelection(app, output[:]) == 0 || Value(output[:]) != "word" {
+        return Failure("Copied application selection")
+    }
+    Selection.SelectLine(*app.selection, terminal, 1)
+    if Selection.Collect(*app.selection, terminal, output[:]) == 0 || Value(output[:]).count < 10 ||
+        Value(output[:])[0:10] != "second row" { return Failure("Selected line") }
+    Selection.UpdateEnd(*app.selection, terminal, 0, 0)
+    Clipboard.SelectAll(app)
+    if app.selection.active == 0 || Clipboard.CollectSelection(app, output[:]) == 0 || Value(output[:]).count <= 10 {
+        return Failure("Selected whole terminal")
+    }
+    Clipboard.CopySelection(null)
+    if Clipboard.CollectSelection(null, output[:]) != 0 || output[0] != 0 { return Failure("Missing active selection") }
+    session.scroll_offset = 7
+    Clipboard.PasteText(session, "transport unavailable")
+    if session.scroll_offset != 7 { return Failure("Failed paste changed the scroll position") }
+    return true
+}
+CheckSessions :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    Session.CopyText(app.launch.initial_title[:], "Initial title")
+    if !Sessions.Open(app, "exec cat") || app.session_count != 1 || app.active != 0 ||
+        Session.Title(*app.sessions[0]) != "Initial title" { return false }
+    if !Sessions.Open(app, "exec cat") || !Sessions.Open(app, "exec cat") { return false }
+    Session.SetTitle(*app.sessions[1], "Retained title")
+    retained_fd := app.sessions[1].terminal.fd
+    app.active = 1; app.rename_index = 1; app.selection.active = 1
+    Sessions.Move(app, 1, 2)
+    if app.active != 2 || app.rename_index != 2 || app.selection.active != 0 ||
+        app.sessions[2].terminal.fd != retained_fd || Session.Title(*app.sessions[2]) != "Retained title" { return false }
+    Sessions.Move(app, 2, 0)
+    if app.active != 0 || app.rename_index != 0 || app.sessions[0].terminal.fd != retained_fd { return false }
+    Sessions.SetActive(app, -1); Sessions.SetActive(app, 3)
+    if app.active != 0 { return false }
+    Sessions.Close(app, 1)
+    if app.session_count != 2 || app.active != 0 || app.sessions[2].used || app.sessions[2].terminal.fd != -1 {
+        return false
+    }
+    active := Sessions.Active(app)
+    active.terminal.newline_mode = 1
+    active.scroll_offset = 12
+    Clipboard.PasteText(active, "tab survives move\n")
+    if active.scroll_offset != 0 { return false }
+    line: [128]u8
+    heard: bool
+    for attempt: 0..199 {
+        Engine.terminal_poll(*active.terminal)
+        for row: cast(s32)0..cast(s32)3 {
+            Engine.terminal_line(*active.terminal, row, *line[0], 128)
+            if Value(line[:]) == "tab survives move" { heard = true }
+        }
+        if heard { break }
+        Pause(10)
+    }
+    if !heard || !Sessions.Save(app, "application-fixture/session") { return false }
+    defer File.RemoveFile("application-fixture/session")
+    restored := Application()
+    if restored == null { return false }
+    defer State.Dispose(restored)
+    if !Sessions.Restore(restored, "application-fixture/session") || restored.session_count != 2 ||
+        restored.active != 0 || Session.Title(*restored.sessions[0]) != "Retained title" ||
+        !restored.sessions[0].title_override || !restored.sessions[0].used { return false }
+    Sessions.CloseExited(app, 1); Sessions.CloseExited(app, 0)
+    if app.session_count != 0 || app.active != -1 || !app.quit_requested || Sessions.Active(app) != null { return false }
+    app.quit_requested = false
+    if !Sessions.Open(app, "exec cat") { return false }
+    Sessions.Close(app, 0)
+    if app.session_count != 1 || app.active != 0 || app.quit_requested { return false }
+    app.session_count = 8
+    if Sessions.Open(app, "exec cat") || app.session_count != 8 { return false }
+    app.session_count = 1
+    return true
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    if !CheckPalette() { print("Terminal application palette failed\n"); return 1 }
+    if !CheckStateAndProfile() { print("Terminal application state/profile failed\n"); return 2 }
+    if !CheckSelectionAndClipboard() { print("Terminal application selection/clipboard failed\n"); return 3 }
+    if !CheckSessions() { print("Terminal application session ownership failed\n"); return 4 }
+    return 0
+}

@@ -1,0 +1,41 @@
+#scope_module
+Engine :: #import "terminal";
+Pane :: #import "terminal_pane_selection";
+Clipboard :: #import "terminal_pane_clipboard";
+
+#scope_export
+LineText :: (userdata: *void, row: s32, output: *u8, capacity: s32) -> s32 {
+    terminal := cast(*Engine.Terminal)userdata
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if terminal == null || row < 0 { return 0 }
+    Engine.terminal_visible_line(terminal, row, output, capacity)
+    return 1
+}
+LineWrapped :: (userdata: *void, row: s32) -> s32 {
+    terminal := cast(*Engine.Terminal)userdata
+    if terminal == null || row < 0 { return 0 }
+    return Engine.terminal_visible_line_wrapped(terminal, row)
+}
+Controller :: (selection: *Pane.TerminalPaneSelection, terminal: *Engine.Terminal) -> Clipboard.TerminalPaneClipboardController {
+    if terminal == null { return Clipboard.TerminalPaneClipboardController.{} }
+    return Clipboard.MakeTerminalPaneClipboardController(Engine.terminal_clipboard(terminal),
+        selection, LineText, LineWrapped, cast(*void)terminal,
+        Engine.terminal_visible_line_count(terminal), terminal.cols, null)
+}
+SelectLine :: (selection: *Pane.TerminalPaneSelection, terminal: *Engine.Terminal, row: s32) {
+    Pane.TerminalPaneSelectionSelectLine(selection, LineText, cast(*void)terminal, row)
+}
+SelectWord :: (selection: *Pane.TerminalPaneSelection, terminal: *Engine.Terminal, row: s32, col: s32) {
+    Pane.TerminalPaneSelectionSelectWord(selection, LineText, cast(*void)terminal, row, col)
+}
+UpdateEnd :: (selection: *Pane.TerminalPaneSelection, terminal: *Engine.Terminal, row: s32, col: s32) {
+    Pane.TerminalPaneSelectionUpdateEnd(selection, LineText, cast(*void)terminal, row, col)
+}
+Collect :: (selection: *Pane.TerminalPaneSelection, terminal: *Engine.Terminal, output: []u8) -> s32 {
+    if output.count <= 0 { return 0 }
+    capacity := output.count
+    if capacity > 2147483647 { capacity = 2147483647 }
+    return Pane.TerminalPaneSelectionCollectText(selection, LineText, LineWrapped,
+        cast(*void)terminal, *output[0], cast(s32)capacity)
+}

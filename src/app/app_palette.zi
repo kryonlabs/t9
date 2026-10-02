@@ -1,0 +1,111 @@
+#scope_module
+using Drawing :: #import "kryon/drawing_props";
+Theme :: #import "kryon/theme";
+Sheet :: #import "kryon/style_sheet";
+Styles :: #import "kryon/style";
+Controls :: #import "kryon/control_props";
+Pane :: #import "terminal_pane_profile_colors";
+#if #defined(PLAN9) {
+    SystemTheme :: #import "kryon/SystemTheme";
+} else {
+    SystemTheme :: #import "kryon/SystemThemeLinux";
+}
+
+Role :: (kind: s32, background: u32, foreground: u32) -> Styles.StyleData {
+    base: Styles.StyleData
+    base.background = background; base.foreground = foreground; base.opacity = 1.0
+    return Sheet.ResolveInstalledStyleRules(base, Sheet.StyleDefaultFacts(kind), 1)
+}
+
+Rule :: (rules: *Sheet.StyleRules, kind: s32, background: u32, foreground: u32, state: s32 = 0) {
+    rule := *rules.items[rules.count]
+    rule.selector = Sheet.StyleDefaultSelector(); rule.selector.kind = kind
+    rule.state = state
+    rule.style.fields = cast(u32)Controls.StyleField.StyleBackground | cast(u32)Controls.StyleField.StyleForeground
+    rule.style.background = background; rule.style.foreground = foreground
+    rules.count += 1
+}
+
+#scope_export
+Palette :: struct {
+    background: Color
+    terminal_background: Color
+    foreground: Color
+    muted: Color
+    selection: Color
+    selection_text: Color
+    cursor: Color
+    scroll_indicator: Color
+    scroll_indicator_text: Color
+    bell_overlay: Color
+    bell_border: Color
+    link: Color
+    chrome: Color
+    chrome_light: Color
+    chrome_border: Color
+    menu_text: Color
+    tab: Color
+    tab_active: Color
+    terminal_palette: Pane.TerminalPanePalette
+}
+
+Mix :: (first: Color, second: Color, amount: float32) -> Color {
+    if amount < 0.0 { amount = 0.0 }
+    if amount > 1.0 { amount = 1.0 }
+    return Color.{
+        cast(u8)(cast(float32)first.r + (cast(float32)second.r - cast(float32)first.r) * amount),
+        cast(u8)(cast(float32)first.g + (cast(float32)second.g - cast(float32)first.g) * amount),
+        cast(u8)(cast(float32)first.b + (cast(float32)second.b - cast(float32)first.b) * amount), 255}
+}
+
+Defaults :: (palette: *Palette) {
+    if palette == null { return }
+    palette.* = Palette.{}
+    terminal := Pane.GetTerminalPaneThemeColors()
+    base := Theme.DefaultPalette(false)
+    app := Role(Sheet.StyleKindApp(), base.background, base.text)
+    surface := Role(Sheet.StyleKindSurface(), base.surface, base.text)
+    text := Role(Sheet.StyleKindText(), base.surface, base.text)
+    button := Role(Sheet.StyleKindButton(), base.surface, base.text)
+    hover := Sheet.ResolveInstalledStyleRules(button, Sheet.StyleDefaultFacts(Sheet.StyleKindButton()), 2)
+    palette.background = Drawing.ColorFromPacked(app.background)
+    palette.terminal_background = terminal.background
+    palette.foreground = terminal.text; palette.muted = terminal.muted_text
+    palette.selection = terminal.selection; palette.selection_text = terminal.selection_text
+    palette.cursor = terminal.cursor; palette.link = terminal.link
+    palette.scroll_indicator = terminal.scroll_indicator
+    palette.scroll_indicator_text = terminal.scroll_indicator_text
+    palette.bell_overlay = terminal.bell_overlay; palette.bell_border = terminal.bell_border
+    palette.chrome = Drawing.ColorFromPacked(surface.background)
+    palette.chrome_light = Mix(palette.chrome, Color.{255, 255, 255, 255}, 0.18)
+    palette.chrome_border = terminal.border
+    palette.menu_text = Drawing.ColorFromPacked(text.foreground)
+    palette.tab = Drawing.ColorFromPacked(button.background)
+    palette.tab_active = Drawing.ColorFromPacked(hover.background)
+    for index: cast(s32)0..cast(s32)255 {
+        palette.terminal_palette.ansi[index] = Pane.ResolveTerminalPaneColor(null, index, palette.foreground)
+    }
+}
+
+ApplySystemTheme :: (palette: *Palette) -> bool {
+    if palette == null { return false }
+    #if #defined(PLAN9) {
+        system := SystemTheme.SystemPaletteFallback(false)
+    } else {
+        system := SystemTheme.SystemPaletteRead()
+    }
+    base := Theme.DefaultPalette(system.dark)
+    rules: Sheet.StyleRules
+    Rule(*rules, Sheet.StyleKindApp(), system.background, system.text)
+    Rule(*rules, Sheet.StyleKindSurface(), system.base, system.text)
+    Rule(*rules, Sheet.StyleKindText(), system.base, system.text)
+    Rule(*rules, Sheet.StyleKindLink(), system.base, base.link)
+    Rule(*rules, Sheet.StyleKindButton(), system.base, system.text)
+    Rule(*rules, Sheet.StyleKindButton(), system.selected, system.selected_text, 2)
+    Rule(*rules, Sheet.StyleKindTabBar(), system.base, system.text)
+    Rule(*rules, Sheet.StyleKindTab(), system.base, system.text)
+    Rule(*rules, Sheet.StyleKindTab(), system.selected, system.selected_text, 4)
+    if !Sheet.InstallStyleRules(rules) { return false }
+    Defaults(palette)
+    return true
+}

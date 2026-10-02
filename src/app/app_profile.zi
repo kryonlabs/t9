@@ -1,0 +1,112 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_session";
+Config :: #import "app_config";
+Engine :: #import "terminal";
+Palette :: #import "app_palette";
+Colors :: #import "terminal_pane_profile_colors";
+Profile :: #import "terminal_pane_profile";
+Prompt :: #import "terminal_pane_profile_prompt";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+
+ThemeColors :: (palette: *Palette.Palette) -> Colors.TerminalPaneColors {
+    if palette == null { return Colors.GetTerminalPaneThemeColors() }
+    return Colors.ResolveTerminalPaneThemeColors(.{palette.terminal_background,
+        palette.foreground, palette.muted, palette.selection, palette.selection_text,
+        palette.cursor, palette.link, palette.chrome_border, palette.scroll_indicator,
+        palette.scroll_indicator_text, palette.bell_overlay, palette.bell_border})
+}
+Configured :: (config: *Types.TerminalPaneProfileSettings) -> Colors.TerminalPaneProfileColors {
+    result := Colors.TerminalPaneProfileColors.{-1, -1, -1, -1, -1}
+    if config == null { return result }
+    result.foreground = config.terminal_foreground; result.background = config.terminal_background
+    result.cursor = config.terminal_cursor; result.selection_foreground = config.terminal_selection_foreground
+    result.selection_background = config.terminal_selection_background
+    return result
+}
+TerminalState :: (terminal: *Engine.Terminal) -> Profile.TerminalPaneProfileState {
+    if terminal == null { return .{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1} }
+    return .{terminal.base_fg, terminal.base_bg, terminal.base_cursor_color,
+        terminal.base_selection_fg, terminal.base_selection_bg, terminal.default_fg,
+        terminal.default_bg, terminal.cursor_color, terminal.selection_fg, terminal.selection_bg}
+}
+ApplyState :: (terminal: *Engine.Terminal, value: Profile.TerminalPaneProfileState) {
+    terminal.base_fg = value.base_foreground; terminal.base_bg = value.base_background
+    terminal.base_cursor_color = value.base_cursor; terminal.base_selection_fg = value.base_selection_foreground
+    terminal.base_selection_bg = value.base_selection_background
+    terminal.default_fg = value.foreground; terminal.default_bg = value.background
+    terminal.cursor_color = value.cursor; terminal.selection_fg = value.selection_foreground
+    terminal.selection_bg = value.selection_background
+}
+
+#scope_export
+PromptChange :: struct { applied: bool; font: bool; colors: bool; }
+
+ColorsFor :: (config: *Types.TerminalPaneProfileSettings, palette: *Palette.Palette) -> Colors.TerminalPaneProfileColors {
+    return Colors.ResolveTerminalPaneProfileColors(Configured(config), ThemeColors(palette))
+}
+ApplyNew :: (config: *Types.TerminalPaneProfileSettings, palette: *Palette.Palette, terminal: *Engine.Terminal) {
+    if terminal == null { return }
+    profile := TerminalState(terminal)
+    Profile.TerminalPaneProfileStateApplyNew(*profile, ColorsFor(config, palette))
+    ApplyState(terminal, profile)
+}
+SeedMissing :: (config: *Types.TerminalPaneProfileSettings, palette: *Palette.Palette, terminal: *Engine.Terminal) {
+    if terminal == null { return }
+    profile := TerminalState(terminal)
+    Profile.TerminalPaneProfileStateSeedMissing(*profile, ColorsFor(config, palette))
+    ApplyState(terminal, profile)
+}
+SyncChanged :: (terminal: *Engine.Terminal, old: Colors.TerminalPaneProfileColors, fresh: Colors.TerminalPaneProfileColors) {
+    if terminal == null { return }
+    profile := TerminalState(terminal)
+    Profile.TerminalPaneProfileStateSyncChanged(*profile, old, fresh)
+    ApplyState(terminal, profile)
+}
+SyncThemeDefaults :: (app: *State.State, old: Colors.TerminalPaneProfileColors) {
+    if app == null { return }
+    fresh := ColorsFor(*app.config, *app.palette)
+    for index: 0..app.session_count - 1 { SyncChanged(*app.sessions[index].terminal, old, fresh) }
+}
+OpenPrompt :: (app: *State.State, kind: s32) {
+    if app == null { return }
+    app.profile_prompt = kind; app.profile_focused = true; app.profile_text[0] = 0
+    formatted := Prompt.FormatTerminalPaneProfilePromptValue(*app.profile_text[0], 1024, *app.config, kind)
+    session: *Sessions.Session
+    if app.active >= 0 && app.active < app.session_count { session = *app.sessions[app.active] }
+    if kind == Types.TERMINAL_PANE_PROFILE_PROMPT_SHELL && app.profile_text[0] == 0 && session != null {
+        Sessions.CopyText(app.profile_text[:], Text.TextFromCString(*session.shell[0]))
+    } else if kind == Types.TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY {
+        cwd: [1024]u8
+        if session != null { Sessions.CurrentCwd(session, cwd[:]) }
+        if cwd[0] != 0 { Sessions.CopyText(app.profile_text[:], Text.TextFromCString(*cwd[0])) }
+        else if formatted == 0 { Prompt.FormatTerminalPaneProfilePromptValue(*app.profile_text[0], 1024, *app.config, kind) }
+    }
+    app.profile_cursor = cast(s32)Text.TextFromCString(*app.profile_text[0]).count
+}
+PromptTitle :: (kind: s32) -> string { return Text.TextFromCString(Prompt.TerminalPaneProfilePromptTitle(kind)) }
+ApplyPrompt :: (app: *State.State, persist: bool = true) -> PromptChange {
+    change: PromptChange
+    if app == null { return change }
+    old := ColorsFor(*app.config, *app.palette)
+    if Prompt.ApplyTerminalPaneProfilePromptValue(*app.config, Config.Limits(), app.profile_prompt, *app.profile_text[0]) == 0 {
+        return change
+    }
+    change.applied = true
+    change.font = Prompt.TerminalPaneProfilePromptAffectsFont(app.profile_prompt) != 0
+    change.colors = Prompt.TerminalPaneProfilePromptAffectsColors(app.profile_prompt) != 0
+    if Prompt.TerminalPaneProfilePromptAffectsScrollback(app.profile_prompt) != 0 {
+        for index: 0..app.session_count - 1 {
+            Engine.terminal_set_scrollback_limit(*app.sessions[index].terminal, Config.EffectiveScrollback(*app.config))
+        }
+    }
+    if app.profile_prompt == Types.TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH {
+        for index: 0..app.session_count - 1 {
+            Engine.terminal_set_ambiguous_width(*app.sessions[index].terminal, app.config.ambiguous_width_wide)
+        }
+    }
+    if change.colors { SyncThemeDefaults(app, old) }
+    if persist { Config.Save(*app.config) }
+    return change
+}

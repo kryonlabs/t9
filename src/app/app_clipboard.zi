@@ -1,0 +1,48 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Session :: #import "app_session";
+Selection :: #import "app_selection";
+Pane :: #import "terminal_pane_clipboard";
+Engine :: #import "terminal";
+Data :: #import "terminal_clipboard";
+
+Actions :: (app: *State.State, session: *Session.Session) -> Pane.TerminalPaneClipboardActions {
+    selection: Pane.TerminalPaneClipboardController
+    if session == null { return Pane.TerminalPaneClipboardActions.{} }
+    if app != null { selection = Selection.Controller(*app.selection, *session.terminal) }
+    terminal := Selection.Controller(null, *session.terminal)
+    terminal.scroll_offset = *session.scroll_offset
+    return Pane.MakeTerminalPaneClipboardActions(selection, terminal)
+}
+ActiveActions :: (app: *State.State) -> Pane.TerminalPaneClipboardActions {
+    return Actions(app, Sessions.Active(app))
+}
+
+#scope_export
+CollectSelection :: (app: *State.State, output: []u8) -> s32 {
+    if output.count <= 0 { return 0 }
+    output[0] = 0
+    capacity := output.count
+    if capacity > 2147483647 { capacity = 2147483647 }
+    return Pane.TerminalPaneClipboardCollectSelectionText(ActiveActions(app), *output[0], cast(s32)capacity)
+}
+PrimaryAvailable :: () -> bool { return Pane.TerminalPaneClipboardPrimarySelectionAvailable() != 0 }
+UpdatePrimary :: (app: *State.State) { Pane.TerminalPaneClipboardUpdatePrimary(ActiveActions(app)) }
+CopySelection :: (app: *State.State) { Pane.TerminalPaneClipboardCopy(ActiveActions(app)) }
+SelectAll :: (app: *State.State) { Pane.TerminalPaneClipboardSelectAll(ActiveActions(app)) }
+PasteText :: (session: *Session.Session, text: string) {
+    if session == null || text == "" { return }
+    clipboard := Engine.terminal_clipboard(*session.terminal)
+    if Data.PasteText(clipboard.clipboard, text, clipboard.bracketed_paste,
+        clipboard.write_text, clipboard.userdata) != 0 { session.scroll_offset = 0 }
+}
+PasteClipboard :: (session: *Session.Session) { Pane.TerminalPaneClipboardPasteActionsClipboard(Actions(null, session)) }
+PastePrimary :: (app: *State.State, session: *Session.Session) {
+    if app != null { Pane.TerminalPaneClipboardPasteActionsPrimary(Actions(app, session)) }
+}
+PastePreferred :: (app: *State.State, session: *Session.Session) {
+    if app != null { Pane.TerminalPaneClipboardPasteActionsPreferred(Actions(app, session)) }
+}
+SyncFromHost :: (session: *Session.Session) { Pane.TerminalPaneClipboardActionsSyncFromHost(Actions(null, session)) }
+FlushToHost :: (session: *Session.Session) { Pane.TerminalPaneClipboardActionsFlushToHost(Actions(null, session)) }

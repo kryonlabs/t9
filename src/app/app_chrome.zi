@@ -1,0 +1,16 @@
+State :: #import "app_state";
+Tabs :: #import "kryon/Widgets";
+
+MenuBarHeight :: (app: *State.State) -> s32 {
+    if app == null || !app.launch.show_menubar { return 0 }
+    return cast(s32)(34.0 * app.scale)
+}
+TabBarVisible :: (app: *State.State) -> bool {
+    return app != null && app.launch.show_toolbar &&
+        (app.config.always_show_tabs != 0 || app.session_count > 1)
+}
+TabBarHeight :: (app: *State.State) -> s32 {
+    if !TabBarVisible(app) { return 0 }
+    return cast(s32)(cast(float32)Tabs.TabBarHeight() * app.scale)
+}
+Height :: (app: *State.State) -> s32 { return MenuBarHeight(app) + TabBarHeight(app) }

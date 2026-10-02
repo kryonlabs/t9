@@ -207,12 +207,11 @@ ClipboardSourceHasText :: (source: s32) -> s32 {
 }
 
 #program_export
-WriteClipboardTextPaste :: (buffer: *ClipboardBuffer, text: *u8,
+PasteText :: (buffer: *ClipboardBuffer, value: string,
     bracketed: s32, write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
-    if buffer == null || text == null || text[0] == 0 || write_text == null { return 0 }
+    if buffer == null || value.count <= 0 || write_text == null { return 0 }
     // Strip terminal control sequences before surrounding a paste with the
     // bracket protocol. Continuation bytes inside UTF-8 remain text bytes.
-    value := Raw(text)
     output: [4096]u8
     used: s32
     state: s32
@@ -269,6 +268,12 @@ WriteClipboardTextPaste :: (buffer: *ClipboardBuffer, text: *u8,
 }
 
 #program_export
+WriteClipboardTextPaste :: (buffer: *ClipboardBuffer, text: *u8,
+    bracketed: s32, write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
+    return PasteText(buffer, Raw(text), bracketed, write_text, userdata)
+}
+
+#program_export
 WriteClipboardSourcePaste :: (buffer: *ClipboardBuffer, source: s32,
     bracketed: s32, write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
     if buffer == null { return 0 }
@@ -277,8 +282,7 @@ WriteClipboardSourcePaste :: (buffer: *ClipboardBuffer, source: s32,
         SyncClipboardBufferFromHost(buffer)
     }
     text := State.ClipboardRead(Snapshot(buffer), cast(State.ClipboardSource)source).text
-    descriptor := cast(*Text.TextDescriptor)(*text)
-    return WriteClipboardTextPaste(buffer, descriptor.data, bracketed, write_text, userdata)
+    return PasteText(buffer, text, bracketed, write_text, userdata)
 }
 
 // Payload begins after "52;". Queries write a bounded protocol response;

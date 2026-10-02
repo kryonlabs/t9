@@ -1,0 +1,177 @@
+#scope_module
+State :: #import "app_state";
+Session :: #import "app_session";
+Store :: #import "app_session_store";
+Launch :: #import "app_launch_options";
+Profile :: #import "app_profile";
+Engine :: #import "terminal";
+Config :: #import "app_config";
+Chrome :: #import "app_chrome";
+Pane :: #import "terminal_pane_widget";
+Records :: #import "terminal_pane_session";
+Text :: #import "std/byte_text_linux";
+Geometry :: #import "kryon/geometry";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    libc :: #system_library "c";
+    DirectoryHost :: (output: *s8, capacity: usize) -> *s8 #foreign libc "getcwd";
+}
+
+Clamp :: (value: s32, minimum: s32, maximum: s32) -> s32 {
+    if value < minimum { return minimum }
+    if value > maximum { return maximum }
+    return value
+}
+InitialCwd :: (app: *State.State, output: []u8) -> string {
+    if app.config.working_directory[0] != 0 {
+        return Session.CopyText(output, Text.TextFromCString(*app.config.working_directory[0]))
+    }
+    #if #defined(PLAN9) {
+        return File.CurrentDirectory(output)
+    } else {
+        if output.count <= 0 || DirectoryHost(cast(*s8)(*output[0]), cast(usize)output.count) == null { return "" }
+        return Text.TextFromCString(*output[0])
+    }
+}
+EstimateGrid :: (app: *State.State, cols: *s32, rows: *s32) {
+    cols.* = 100; rows.* = 30
+    if app.launch.geometry_cols > 0 && app.launch.geometry_rows > 0 {
+        cols.* = Clamp(app.launch.geometry_cols, 8, Engine.MAX_COLS)
+        rows.* = Clamp(app.launch.geometry_rows, 4, Engine.MAX_ROWS)
+        return
+    }
+    bounds := Geometry.Rectangle.{0.0, 0.0, app.viewport.width, app.viewport.height}
+    content := Pane.TerminalPaneContentBounds(bounds, Chrome.Height(app), 0, app.scale)
+    measured := Pane.MeasureTerminalPaneContent(content, app.config.font_size, app.scale)
+    cols.* = Clamp(measured.cols, 8, Engine.MAX_COLS)
+    rows.* = Clamp(measured.rows, 4, Engine.MAX_ROWS)
+}
+OpenLaunch :: (app: *State.State, cwd: string, command: string, title: string) -> bool {
+    if app == null || app.session_count >= cast(s32)app.sessions.count { return false }
+    cols: s32; rows: s32
+    EstimateGrid(app, *cols, *rows)
+    index := app.session_count
+    session := *app.sessions[index]
+    directory: [1024]u8
+    path := cwd
+    if path == "" { path = InitialCwd(app, directory[:]) }
+    opened := Session.Open(session, path, Text.TextFromCString(*app.config.shell[0]),
+        command, cols, rows, Config.EffectiveScrollback(*app.config))
+    if title != "" { Session.SetTitle(session, title) }
+    Engine.terminal_set_ambiguous_width(*session.terminal, app.config.ambiguous_width_wide)
+    Profile.ApplyNew(*app.config, *app.palette, *session.terminal)
+    app.session_count += 1
+    SetActive(app, index)
+    app.rename_index = -1
+    return opened
+}
+MovedIndex :: (index: s32, from: s32, to: s32) -> s32 {
+    if index < 0 { return index }
+    if index == from { return to }
+    if from < to && index > from && index <= to { return index - 1 }
+    if from > to && index >= to && index < from { return index + 1 }
+    return index
+}
+CloseInternal :: (app: *State.State, index: s32, replace: bool) {
+    if app == null || index < 0 || index >= app.session_count { return }
+    was_active := index == app.active
+    if was_active && app.window_focused { Engine.terminal_send_focus(*app.sessions[index].terminal, 0) }
+    Session.Close(*app.sessions[index])
+    for tab: index..app.session_count - 2 { app.sessions[tab] = app.sessions[tab + 1] }
+    app.session_count -= 1
+    // Clear the vacated record so disposal cannot close moved descriptors twice.
+    Session.Init(*app.sessions[app.session_count])
+    app.selection.active = 0; app.rename_index = -1
+    if app.session_count == 0 {
+        app.active = -1
+        if replace { Open(app) } else { app.quit_requested = true }
+        return
+    }
+    if !was_active && index < app.active { app.active -= 1 }
+    app.active = Clamp(app.active, 0, app.session_count - 1)
+    if was_active && app.window_focused { Engine.terminal_send_focus(*app.sessions[app.active].terminal, 1) }
+}
+
+#scope_export
+Active :: (app: *State.State) -> *Session.Session {
+    if app == null || app.active < 0 || app.active >= app.session_count { return null }
+    return *app.sessions[app.active]
+}
+SetActive :: (app: *State.State, index: s32) {
+    if app == null || index < 0 || index >= app.session_count { return }
+    old := app.active
+    if old != index {
+        if app.window_focused && old >= 0 && old < app.session_count { Engine.terminal_send_focus(*app.sessions[old].terminal, 0) }
+        app.active = index
+        if app.window_focused { Engine.terminal_send_focus(*app.sessions[index].terminal, 1) }
+    }
+    app.selection.active = 0
+}
+Open :: (app: *State.State, command: string = "") -> bool {
+    if app == null { return false }
+    title: string
+    if app.session_count == 0 { title = Text.TextFromCString(*app.launch.initial_title[0]) }
+    script := command
+    if script == "" { script = Text.TextFromCString(*app.config.command[0]) }
+    return OpenLaunch(app, "", script, title)
+}
+OpenLaunchSessions :: (app: *State.State) -> s32 {
+    if app == null { return 0 }
+    opened: s32
+    for index: 0..app.launch.tab_count - 1 {
+        if app.session_count >= cast(s32)app.sessions.count { break }
+        tab := *app.launch.tabs[index]
+        OpenLaunch(app, Text.TextFromCString(*tab.working_directory[0]),
+            Text.TextFromCString(*tab.command[0]), Text.TextFromCString(*tab.title[0]))
+        opened += 1
+    }
+    return opened
+}
+Move :: (app: *State.State, from: s32, to: s32) {
+    if app == null || from < 0 || from >= app.session_count || to < 0 || to >= app.session_count || from == to { return }
+    moved := app.sessions[from]
+    if from < to {
+        for index: from..to - 1 { app.sessions[index] = app.sessions[index + 1] }
+    } else {
+        index := from
+        while index > to { app.sessions[index] = app.sessions[index - 1]; index -= 1 }
+    }
+    app.sessions[to] = moved
+    app.active = MovedIndex(app.active, from, to)
+    app.rename_index = MovedIndex(app.rename_index, from, to)
+    app.selection.active = 0
+}
+Close :: (app: *State.State, index: s32) { CloseInternal(app, index, true) }
+CloseExited :: (app: *State.State, index: s32) { CloseInternal(app, index, false) }
+Save :: (app: *State.State, path: string = "") -> bool {
+    if app == null { return false }
+    if path != "" { return Store.SaveFile(app.sessions[0:app.session_count], app.active, path) }
+    return Store.Save(app.sessions[0:app.session_count], app.active)
+}
+Restore :: (app: *State.State, path: string = "") -> bool {
+    if app == null || app.session_count > 0 || app.config.command[0] != 0 { return false }
+    records: [8]Records.TerminalPaneSessionRecord
+    active: s32; count: s32
+    if path != "" { count = Store.LoadFile(records[:], *active, path) }
+    else { count = Store.Load(records[:], *active) }
+    if count <= 0 { return false }
+    cols: s32; rows: s32
+    EstimateGrid(app, *cols, *rows)
+    for index: 0..count - 1 {
+        record := *records[index]
+        directory: [1024]u8
+        if record.cwd[0] == 0 { InitialCwd(app, directory[:]); Session.CopyText(record.cwd[:], Text.TextFromCString(*directory[0])) }
+        if record.shell[0] == 0 { Session.CopyText(record.shell[:], Text.TextFromCString(*app.config.shell[0])) }
+        session := *app.sessions[index]
+        Session.Open(session, Text.TextFromCString(*record.cwd[0]), Text.TextFromCString(*record.shell[0]),
+            Text.TextFromCString(*record.command[0]), cols, rows, Config.EffectiveScrollback(*app.config))
+        session.scroll_offset = ifx record.scroll_offset > 0 then record.scroll_offset else 0
+        Engine.terminal_set_ambiguous_width(*session.terminal, app.config.ambiguous_width_wide)
+        Profile.ApplyNew(*app.config, *app.palette, *session.terminal)
+        Session.RestoreTitle(session, Text.TextFromCString(*record.title[0]), record.title_override != 0)
+    }
+    app.session_count = count; app.active = Clamp(active, 0, count - 1)
+    app.selection.active = 0; app.rename_index = -1
+    return true
+}
