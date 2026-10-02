@@ -265,8 +265,7 @@ $(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) $(APP_KRY_C) $(APP_K
 
 $(PANE_ZI_C) $(PANE_ZI_H) &: $(PANE_ZI)
 	@mkdir -p $(BUILD_DIR)/generated/src
-	$(ZIRAN) build --target=c --no-main --root src \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --no-main --root src \
 		-o $(BUILD_DIR)/generated/src $(PANE_ZI)
 
 $(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
@@ -275,9 +274,7 @@ $(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
 
 $(PANE_TEXT_TEST_C) &: tests/terminal_pane_text_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_TEXT_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_TEXT_TEST_GEN) tests/terminal_pane_text_test.zi
 
 $(PANE_TEXT_TEST): $(PANE_TEXT_TEST_C) | $(BUILD_DIR)/tests
@@ -285,9 +282,7 @@ $(PANE_TEXT_TEST): $(PANE_TEXT_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_SGR_TEST_C) &: tests/terminal_pane_sgr_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_SGR_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_SGR_TEST_GEN) tests/terminal_pane_sgr_test.zi
 
 $(PANE_SGR_TEST): $(PANE_SGR_TEST_C) | $(BUILD_DIR)/tests
@@ -295,9 +290,7 @@ $(PANE_SGR_TEST): $(PANE_SGR_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_CSI_TEST_C) &: tests/terminal_pane_csi_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_CSI_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_CSI_TEST_GEN) tests/terminal_pane_csi_test.zi
 
 $(PANE_CSI_TEST): $(PANE_CSI_TEST_C) | $(BUILD_DIR)/tests
@@ -305,9 +298,7 @@ $(PANE_CSI_TEST): $(PANE_CSI_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_MODES_TEST_C) &: tests/terminal_pane_modes_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_MODES_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_MODES_TEST_GEN) tests/terminal_pane_modes_test.zi
 
 $(PANE_MODES_TEST): $(PANE_MODES_TEST_C) | $(BUILD_DIR)/tests
@@ -315,9 +306,7 @@ $(PANE_MODES_TEST): $(PANE_MODES_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_MOUSE_TEST_C) &: tests/terminal_pane_mouse_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_MOUSE_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_MOUSE_TEST_GEN) tests/terminal_pane_mouse_test.zi
 
 $(PANE_MOUSE_TEST): $(PANE_MOUSE_TEST_C) | $(BUILD_DIR)/tests
@@ -325,9 +314,7 @@ $(PANE_MOUSE_TEST): $(PANE_MOUSE_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_DCS_TEST_C) &: tests/terminal_pane_dcs_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_DCS_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_DCS_TEST_GEN) tests/terminal_pane_dcs_test.zi
 
 $(PANE_DCS_TEST): $(PANE_DCS_TEST_C) | $(BUILD_DIR)/tests
@@ -335,9 +322,7 @@ $(PANE_DCS_TEST): $(PANE_DCS_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_SIXEL_TEST_C) &: tests/terminal_pane_sixel_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_SIXEL_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_SIXEL_TEST_GEN) tests/terminal_pane_sixel_test.zi
 
 $(PANE_SIXEL_TEST): $(PANE_SIXEL_TEST_C) | $(BUILD_DIR)/tests
@@ -346,9 +331,7 @@ $(PANE_SIXEL_TEST): $(PANE_SIXEL_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_SELECTION_TEST_ZIRAN_C) &: tests/terminal_pane_selection_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_SELECTION_TEST_ZIRAN_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_SELECTION_TEST_ZIRAN_GEN) tests/terminal_pane_selection_test.zi
 
 $(PANE_SELECTION_TEST_ZIRAN): $(PANE_SELECTION_TEST_ZIRAN_C) | $(BUILD_DIR)/tests
@@ -359,9 +342,7 @@ $(PANE_CLIPBOARD_TEST_C) &: tests/terminal_pane_clipboard_test.zi \
 		src/terminal_pane/terminal_pane_clipboard.zi \
 		src/terminal_pane/terminal_pane_selection.zi
 	@mkdir -p $(PANE_CLIPBOARD_TEST_GEN)
-	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_CLIPBOARD_TEST_GEN) tests/terminal_pane_clipboard_test.zi
 
 $(PANE_CLIPBOARD_TEST): $(PANE_CLIPBOARD_TEST_C) | $(BUILD_DIR)/tests
@@ -371,9 +352,7 @@ $(PANE_CLIPBOARD_TEST): $(PANE_CLIPBOARD_TEST_C) | $(BUILD_DIR)/tests
 $(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_COLORS_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_COLORS_TEST_GEN) \
 		tests/terminal_pane_profile_colors_test.zi
 
@@ -384,9 +363,7 @@ $(PANE_PROFILE_COLORS_TEST): $(PANE_PROFILE_COLORS_TEST_C) | $(BUILD_DIR)/tests
 $(PANE_PROFILE_PROMPT_TEST_C) &: tests/terminal_pane_profile_prompt_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_PROMPT_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_PROMPT_TEST_GEN) \
 		tests/terminal_pane_profile_prompt_test.zi
 
@@ -397,9 +374,7 @@ $(PANE_PROFILE_PROMPT_TEST): $(PANE_PROFILE_PROMPT_TEST_C) | $(BUILD_DIR)/tests
 $(PANE_PROFILE_SETTINGS_TEST_C) &: tests/terminal_pane_profile_settings_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_SETTINGS_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_SETTINGS_TEST_GEN) \
 		tests/terminal_pane_profile_settings_test.zi
 
@@ -410,9 +385,7 @@ $(PANE_PROFILE_SETTINGS_TEST): $(PANE_PROFILE_SETTINGS_TEST_C) | $(BUILD_DIR)/te
 $(PANE_PROFILE_TEST_C) &: tests/terminal_pane_profile_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_TEST_GEN) \
 		tests/terminal_pane_profile_test.zi
 
@@ -422,9 +395,7 @@ $(PANE_PROFILE_TEST): $(PANE_PROFILE_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_SESSION_TEST_C) &: tests/terminal_pane_session_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_SESSION_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_SESSION_TEST_GEN) tests/terminal_pane_session_test.zi
 
 $(PANE_SESSION_TEST): $(PANE_SESSION_TEST_C) | $(BUILD_DIR)/tests
@@ -433,9 +404,7 @@ $(PANE_SESSION_TEST): $(PANE_SESSION_TEST_C) | $(BUILD_DIR)/tests
 $(PANE_RENDER_TEST_C) &: tests/terminal_pane_render_test.zi \
 		tests/terminal_pane_render_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_RENDER_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_RENDER_TEST_GEN) tests/terminal_pane_render_test.zi
 
 $(PANE_RENDER_TEST): $(PANE_RENDER_TEST_C) | $(BUILD_DIR)/tests
@@ -444,9 +413,7 @@ $(PANE_RENDER_TEST): $(PANE_RENDER_TEST_C) | $(BUILD_DIR)/tests
 
 $(PANE_REFLOW_TEST_C) &: tests/terminal_pane_reflow_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_REFLOW_TEST_GEN)
-	$(ZIRAN) build --target=c --root tests \
-		--module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_REFLOW_TEST_GEN) tests/terminal_pane_reflow_test.zi
 
 $(PANE_REFLOW_TEST): $(PANE_REFLOW_TEST_C) | $(BUILD_DIR)/tests
@@ -535,19 +502,24 @@ ziran-migration-check:
 
 # Hosted pane tests use isolated clipboard providers and never need the
 # application's legacy Kryon/k2c engine or a desktop display.
-.PHONY: clipboard-test selection-test pane-ziran-test clipboard-plan9-c
+.PHONY: clipboard-test selection-test keys-test keys-plan9-test pane-ziran-test clipboard-plan9-c
 clipboard-test: $(PANE_CLIPBOARD_TEST)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
 
 selection-test: $(PANE_SELECTION_TEST_ZIRAN)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_SELECTION_TEST_ZIRAN)
 
-pane-ziran-test: clipboard-test selection-test ziran-migration-check
+keys-test:
+	sh tests/keys_test.sh
+
+keys-plan9-test:
+	sh tests/keys_plan9_test.sh
+
+pane-ziran-test: clipboard-test selection-test keys-test ziran-migration-check
 
 clipboard-plan9-c:
-	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --target=plan9-c \
-		--root tests --module-path src/terminal_pane \
-		--module-path $(ZIRAN_DIR)/std \
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c \
+		--root tests \
 		-o $(BUILD_ROOT)/plan9/clipboard-test tests/terminal_pane_clipboard_test.zi
 
 test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
@@ -622,8 +594,7 @@ kry-c-plan9: engine
 		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
 	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
 		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
-	$(ZIRAN) build --target=plan9-c --no-main --root src \
-		--module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c --no-main --root src \
 		-o $(PLAN9_GENERATED) $(PANE_ZI)
 	(cd $(PLAN9_GENERATED) && find . -type f -name '*.c' | \
 	sed -e 's@^\./@@') | LC_ALL=C sort > $(PLAN9_FILE_LIST)

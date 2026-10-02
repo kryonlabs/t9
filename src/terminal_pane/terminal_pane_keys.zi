@@ -1,0 +1,485 @@
+// Terminal input encoding belongs to the application, independently of the
+// platform that supplied a frame's key and Unicode observations.
+Numbers :: #import "std/number_text";
+using Mouse :: #import "terminal_pane_mouse";
+
+TERMINAL_PANE_KEY_ENTER :: 1;
+TERMINAL_PANE_KEY_BACKSPACE :: 2;
+TERMINAL_PANE_KEY_TAB :: 3;
+TERMINAL_PANE_KEY_ESCAPE :: 4;
+TERMINAL_PANE_KEY_UP :: 5;
+TERMINAL_PANE_KEY_DOWN :: 6;
+TERMINAL_PANE_KEY_RIGHT :: 7;
+TERMINAL_PANE_KEY_LEFT :: 8;
+TERMINAL_PANE_KEY_HOME :: 9;
+TERMINAL_PANE_KEY_END :: 10;
+TERMINAL_PANE_KEY_PAGE_UP :: 11;
+TERMINAL_PANE_KEY_PAGE_DOWN :: 12;
+TERMINAL_PANE_KEY_DELETE :: 13;
+TERMINAL_PANE_KEY_INSERT :: 14;
+TERMINAL_PANE_KEY_F1 :: 15;
+TERMINAL_PANE_KEY_F2 :: 16;
+TERMINAL_PANE_KEY_F3 :: 17;
+TERMINAL_PANE_KEY_F4 :: 18;
+TERMINAL_PANE_KEY_F5 :: 19;
+TERMINAL_PANE_KEY_F6 :: 20;
+TERMINAL_PANE_KEY_F7 :: 21;
+TERMINAL_PANE_KEY_F8 :: 22;
+TERMINAL_PANE_KEY_F9 :: 23;
+TERMINAL_PANE_KEY_F10 :: 24;
+TERMINAL_PANE_KEY_F11 :: 25;
+TERMINAL_PANE_KEY_F12 :: 26;
+TERMINAL_PANE_KEY_F13 :: 27;
+TERMINAL_PANE_KEY_F14 :: 28;
+TERMINAL_PANE_KEY_F15 :: 29;
+TERMINAL_PANE_KEY_F16 :: 30;
+TERMINAL_PANE_KEY_F17 :: 31;
+TERMINAL_PANE_KEY_F18 :: 32;
+TERMINAL_PANE_KEY_F19 :: 33;
+TERMINAL_PANE_KEY_F20 :: 34;
+TERMINAL_PANE_KEY_F21 :: 35;
+TERMINAL_PANE_KEY_F22 :: 36;
+TERMINAL_PANE_KEY_F23 :: 37;
+TERMINAL_PANE_KEY_F24 :: 38;
+TERMINAL_PANE_INPUT_KEY_QUEUE_SIZE :: 512;
+
+TerminalPaneKeyMode :: struct {
+    application_cursor_keys: s32
+    application_keypad: s32
+    modify_other_keys: s32
+}
+
+TerminalPaneMappedKey :: struct {
+    key: s32
+    mods: s32
+}
+
+TerminalPaneInputState :: struct {
+    last_control_keys: [512]s32
+}
+
+TerminalPaneInputWriteFn :: #type (userdata: *void, text: *u8,
+    length: s32) -> s32 #c_call;
+TerminalPaneInputKeyFilterFn :: #type (userdata: *void, key: s32,
+    mods: s32) -> s32 #c_call;
+
+TerminalPaneInput :: struct {
+    mode: TerminalPaneKeyMode
+    write_text: TerminalPaneInputWriteFn
+    userdata: *void
+    state: *TerminalPaneInputState
+}
+
+// Platform key numbers are Kryon's common host numbering. Modifier bits
+// are terminal protocol bits; the Kryon adapter converts them explicitly.
+KeyboardFrame :: struct {
+    keys: []s32
+    repeated: []s32
+    down: []s32
+    layout_down: []u32
+    codepoints: []u32
+    mods: s32
+}
+
+#scope_file
+CopySequence :: (out: *u8, out_size: s32, text: string) -> s32 {
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    if text.count >= cast(s64)out_size { return 0 }
+    for index: 0..cast(s32)text.count - 1 { out[index] = text[index] }
+    out[text.count] = 0
+    return cast(s32)text.count
+}
+
+AppendText :: (out: *u8, size: s32, used: *s32, text: string) -> bool {
+    for index: 0..cast(s32)text.count - 1 {
+        if !AppendByte(out, size, used, text[index]) { return false }
+    }
+    return true
+}
+
+AppendDecimal :: (out: *u8, size: s32, used: *s32, value: s64) -> bool {
+    digits: [32]u8
+    return AppendText(out, size, used, Numbers.FormatInteger(value, digits[:]))
+}
+
+// CSI parameter lists are built as bytes, without printf or a host ABI.
+ParameterSequence :: (out: *u8, size: s32, first: s32,
+    modifier: s32, final: u8) -> s32 {
+    if out == null || size <= 0 { return 0 }
+    out[0] = 0
+    used: s32 = 0
+    ok := AppendText(out, size, *used, "\x1b[") &&
+        AppendDecimal(out, size, *used, first)
+    if modifier > 0 {
+        ok = ok && AppendByte(out, size, *used, #char ";") &&
+            AppendDecimal(out, size, *used, modifier)
+    }
+    ok = ok && AppendByte(out, size, *used, final)
+    if !ok { out[0] = 0; return 0 }
+    return used
+}
+
+ModifierNumber :: (mods: s32) -> s32 {
+    modifier: s32 = 1
+    if (mods & TERMINAL_PANE_MOD_SHIFT) != 0 { modifier += 1 }
+    if (mods & TERMINAL_PANE_MOD_ALT) != 0 { modifier += 2 }
+    if (mods & TERMINAL_PANE_MOD_CTRL) != 0 { modifier += 4 }
+    return modifier
+}
+
+ModifiedCodepoint :: (out: *u8, size: s32, codepoint: u32,
+    mods: s32, mode: TerminalPaneKeyMode, special: bool) -> s32 {
+    if mode.modify_other_keys <= 0 || (mods & 7) == 0 { return 0 }
+    if !special && (codepoint < 32 || codepoint == 127) { return 0 }
+    if mode.modify_other_keys == 1 &&
+        (mods & (TERMINAL_PANE_MOD_ALT | TERMINAL_PANE_MOD_CTRL)) == 0 {
+        return 0
+    }
+    used: s32 = 0
+    if !AppendText(out, size, *used, "\x1b[27;") ||
+        !AppendDecimal(out, size, *used, ModifierNumber(mods)) ||
+        !AppendByte(out, size, *used, #char ";") ||
+        !AppendDecimal(out, size, *used, codepoint) ||
+        !AppendByte(out, size, *used, #char "~") {
+        out[0] = 0
+        return -1
+    }
+    return used
+}
+
+ControlCodepoint :: (codepoint: u32, out: *u8) -> bool {
+    if out == null { return false }
+    if codepoint >= #char "a" && codepoint <= #char "z" {
+        out.* = cast(u8)(codepoint - #char "a" + 1); return true
+    }
+    if codepoint >= #char "A" && codepoint <= #char "Z" {
+        out.* = cast(u8)(codepoint - #char "A" + 1); return true
+    }
+    if codepoint == #char " " || codepoint == #char "@" || codepoint == #char "2" {
+        out.* = 0; return true
+    }
+    if codepoint == #char "[" || codepoint == #char "{" || codepoint == #char "3" {
+        out.* = 27; return true
+    }
+    if codepoint == #char "\\" || codepoint == #char "|" || codepoint == #char "4" {
+        out.* = 28; return true
+    }
+    if codepoint == #char "]" || codepoint == #char "}" || codepoint == #char "5" {
+        out.* = 29; return true
+    }
+    if codepoint == #char "^" || codepoint == #char "~" || codepoint == #char "6" {
+        out.* = 30; return true
+    }
+    if codepoint == #char "_" || codepoint == #char "-" ||
+        codepoint == #char "/" || codepoint == #char "7" {
+        out.* = 31; return true
+    }
+    if codepoint == #char "?" || codepoint == #char "8" { out.* = 127; return true }
+    return false
+}
+
+#scope_export
+#program_export
+EncodeTerminalPaneCodepoint :: (out: *u8, out_size: s32,
+    codepoint: u32, mods: s32, mode: TerminalPaneKeyMode) -> s32 {
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    if codepoint == 0 || codepoint > 0x10ffff ||
+        (codepoint >= 0xd800 && codepoint <= 0xdfff) { return 0 }
+    used := ModifiedCodepoint(out, out_size, codepoint, mods, mode, false)
+    if used != 0 { return ifx used > 0 then used else 0 }
+    if (mods & TERMINAL_PANE_MOD_CTRL) != 0 {
+        control: u8
+        if ControlCodepoint(codepoint, *control) {
+            if (mods & TERMINAL_PANE_MOD_ALT) != 0 &&
+                !AppendByte(out, out_size, *used, 27) { return 0 }
+            if !AppendByte(out, out_size, *used, control) { out[0] = 0; return 0 }
+            return used
+        }
+    }
+    if (mods & TERMINAL_PANE_MOD_ALT) != 0 &&
+        !AppendByte(out, out_size, *used, 27) { return 0 }
+    if !AppendUtf8(out, out_size, *used, codepoint) { out[0] = 0; return 0 }
+    out[used] = 0
+    return used
+}
+
+#program_export
+MapTerminalPaneFunctionKey :: (function_index: s32, mods: s32) -> TerminalPaneMappedKey {
+    mapped: TerminalPaneMappedKey
+    mapped.mods = mods
+    if function_index < 1 || function_index > 24 { return mapped }
+    if function_index <= 12 && (mods & TERMINAL_PANE_MOD_SHIFT) != 0 {
+        mapped.key = TERMINAL_PANE_KEY_F13 + function_index - 1
+        mapped.mods = mods & ~TERMINAL_PANE_MOD_SHIFT
+    } else { mapped.key = TERMINAL_PANE_KEY_F1 + function_index - 1 }
+    return mapped
+}
+
+#program_export
+EncodeTerminalPaneKey :: (out: *u8, out_size: s32, key: s32,
+    mods: s32, mode: TerminalPaneKeyMode) -> s32 {
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    final: u8
+    plain: string
+    modifier := ModifierNumber(mods)
+    special: u32
+    if key == TERMINAL_PANE_KEY_ENTER { special = 13; plain = "\r" }
+    else if key == TERMINAL_PANE_KEY_BACKSPACE { special = 127; plain = "\x7f" }
+    else if key == TERMINAL_PANE_KEY_ESCAPE { special = 27; plain = "\x1b" }
+    else if key == TERMINAL_PANE_KEY_TAB {
+        if (mods & TERMINAL_PANE_MOD_SHIFT) != 0 {
+            if (mods & TERMINAL_PANE_MOD_ALT) != 0 {
+                return CopySequence(out, out_size, "\x1b\x1b[Z")
+            }
+            return CopySequence(out, out_size, "\x1b[Z")
+        }
+        plain = "\t"
+    } else if key == TERMINAL_PANE_KEY_UP { final = #char "A" }
+    else if key == TERMINAL_PANE_KEY_DOWN { final = #char "B" }
+    else if key == TERMINAL_PANE_KEY_RIGHT { final = #char "C" }
+    else if key == TERMINAL_PANE_KEY_LEFT { final = #char "D" }
+    else if key == TERMINAL_PANE_KEY_HOME { final = #char "H" }
+    else if key == TERMINAL_PANE_KEY_END { final = #char "F" }
+    else if key == TERMINAL_PANE_KEY_INSERT || key == TERMINAL_PANE_KEY_DELETE ||
+        key == TERMINAL_PANE_KEY_PAGE_UP || key == TERMINAL_PANE_KEY_PAGE_DOWN {
+        code: s32 = 2
+        if key == TERMINAL_PANE_KEY_DELETE { code = 3 }
+        else if key == TERMINAL_PANE_KEY_PAGE_UP { code = 5 }
+        else if key == TERMINAL_PANE_KEY_PAGE_DOWN { code = 6 }
+        parameter: s32 = ifx modifier == 1 then 0 else modifier
+        return ParameterSequence(out, out_size, code, parameter, #char "~")
+    } else if key >= TERMINAL_PANE_KEY_F1 && key <= TERMINAL_PANE_KEY_F24 {
+        codes: [12]s32 = .{11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 23, 24}
+        index := key - TERMINAL_PANE_KEY_F1
+        effective := modifier
+        if index >= 12 {
+            index -= 12
+            if (mods & TERMINAL_PANE_MOD_SHIFT) == 0 { effective += 1 }
+        }
+        if index < 4 {
+            final = cast(u8)(#char "P" + index)
+            if effective == 1 {
+                sequence: [3]u8 = .{27, #char "O", final}
+                return CopySequence(out, out_size, TextView(sequence[:]))
+            }
+            return ParameterSequence(out, out_size, 1, effective, final)
+        }
+        parameter: s32 = ifx effective == 1 then 0 else effective
+        return ParameterSequence(out, out_size, codes[index], parameter, #char "~")
+    }
+    if special != 0 {
+        used := ModifiedCodepoint(out, out_size, special, mods, mode, true)
+        if used != 0 { return ifx used > 0 then used else 0 }
+    }
+    if plain.count > 0 {
+        if (mods & TERMINAL_PANE_MOD_ALT) != 0 {
+            if out_size <= 2 { return 0 }
+            out[0] = 27
+            out[1] = plain[0]
+            out[2] = 0
+            return 2
+        }
+        return CopySequence(out, out_size, plain)
+    }
+    if final != 0 {
+        if modifier != 1 { return ParameterSequence(out, out_size, 1, modifier, final) }
+        marker: u8 = ifx mode.application_cursor_keys != 0 then #char "O" else #char "["
+        sequence: [3]u8 = .{27, marker, final}
+        return CopySequence(out, out_size, TextView(sequence[:]))
+    }
+    return 0
+}
+
+#program_export
+EncodeTerminalPaneKeypad :: (out: *u8, out_size: s32, key: u8,
+    mode: TerminalPaneKeyMode) -> s32 {
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    if mode.application_keypad == 0 {
+        if out_size <= 1 { return 0 }
+        out[0] = key; out[1] = 0; return 1
+    }
+    app: u8
+    if key >= #char "0" && key <= #char "9" { app = cast(u8)(#char "p" + key - #char "0") }
+    else if key == #char "." { app = #char "n" }
+    else if key == #char "/" { app = #char "o" }
+    else if key == #char "*" { app = #char "j" }
+    else if key == #char "-" { app = #char "m" }
+    else if key == #char "+" { app = #char "k" }
+    else if key == #char "=" { app = #char "X" }
+    else if key == 13 { app = #char "M" }
+    if app == 0 { return 0 }
+    sequence: [3]u8 = .{27, #char "O", app}
+    return CopySequence(out, out_size, TextView(sequence[:]))
+}
+
+#program_export
+MakeTerminalPaneInput :: (mode: TerminalPaneKeyMode,
+    write_text: TerminalPaneInputWriteFn, userdata: *void,
+    state: *TerminalPaneInputState) -> TerminalPaneInput {
+    input: TerminalPaneInput
+    input.mode = mode; input.write_text = write_text
+    input.userdata = userdata; input.state = state
+    return input
+}
+
+#scope_file
+InputWrite :: (input: TerminalPaneInput, text: *u8, length: s32) -> s32 {
+    if input.write_text == null || text == null || length <= 0 { return 0 }
+    return input.write_text(input.userdata, text, length)
+}
+
+InputCodepoint :: (input: TerminalPaneInput, codepoint: u32, mods: s32) -> s32 {
+    sequence: [64]u8
+    count := EncodeTerminalPaneCodepoint(*sequence[0], 64, codepoint, mods, input.mode)
+    return InputWrite(input, *sequence[0], count)
+}
+
+InputKey :: (input: TerminalPaneInput, key: s32, mods: s32) -> s32 {
+    sequence: [64]u8
+    count := EncodeTerminalPaneKey(*sequence[0], 64, key, mods, input.mode)
+    return InputWrite(input, *sequence[0], count)
+}
+
+ContainsKey :: (keys: []s32, key: s32) -> bool {
+    for index: 0..cast(s32)keys.count - 1 { if keys[index] == key { return true } }
+    return false
+}
+
+ContainsCodepoint :: (keys: []u32, codepoint: u32) -> bool {
+    for index: 0..cast(s32)keys.count - 1 { if keys[index] == codepoint { return true } }
+    return false
+}
+
+CodepointFiltered :: (blocked: []bool, codepoint: u32) -> bool {
+    if codepoint == 13 && blocked[257] { return true }
+    if codepoint == 9 && blocked[258] { return true }
+    if codepoint == 27 && blocked[256] { return true }
+    key := codepoint
+    if key >= #char "a" && key <= #char "z" { key = key - #char "a" + #char "A" }
+    else if key > 0 && key < 27 { key += 64 }
+    return key < blocked.count && blocked[key]
+}
+
+ControlPlatformCodepoint :: (key: s32) -> u32 {
+    if key >= #char "A" && key <= #char "Z" { return cast(u32)(key - #char "A" + #char "a") }
+    if key == #char " " || key == #char "2" || key == #char "[" ||
+        key == #char "3" || key == #char "\\" || key == #char "4" ||
+        key == #char "]" || key == #char "5" || key == #char "6" ||
+        key == #char "/" || key == #char "-" || key == #char "7" ||
+        key == #char "8" { return cast(u32)key }
+    return 0
+}
+
+PlatformTerminalKey :: (key: s32) -> s32 {
+    if key == 257 { return TERMINAL_PANE_KEY_ENTER }
+    if key == 259 { return TERMINAL_PANE_KEY_BACKSPACE }
+    if key == 258 { return TERMINAL_PANE_KEY_TAB }
+    if key == 256 { return TERMINAL_PANE_KEY_ESCAPE }
+    if key == 265 { return TERMINAL_PANE_KEY_UP }
+    if key == 264 { return TERMINAL_PANE_KEY_DOWN }
+    if key == 262 { return TERMINAL_PANE_KEY_RIGHT }
+    if key == 263 { return TERMINAL_PANE_KEY_LEFT }
+    if key == 268 { return TERMINAL_PANE_KEY_HOME }
+    if key == 269 { return TERMINAL_PANE_KEY_END }
+    if key == 266 { return TERMINAL_PANE_KEY_PAGE_UP }
+    if key == 267 { return TERMINAL_PANE_KEY_PAGE_DOWN }
+    if key == 261 { return TERMINAL_PANE_KEY_DELETE }
+    if key == 260 { return TERMINAL_PANE_KEY_INSERT }
+    return 0
+}
+
+#scope_export
+#program_export
+SendTerminalPaneControlInput :: (input: TerminalPaneInput, platform_key: s32,
+    mods: s32) -> s32 {
+    scalar := ControlPlatformCodepoint(platform_key)
+    if scalar == 0 { return 0 }
+    return InputCodepoint(input, scalar, mods)
+}
+
+// A frame is a borrowed observation, not global platform state. The filter
+// consumes application shortcuts before any terminal encoding takes place.
+PumpTerminalPaneKeyboardInputFiltered :: (input: TerminalPaneInput,
+    frame: KeyboardFrame, filter: TerminalPaneInputKeyFilterFn,
+    filter_userdata: *void) -> s32 {
+    if input.write_text == null { return 0 }
+    queued: [512]bool
+    blocked: [512]bool
+    wrote: s32 = 0
+    for key: cast(s32)1..cast(s32)511 {
+        if !ContainsKey(frame.keys, key) && !ContainsKey(frame.repeated, key) { continue }
+        if filter != null && filter(filter_userdata, key, frame.mods) != 0 {
+            blocked[key] = true; wrote = 1
+        } else { queued[key] = true }
+    }
+    if queued[257] || (input.mode.application_keypad == 0 && queued[335]) {
+        if InputKey(input, TERMINAL_PANE_KEY_ENTER, frame.mods) != 0 { wrote = 1 }
+    }
+    special_keys: [13]s32 = .{259, 258, 256, 265, 264, 262, 263,
+        268, 269, 266, 267, 261, 260}
+    for index: 0..cast(s32)12 {
+        key := special_keys[index]
+        if !queued[key] { continue }
+        terminal_key := PlatformTerminalKey(key)
+        if terminal_key != 0 && InputKey(input, terminal_key, frame.mods) != 0 { wrote = 1 }
+    }
+    for index: 0..cast(s32)11 {
+        if queued[290 + index] {
+            mapped := MapTerminalPaneFunctionKey(index + 1, frame.mods)
+            if InputKey(input, mapped.key, mapped.mods) != 0 { wrote = 1 }
+        }
+    }
+    if input.mode.application_keypad != 0 {
+        keypad: [17]u8 = .{#char "0", #char "1", #char "2", #char "3", #char "4",
+            #char "5", #char "6", #char "7", #char "8", #char "9", #char ".",
+            #char "/", #char "*", #char "-", #char "+", 13, #char "="}
+        keypad_wrote: bool
+        for index: 0..16 {
+            if !queued[320 + index] { continue }
+            sequence: [16]u8
+            count := EncodeTerminalPaneKeypad(*sequence[0], 16, keypad[index], input.mode)
+            if InputWrite(input, *sequence[0], count) != 0 { keypad_wrote = true }
+        }
+        if keypad_wrote { return 1 }
+    }
+    if input.state != null && (frame.mods & TERMINAL_PANE_MOD_CTRL) != 0 &&
+        (frame.mods & TERMINAL_PANE_MOD_SHIFT) == 0 {
+        control_wrote: bool
+        for key: cast(s32)1..cast(s32)511 {
+            codepoint := ControlPlatformCodepoint(key)
+            if codepoint == 0 { continue }
+            down := !blocked[key] && (queued[key] || ContainsKey(frame.down, key) ||
+                ContainsCodepoint(frame.layout_down, codepoint))
+            if down && (queued[key] || input.state.last_control_keys[key] == 0) {
+                if InputCodepoint(input, codepoint, frame.mods) != 0 { control_wrote = true }
+            }
+            input.state.last_control_keys[key] = ifx down then 1 else 0
+        }
+        if control_wrote { return 1 }
+    } else if input.state != null {
+        for key: 0..511 { input.state.last_control_keys[key] = 0 }
+    }
+    for index: 0..cast(s32)frame.codepoints.count - 1 {
+        if CodepointFiltered(blocked[:], frame.codepoints[index]) { continue }
+        if InputCodepoint(input, frame.codepoints[index], frame.mods) != 0 { wrote = 1 }
+    }
+    return wrote
+}
+
+#scope_file
+KeepTerminalKey :: (userdata: *void, key: s32, mods: s32) -> s32 {
+    unused userdata
+    unused key
+    unused mods
+    return 0
+}
+
+#scope_export
+PumpTerminalPaneKeyboardInput :: (input: TerminalPaneInput,
+    frame: KeyboardFrame) -> s32 {
+    return PumpTerminalPaneKeyboardInputFiltered(input, frame, KeepTerminalKey, null)
+}

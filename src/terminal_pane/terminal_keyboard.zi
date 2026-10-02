@@ -1,0 +1,39 @@
+// The application's input boundary reads current Kryon sessions. Terminal
+// protocol encoding remains in terminal_pane_keys, shared by every host.
+Keys :: #import "terminal_pane_keys";
+Sessions :: #import "kryon/session";
+Input :: #import "kryon/tree_input";
+
+TerminalModifiers :: (modifiers: s32) -> s32 {
+    result: s32
+    if (modifiers & Input.KeyModifierShift) != 0 { result |= Keys.TERMINAL_PANE_MOD_SHIFT }
+    if (modifiers & Input.KeyModifierControl) != 0 { result |= Keys.TERMINAL_PANE_MOD_CTRL }
+    if (modifiers & Input.KeyModifierAlt) != 0 { result |= Keys.TERMINAL_PANE_MOD_ALT }
+    return result
+}
+
+// The caller owns these buffers until the returned frame has been consumed.
+// Current Kryon supplies one physical key and up to 32 typed scalars per
+// frame. Unused text must not survive into a later terminal or popup frame.
+CaptureKeyboardFrame :: (session: Sessions.Session, key_buffer: []s32,
+    text_buffer: []u32) -> Keys.KeyboardFrame {
+    frame: Keys.KeyboardFrame
+    if !Sessions.SessionValid(session) { return frame }
+    frame.mods = TerminalModifiers(Input.KeyboardModifiers(session))
+    key := Input.KeyboardTake(session)
+    if key > 0 && key_buffer.count > 0 {
+        key_buffer[0] = key
+        frame.keys = key_buffer[0:1]
+    }
+    length: s32
+    codepoint := Input.TypedCodepointTake(session)
+    while codepoint != 0 {
+        if length < cast(s32)text_buffer.count {
+            text_buffer[length] = cast(u32)codepoint
+            length += 1
+        }
+        codepoint = Input.TypedCodepointTake(session)
+    }
+    frame.codepoints = text_buffer[0:length]
+    return frame
+}

@@ -1,0 +1,199 @@
+using Keys :: #import "terminal_pane_keys";
+Keyboard :: #import "terminal_keyboard";
+Sessions :: #import "kryon/session";
+Input :: #import "kryon/tree_input";
+
+received: [512]u8;
+received_length: s32;
+write_count: s32;
+fail_write: bool;
+checks: s32;
+
+SameBytes :: (value: *u8, count: s32, expected: string) -> bool {
+    if count != expected.count { return false }
+    for index: 0..cast(s32)expected.count - 1 {
+        if value[index] != expected[index] { return false }
+    }
+    return value[count] == 0
+}
+
+KeyCase :: (key: s32, mods: s32, mode: TerminalPaneKeyMode, expected: string) -> bool {
+    // Check the protocol bytes and every insufficient/exact/sufficient capacity.
+    for capacity: cast(s32)0..cast(s32)expected.count + 2 {
+        bytes: [68]u8
+        for index: 0..67 { bytes[index] = 0xa5 }
+        length := EncodeTerminalPaneKey(*bytes[1], capacity, key, mods, mode)
+        if bytes[0] != 0xa5 || bytes[capacity + 1] != 0xa5 { return false }
+        if capacity > expected.count {
+            if !SameBytes(*bytes[1], length, expected) { return false }
+        } else if length != 0 || (capacity > 0 && bytes[1] != 0) { return false }
+        checks += 1
+    }
+    return true
+}
+
+ScalarCase :: (scalar: u32, mods: s32, mode: TerminalPaneKeyMode,
+    expected: string) -> bool {
+    for capacity: cast(s32)0..cast(s32)expected.count + 2 {
+        bytes: [68]u8
+        for index: 0..67 { bytes[index] = 0xa5 }
+        length := EncodeTerminalPaneCodepoint(*bytes[1], capacity, scalar, mods, mode)
+        if bytes[0] != 0xa5 || bytes[capacity + 1] != 0xa5 { return false }
+        if capacity > expected.count {
+            if !SameBytes(*bytes[1], length, expected) { return false }
+        } else if length != 0 || (capacity > 0 && bytes[1] != 0) { return false }
+        checks += 1
+    }
+    return true
+}
+
+Writer :: (userdata: *void, text: *u8, length: s32) -> s32 {
+    unused userdata
+    if fail_write || text == null || length <= 0 ||
+        received_length + length >= 512 { return 0 }
+    for index: 0..length - 1 { received[received_length + index] = text[index] }
+    received_length += length
+    received[received_length] = 0
+    write_count += 1
+    return 1
+}
+
+FilterCopy :: (userdata: *void, key: s32, mods: s32) -> s32 {
+    unused userdata
+    return ifx key == #char "C" && (mods & TERMINAL_PANE_MOD_CTRL) != 0 then 1 else 0
+}
+
+ResetWrites :: () { received_length = 0; received[0] = 0; write_count = 0 }
+
+InputChecks :: () -> bool {
+    mode: TerminalPaneKeyMode
+    state: TerminalPaneInputState
+    input := MakeTerminalPaneInput(mode, Writer, null, *state)
+    frame: KeyboardFrame
+    keys: [1]s32 = .{#char "C"}
+    text: [1]u32 = .{#char "c"}
+    frame.keys = keys[:]; frame.codepoints = text[:]
+    frame.mods = TERMINAL_PANE_MOD_CTRL
+    ResetWrites()
+    if PumpTerminalPaneKeyboardInputFiltered(input, frame, FilterCopy, null) != 1 ||
+        write_count != 0 { return false }
+    keys[0] = #char "A"; text[0] = #char "a"
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 || write_count != 1 ||
+        received_length != 1 || received[0] != 1 { return false }
+    // Consecutive real events/repeats are distinct from a held-key snapshot.
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 || write_count != 2 { return false }
+    frame.keys = keys[0:0]; frame.codepoints = text[0:0]; frame.down = keys[:]
+    if PumpTerminalPaneKeyboardInput(input, frame) != 0 || write_count != 2 { return false }
+    frame.down = keys[0:0]
+    if PumpTerminalPaneKeyboardInput(input, frame) != 0 { return false }
+    frame.down = keys[:]
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 || write_count != 3 { return false }
+    ResetWrites()
+    keys[0] = 257; frame.down = keys[0:0]; frame.keys = keys[:]; frame.mods = 0
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 ||
+        !SameBytes(*received[0], received_length, "\r") { return false }
+    ResetWrites()
+    input.mode.application_keypad = 1; keys[0] = 335
+    text[0] = 13; frame.codepoints = text[:]
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 || write_count != 1 ||
+        !SameBytes(*received[0], received_length, "\x1bOM") { return false }
+    ResetWrites()
+    keys[0] = 290; frame.mods = TERMINAL_PANE_MOD_SHIFT; frame.codepoints = text[0:0]
+    if PumpTerminalPaneKeyboardInput(input, frame) != 1 ||
+        !SameBytes(*received[0], received_length, "\x1b[1;2P") { return false }
+    ResetWrites()
+    keys[0] = 500; frame.keys = keys[:]; frame.mods = 0
+    if PumpTerminalPaneKeyboardInput(input, frame) != 0 || write_count != 0 { return false }
+    fail_write = true; keys[0] = 257
+    if PumpTerminalPaneKeyboardInput(input, frame) != 0 { return false }
+    fail_write = false
+    return true
+}
+
+SessionChecks :: () -> bool {
+    session := Sessions.SessionOpen()
+    if !Sessions.SessionValid(session) { return false }
+    key: [1]s32
+    text: [32]u32
+    Input.KeyboardModifiersSend(session, Input.KeyModifierControl | Input.KeyModifierAlt)
+    Input.KeyboardSend(session, Input.KeyLeft)
+    Input.TypedCodepointSend(session, 0x20ac)
+    Input.TypedCodepointSend(session, 0x1f642)
+    frame := Keyboard.CaptureKeyboardFrame(session, key[:], text[:])
+    ok := frame.mods == (TERMINAL_PANE_MOD_CTRL | TERMINAL_PANE_MOD_ALT) &&
+        frame.keys.count == 1 && frame.keys[0] == Input.KeyLeft &&
+        frame.codepoints.count == 2 && frame.codepoints[0] == 0x20ac &&
+        frame.codepoints[1] == 0x1f642
+    next := Keyboard.CaptureKeyboardFrame(session, key[:], text[:])
+    ok = ok && next.keys.count == 0 && next.codepoints.count == 0
+    // A small caller buffer drains, rather than replaying, the remainder.
+    Input.TypedCodepointSend(session, #char "a")
+    Input.TypedCodepointSend(session, #char "b")
+    next = Keyboard.CaptureKeyboardFrame(session, key[:], text[0:1])
+    ok = ok && next.codepoints.count == 1 && next.codepoints[0] == #char "a"
+    next = Keyboard.CaptureKeyboardFrame(session, key[:], text[:])
+    ok = ok && next.codepoints.count == 0
+    Sessions.SessionClose(session)
+    return ok
+}
+
+#program_export
+main :: () -> s32 {
+    mode: TerminalPaneKeyMode
+    plain: [14]string = .{"\r", "\x7f", "\t", "\x1b", "\x1b[A", "\x1b[B",
+        "\x1b[C", "\x1b[D", "\x1b[H", "\x1b[F", "\x1b[5~", "\x1b[6~",
+        "\x1b[3~", "\x1b[2~"}
+    for index: 0..cast(s32)13 {
+        if !KeyCase(index + 1, 0, mode, plain[index]) { print("plain key % failed\n", index + 1); return 1 }
+    }
+    normal: [12]string = .{"\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS", "\x1b[15~",
+        "\x1b[17~", "\x1b[18~", "\x1b[19~", "\x1b[20~", "\x1b[21~", "\x1b[23~", "\x1b[24~"}
+    shifted: [12]string = .{"\x1b[1;2P", "\x1b[1;2Q", "\x1b[1;2R", "\x1b[1;2S",
+        "\x1b[15;2~", "\x1b[17;2~", "\x1b[18;2~", "\x1b[19;2~", "\x1b[20;2~",
+        "\x1b[21;2~", "\x1b[23;2~", "\x1b[24;2~"}
+    for index: 0..cast(s32)11 {
+        if !KeyCase(TERMINAL_PANE_KEY_F1 + index, 0, mode, normal[index]) ||
+            !KeyCase(TERMINAL_PANE_KEY_F13 + index, 0, mode, shifted[index]) ||
+            !KeyCase(TERMINAL_PANE_KEY_F1 + index, TERMINAL_PANE_MOD_SHIFT, mode, shifted[index]) {
+            print("function key % failed\n", index + 1); return 2
+        }
+        mapped := MapTerminalPaneFunctionKey(index + 1, TERMINAL_PANE_MOD_SHIFT | TERMINAL_PANE_MOD_CTRL)
+        if mapped.key != TERMINAL_PANE_KEY_F13 + index || mapped.mods != TERMINAL_PANE_MOD_CTRL { return 3 }
+    }
+    if !KeyCase(TERMINAL_PANE_KEY_TAB, TERMINAL_PANE_MOD_SHIFT, mode, "\x1b[Z") ||
+        !KeyCase(TERMINAL_PANE_KEY_TAB, TERMINAL_PANE_MOD_SHIFT | TERMINAL_PANE_MOD_ALT, mode, "\x1b\x1b[Z") ||
+        !KeyCase(TERMINAL_PANE_KEY_UP, 7, mode, "\x1b[1;8A") ||
+        !KeyCase(TERMINAL_PANE_KEY_F13, TERMINAL_PANE_MOD_CTRL, mode, "\x1b[1;6P") { return 4 }
+    mode.application_cursor_keys = 1
+    if !KeyCase(TERMINAL_PANE_KEY_HOME, 0, mode, "\x1bOH") ||
+        !KeyCase(TERMINAL_PANE_KEY_END, 0, mode, "\x1bOF") { return 5 }
+    if !ScalarCase(#char "a", TERMINAL_PANE_MOD_CTRL, mode, "\x01") ||
+        !ScalarCase(#char " ", TERMINAL_PANE_MOD_CTRL, mode, "\0") ||
+        !ScalarCase(#char "/", TERMINAL_PANE_MOD_CTRL | TERMINAL_PANE_MOD_ALT, mode, "\x1b\x1f") ||
+        !ScalarCase(0x20ac, TERMINAL_PANE_MOD_ALT, mode, "\x1b\xe2\x82\xac") ||
+        !ScalarCase(0x1f642, 0, mode, "\xf0\x9f\x99\x82") { return 6 }
+    mode.modify_other_keys = 1
+    if !ScalarCase(#char "A", TERMINAL_PANE_MOD_SHIFT, mode, "A") ||
+        !ScalarCase(#char "c", TERMINAL_PANE_MOD_CTRL, mode, "\x1b[27;5;99~") ||
+        !KeyCase(TERMINAL_PANE_KEY_ENTER, TERMINAL_PANE_MOD_ALT, mode, "\x1b[27;3;13~") { return 7 }
+    mode.modify_other_keys = 2
+    if !ScalarCase(#char "A", TERMINAL_PANE_MOD_SHIFT, mode, "\x1b[27;2;65~") ||
+        !KeyCase(TERMINAL_PANE_KEY_BACKSPACE, 7, mode, "\x1b[27;8;127~") { return 8 }
+    output: [32]u8
+    invalid: [4]u32 = .{0, 0xd800, 0xdfff, 0x110000}
+    for index: 0..3 {
+        output[0] = 99
+        if EncodeTerminalPaneCodepoint(*output[0], 32, invalid[index], 0, mode) != 0 || output[0] != 0 { return 9 }
+    }
+    mode.application_keypad = 1
+    keypad: string = "0123456789./*-+=\r"
+    suffix: string = "pqrstuvwxynojmkXM"
+    for index: 0..cast(s32)keypad.count - 1 {
+        if EncodeTerminalPaneKeypad(*output[0], 32, keypad[index], mode) != 3 ||
+            output[0] != 27 || output[1] != #char "O" || output[2] != suffix[index] || output[3] != 0 { return 10 }
+    }
+    if !InputChecks() { print("input routing failed\n"); return 11 }
+    if !SessionChecks() { print("Kryon session input failed\n"); return 12 }
+    print("Terminal keyboard protocol, bounds, callbacks and Kryon input passed (% capacity checks)\n", checks)
+    return 0
+}

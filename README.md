@@ -8,11 +8,13 @@ not in Kryon.
 ```sh
 make pane-ziran-test
 make clipboard-plan9-c
+TAIJI_DIR=/path/to/taijiosnet/taiji make keys-plan9-test
 ```
 
-These independent clipboard and selection tests use the locked Ziran
-toolchain or a canonical local override. The Plan 9 target emits C; it does
-not prove native compilation or execution.
+These independent clipboard, selection, and keyboard tests use the locked Ziran
+toolchain or a canonical local override. The clipboard Plan 9 target emits C. The keyboard native gate compiles
+and executes the source and saved-IR fixture with actual 8c/8l in a
+headless Taiji guest; it never uses the live desktop display.
 
 The full `make`, `make run`, `make test`, and `make install` routes retain
 the transition application's legacy Kryon/k2c pipeline. They currently need
