@@ -1,6 +1,6 @@
 [package]
 name = "t9"
-module_roots = ["src/terminal_pane", "tests"]
+module_roots = ["src", "src/terminal_pane", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"

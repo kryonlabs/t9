@@ -4,7 +4,6 @@
 #import "terminal_pty.h"
 #import "terminal_screen.h"
 #import "terminal_sixel.h"
-#import "signal.h"
 #import "stdlib.h"
 #import "string.h"
 
@@ -126,10 +125,10 @@ terminal_close :: (terminal: *TerminalState) #export {
         terminal->fd = -1
     }
     if terminal->running != 0 && terminal->pid > 0 {
-        TerminalPtySignal(terminal->pid, SIGHUP)
-        TerminalPtySignal(terminal->pid, SIGTERM)
+        TerminalPtySignal(terminal->pid, 1)
+        TerminalPtySignal(terminal->pid, 15)
         if TerminalPtyWaitExit(terminal->pid, 200) == 0 {
-            TerminalPtySignal(terminal->pid, SIGKILL)
+            TerminalPtySignal(terminal->pid, 9)
             TerminalPtyWaitExit(terminal->pid, 500)
         }
     }

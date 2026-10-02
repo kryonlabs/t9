@@ -4,9 +4,9 @@
 /*
  * Native process boundary. These calls are the only places t9 talks
  * to operating-system process and file-descriptor services for the
- * terminal; every parser, session, and interface decision lives in
- * .kry. Implementations: terminal_pty.c (Linux PTY) and
- * terminal_pty_plan9.c (Plan 9 files and processes).
+ * terminal. Implementations are current Ziran: terminal_pty_linux.zi and
+ * terminal_pty_plan9.zi. This declaration-only header serves the remaining
+ * legacy engine during its migration; generated output is built from .zi.
  */
 
 #include <stddef.h>

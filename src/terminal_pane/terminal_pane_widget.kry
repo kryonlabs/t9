@@ -2,7 +2,7 @@
 #import "terminal_pane.h"
 #import "ui_internal.h"
 #import "ui_style_internal.h"
-#import "runtime/terminal_pane.h"
+#import "terminal_pane/terminal_pane_metrics.h"
 #import "runtime/style.h"
 #import "stdio.h"
 

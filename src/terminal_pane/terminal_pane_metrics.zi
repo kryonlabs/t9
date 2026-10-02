@@ -1,0 +1,122 @@
+using Geometry :: #import "kryon/geometry";
+
+TerminalPaneMetricsPolicy :: struct {
+    font_size: s32
+    line_gap: s32
+    padding: s32
+    min_cols: s32
+    min_rows: s32
+}
+
+TerminalPaneScrollIndicatorMetrics :: struct {
+    font_size: s32
+    right_offset: s32
+    top_offset: s32
+    width_pad: s32
+    height: s32
+    text_x: s32
+    text_y: s32
+}
+
+TerminalPaneScale :: (scale: float32) -> float32 {
+    if scale <= 0.0 { return 1.0 }
+    return scale
+}
+
+TerminalPanePx :: (value: float32, scale: float32) -> s32 {
+    return cast(s32)(value * TerminalPaneScale(scale))
+}
+
+#program_export
+TerminalPaneMetricsPolicyFor :: (scale: float32) -> TerminalPaneMetricsPolicy {
+    policy: TerminalPaneMetricsPolicy
+    policy.font_size = TerminalPanePx(13.0, scale)
+    policy.line_gap = TerminalPanePx(2.0, scale)
+    policy.padding = TerminalPanePx(6.0, scale)
+    policy.min_cols = 8
+    policy.min_rows = 4
+    return policy
+}
+
+#program_export
+TerminalPaneFontSizeFor :: (requested_font_size: s32,
+    policy: TerminalPaneMetricsPolicy) -> s32 {
+    if requested_font_size > 0 { return requested_font_size }
+    return policy.font_size
+}
+
+#program_export
+TerminalPaneLineHeightFor :: (measured_line_height: s32, font_size: s32,
+    policy: TerminalPaneMetricsPolicy) -> s32 {
+    min_height: s32 = font_size + policy.line_gap
+    if measured_line_height < min_height { return min_height }
+    return measured_line_height
+}
+
+#program_export
+TerminalPanePaddingFor :: (requested_padding: s32,
+    policy: TerminalPaneMetricsPolicy) -> s32 {
+    if requested_padding >= 0 { return requested_padding }
+    return policy.padding
+}
+
+#program_export
+TerminalPaneContentBoundsFor :: (bounds: Rectangle, top_inset: s32,
+    padding: s32) -> Rectangle {
+    if top_inset < 0 { top_inset = 0 }
+    if padding < 0 { padding = 0 }
+    content: Rectangle
+    content.x = bounds.x + cast(float32)padding
+    content.y = bounds.y + cast(float32)(top_inset + padding)
+    content.width = bounds.width - cast(float32)(padding * 2)
+    content.height = bounds.height - cast(float32)(top_inset + padding * 2)
+    if content.width < 0.0 { content.width = 0.0 }
+    if content.height < 0.0 { content.height = 0.0 }
+    return content
+}
+
+#program_export
+TerminalPaneClampCols :: (cols: s32, max_cols: s32,
+    policy: TerminalPaneMetricsPolicy) -> s32 {
+    if cols < policy.min_cols { cols = policy.min_cols }
+    if max_cols > 0 && cols > max_cols { cols = max_cols }
+    return cols
+}
+
+#program_export
+TerminalPaneClampRows :: (rows: s32, max_rows: s32,
+    policy: TerminalPaneMetricsPolicy) -> s32 {
+    if rows < policy.min_rows { rows = policy.min_rows }
+    if max_rows > 0 && rows > max_rows { rows = max_rows }
+    return rows
+}
+
+#program_export
+TerminalPaneScrollIndicatorMetricsFor :: (scale: float32) -> TerminalPaneScrollIndicatorMetrics {
+    metrics: TerminalPaneScrollIndicatorMetrics
+    metrics.font_size = TerminalPanePx(13.0, scale)
+    metrics.right_offset = TerminalPanePx(16.0, scale)
+    metrics.top_offset = TerminalPanePx(6.0, scale)
+    metrics.width_pad = TerminalPanePx(10.0, scale)
+    metrics.height = TerminalPanePx(22.0, scale)
+    metrics.text_x = TerminalPanePx(5.0, scale)
+    metrics.text_y = TerminalPanePx(4.0, scale)
+    return metrics
+}
+
+#program_export
+TerminalPaneScrollIndicatorBoundsFor :: (viewport: Rectangle,
+    label_width: s32, metrics: TerminalPaneScrollIndicatorMetrics) -> Rectangle {
+    badge: Rectangle
+    if viewport.width <= 0.0 || viewport.height <= 0.0 || label_width <= 0 {
+        return badge
+    }
+    badge.x = viewport.x + viewport.width - cast(float32)label_width -
+        cast(float32)metrics.right_offset
+    badge.y = viewport.y + cast(float32)metrics.top_offset
+    badge.width = cast(float32)(label_width + metrics.width_pad)
+    badge.height = cast(float32)metrics.height
+    if badge.x < viewport.x { badge.x = viewport.x }
+    if badge.width > viewport.width { badge.width = viewport.width }
+    return badge
+}

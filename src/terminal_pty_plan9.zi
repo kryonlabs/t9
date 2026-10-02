@@ -1,0 +1,272 @@
+// Plan 9 terminal transport. A reader drains the child's output to an owned
+// file so the UI thread can poll without blocking on a pipe or sharing memory.
+Text :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+File :: #import "std/file_plan9";
+Number :: #import "std/number_text";
+
+#scope_file
+libc :: #system_library "libc";
+Pipe :: (descriptors: *s32) -> s32 #foreign libc "pipe";
+Fork :: (flags: s32) -> s32 #foreign libc "rfork";
+Open :: (path: *s8, flags: s32) -> s32 #foreign libc "open";
+Create :: (path: *s8, flags: s32, permissions: u32) -> s32 #foreign libc "create";
+Close :: (descriptor: s32) -> s32 #foreign libc "close";
+Remove :: (path: *s8) -> s32 #foreign libc "remove";
+Duplicate :: (descriptor: s32, target: s32) -> s32 #foreign libc "dup";
+ChangeDirectory :: (path: *s8) -> s32 #foreign libc "chdir";
+Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+SetEnvironment :: (name: *s8, value: *s8) -> s32 #foreign libc "putenv";
+Execute :: (path: *s8, arguments: **s8) -> s32 #foreign libc "exec";
+Exit :: (status: *s8) #foreign libc "exits";
+Pid :: () -> s32 #foreign libc "getpid";
+Read :: (descriptor: s32, output: *void, capacity: s32) -> s32 #foreign libc "read";
+ReadAt :: (descriptor: s32, output: *void, capacity: s32, offset: s64) -> s32 #foreign libc "pread";
+Write :: (descriptor: s32, input: *void, count: s32) -> s32 #foreign libc "write";
+PostNote :: (kind: s32, pid: s32, text: *s8) -> s32 #foreign libc "postnote";
+Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+
+Session :: struct {
+    used: bool
+    input: s32
+    output: s32
+    child: s32
+    reader: s32
+    offset: s64
+    spool: [128]u8
+    done: [128]u8
+}
+sessions: [16]Session;
+generation: s32;
+
+Bytes :: (value: string) -> *s8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return cast(*s8)descriptor.data
+}
+
+Path :: (prefix: string, pid: s32, serial: s32, suffix: string, output: []u8) -> bool {
+    first: [32]u8; second: [32]u8
+    pid_text := Number.FormatInteger(cast(s64)pid, first[:])
+    serial_text := Number.FormatInteger(cast(s64)serial, second[:])
+    parts: [5]string = .{prefix, pid_text, ".", serial_text, suffix}
+    used: s64
+    for part: 0..4 {
+        if used + parts[part].count >= output.count { return false }
+        for index: cast(s64)0..parts[part].count - 1 {
+            output[used] = parts[part][index]; used += 1
+        }
+    }
+    output[used] = 0
+    return true
+}
+
+OwnedDescriptor :: (descriptor: s32, mode: s32) -> s32 {
+    path: [64]u8
+    digits: [32]u8
+    number := Number.FormatInteger(cast(s64)descriptor, digits[:])
+    prefix := "#d/"
+    for index: 0..2 { path[index] = prefix[index] }
+    for index: cast(s64)0..number.count - 1 { path[index + 3] = number[index] }
+    path[number.count + 3] = 0
+    result := Open(cast(*s8)(*path[0]), mode | 32)
+    Close(descriptor)
+    return result
+}
+
+FindDescriptor :: (descriptor: s32) -> *Session {
+    for index: 0..15 {
+        if sessions[index].used && sessions[index].input == descriptor { return *sessions[index] }
+    }
+    return null
+}
+
+FindChild :: (pid: s32) -> *Session {
+    if pid <= 0 { return null }
+    for index: 0..15 {
+        if sessions[index].used && sessions[index].child == pid { return *sessions[index] }
+    }
+    return null
+}
+
+RunChild :: (input: s32, output: s32, cwd: *u8, shell: *u8, command: *u8) {
+    if Duplicate(input, 0) < 0 || Duplicate(output, 1) < 0 || Duplicate(output, 2) < 0 {
+        Exit(Bytes("dup")); return
+    }
+    if input > 2 { Close(input) }
+    if output > 2 && output != input { Close(output) }
+    if cwd != null && cwd[0] != 0 && ChangeDirectory(cast(*s8)cwd) != 0 { Exit(Bytes("cwd")); return }
+    SetEnvironment(Bytes("term"), Bytes("xterm-256color"))
+    SetEnvironment(Bytes("TERM"), Bytes("xterm-256color"))
+    SetEnvironment(Bytes("COLORTERM"), Bytes("truecolor"))
+    run_shell := shell
+    if run_shell == null || run_shell[0] == 0 { run_shell = cast(*u8)Environment(Bytes("shell")) }
+    if run_shell == null || run_shell[0] == 0 { run_shell = cast(*u8)Environment(Bytes("SHELL")) }
+    if run_shell == null || run_shell[0] == 0 { run_shell = cast(*u8)Bytes("/bin/rc") }
+    arguments: [4]*s8
+    arguments[0] = cast(*s8)run_shell
+    if command != null && command[0] != 0 {
+        arguments[1] = Bytes("-c"); arguments[2] = cast(*s8)command
+    } else { arguments[1] = Bytes("-i") }
+    Execute(cast(*s8)run_shell, *arguments[0])
+    Exit(Bytes("exec"))
+}
+
+DrainChild :: (output: s32, spool: s32, done: *u8) {
+    buffer: [4096]u8
+    failed: bool
+    while true {
+        count := Read(output, cast(*void)(*buffer[0]), 4096)
+        if count <= 0 { break }
+        used: s32
+        while used < count {
+            written := Write(spool, cast(*void)(*buffer[used]), count - used)
+            if written <= 0 { failed = true; break }
+            used += written
+        }
+        if failed { break }
+    }
+    Close(spool); Close(output)
+    marker := Create(cast(*s8)done, 1 | 16 | 32, 0x180)
+    if marker >= 0 { Close(marker) }
+    if failed { Exit(Bytes("write")) }
+    else { Exit(null) }
+}
+
+#scope_export
+#program_export
+TerminalPtyOpen :: (cwd: *u8, shell: *u8, command: *u8, cols: s32, rows: s32, output_pid: *s32) -> s32 {
+    unused cols; unused rows
+    if output_pid == null { return -1 }
+    output_pid.* = -1
+    slot: s32 = -1
+    for index: 0..15 { if !sessions[index].used { slot = cast(s32)index; break } }
+    if slot < 0 { return -1 }
+    input: [2]s32; output: [2]s32
+    if Pipe(*input[0]) < 0 { return -1 }
+    if Pipe(*output[0]) < 0 { Close(input[0]); Close(input[1]); return -1 }
+    input[1] = OwnedDescriptor(input[1], 1)
+    output[0] = OwnedDescriptor(output[0], 0)
+    if input[1] < 0 || output[0] < 0 {
+        Close(input[0]); Close(input[1]); Close(output[0]); Close(output[1]); return -1
+    }
+    session := *sessions[slot]
+    session.* = Session.{}
+    generation += 1
+    if !Path("/tmp/t9.", Pid(), generation, ".out", session.spool[:]) ||
+       !Path("/tmp/t9.", Pid(), generation, ".done", session.done[:]) {
+        Close(input[0]); Close(input[1]); Close(output[0]); Close(output[1]); return -1
+    }
+    Remove(cast(*s8)(*session.done[0]))
+    spool := Create(cast(*s8)(*session.spool[0]), 1 | 16 | 32, 0x180)
+    if spool < 0 { Close(input[0]); Close(input[1]); Close(output[0]); Close(output[1]); return -1 }
+    session.output = Open(cast(*s8)(*session.spool[0]), 0 | 32)
+    if session.output < 0 {
+        Close(spool); Remove(cast(*s8)(*session.spool[0]))
+        Close(input[0]); Close(input[1]); Close(output[0]); Close(output[1]); return -1
+    }
+    // RFPROC | RFFDG | RFENVG | RFNOTEG | RFNAMEG | RFNOWAIT. A private
+    // namespace also permits /proc/pid/notepg when the host inherited the
+    // protected initial namespace. Notes still target only this child group.
+    pid := Fork(16 | 4 | 2 | 8 | 1 | 64)
+    if pid == 0 {
+        Close(input[1]); Close(output[0]); Close(spool); Close(session.output)
+        RunChild(input[0], output[1], cwd, shell, command)
+        return -1
+    }
+    Close(input[0]); Close(output[1])
+    if pid < 0 {
+        Close(input[1]); Close(output[0]); Close(spool); Close(session.output)
+        Remove(cast(*s8)(*session.spool[0])); return -1
+    }
+    session.input = input[1]; session.child = pid; session.used = true
+    reader := Fork(16 | 4 | 2 | 8 | 1 | 64)
+    if reader == 0 {
+        Close(session.input); Close(session.output)
+        DrainChild(output[0], spool, *session.done[0])
+        return -1
+    }
+    Close(output[0]); Close(spool)
+    if reader < 0 { TerminalPtyClose(session.input); return -1 }
+    session.reader = reader
+    output_pid.* = pid
+    return session.input
+}
+
+#program_export
+TerminalPtyWrite :: (descriptor: s32, data: *void, count: s32) -> s32 {
+    session := FindDescriptor(descriptor)
+    if session == null || data == null || count <= 0 { return 0 }
+    written := Write(descriptor, data, count)
+    return ifx written > 0 then written else 0
+}
+
+#program_export
+TerminalPtyRead :: (descriptor: s32, data: *void, capacity: s32) -> s32 {
+    session := FindDescriptor(descriptor)
+    if session == null || data == null || capacity <= 0 { return -1 }
+    count := ReadAt(session.output, data, capacity, session.offset)
+    if count > 0 { session.offset += cast(s64)count; return count }
+    if count < 0 || File.PathExists(Text.TextFromCString(*session.done[0])) { return -1 }
+    return 0
+}
+
+#program_export
+TerminalPtyResize :: (descriptor: s32, cols: s32, rows: s32) {
+    unused descriptor; unused cols; unused rows
+    // Plan 9 pipes have no kernel window-size ioctl; the engine resizes cells.
+}
+
+#program_export
+TerminalPtyChildExited :: (pid: s32) -> s32 {
+    session := FindChild(pid)
+    if session == null { return 1 }
+    return ifx File.PathExists(Text.TextFromCString(*session.done[0])) then 1 else 0
+}
+
+#program_export
+TerminalPtySignal :: (pid: s32, number: s32) {
+    session := FindChild(pid)
+    if session == null { return }
+    note := "hangup"
+    if number == 2 { note = "interrupt" }
+    else if number == 9 { note = "kill" }
+    else if number == 15 { note = "term" }
+    // PNGROUP targets this supervised child's private note group only.
+    PostNote(2, session.child, Bytes(note))
+}
+
+#program_export
+TerminalPtyWaitExit :: (pid: s32, timeout_ms: s32) -> s32 {
+    if pid <= 0 { return 1 }
+    path: [64]u8
+    digits: [32]u8
+    text := Number.FormatInteger(cast(s64)pid, digits[:])
+    prefix := "/proc/"; suffix := "/status"
+    for index: 0..5 { path[index] = prefix[index] }
+    for index: cast(s64)0..text.count - 1 { path[index + 6] = text[index] }
+    for index: 0..6 { path[index + text.count + 6] = suffix[index] }
+    path[text.count + 13] = 0
+    elapsed: s32
+    while File.PathExists(Text.TextFromCString(*path[0])) {
+        if elapsed >= timeout_ms { return 0 }
+        Pause(10); elapsed += 10
+    }
+    return 1
+}
+
+#program_export
+TerminalPtyClose :: (descriptor: s32) {
+    session := FindDescriptor(descriptor)
+    if session == null { return }
+    if session.child > 0 { TerminalPtySignal(session.child, 1) }
+    if session.reader > 0 { PostNote(2, session.reader, Bytes("hangup")) }
+    Close(session.input); Close(session.output)
+    if TerminalPtyWaitExit(session.child, 200) == 0 {
+        TerminalPtySignal(session.child, 9); TerminalPtyWaitExit(session.child, 500)
+    }
+    if TerminalPtyWaitExit(session.reader, 200) == 0 {
+        PostNote(2, session.reader, Bytes("kill")); TerminalPtyWaitExit(session.reader, 500)
+    }
+    Remove(cast(*s8)(*session.spool[0])); Remove(cast(*s8)(*session.done[0]))
+    session.used = false
+}

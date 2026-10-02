@@ -1,0 +1,88 @@
+#import "terminal_pty_linux"
+Text :: #import "std/byte_text_linux";
+
+libc :: #system_library "c";
+Pause :: (microseconds: u32) -> s32 #foreign libc "usleep";
+Ioctl :: (descriptor: s32, request: usize, output: *void) -> s32 #foreign libc "ioctl";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+
+WindowSize :: struct { rows: u16; cols: u16; width: u16; height: u16; }
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Contains :: (bytes: []u8, expected: string) -> bool {
+    for start: cast(s64)0..bytes.count - expected.count {
+        same: bool = true
+        for index: cast(s64)0..expected.count - 1 {
+            if bytes[start + index] != expected[index] { same = false; break }
+        }
+        if same { return true }
+    }
+    return false
+}
+
+ReadUntil :: (descriptor: s32, expected: string, output: []u8) -> bool {
+    used: s32
+    for attempt: 0..149 {
+        count := TerminalPtyRead(descriptor, cast(*void)(*output[used]), cast(s32)output.count - used)
+        if count > 0 {
+            used += count
+            if Contains(output[0:used], expected) { return true }
+            if used >= cast(s32)output.count { return false }
+        }
+        if count < 0 { return false }
+        Pause(10000)
+    }
+    return false
+}
+
+CloseChild :: (descriptor: s32, pid: s32) {
+    TerminalPtyClose(descriptor)
+    TerminalPtySignal(pid, 1); TerminalPtySignal(pid, 15)
+    if TerminalPtyWaitExit(pid, 200) == 0 { TerminalPtySignal(pid, 9); TerminalPtyWaitExit(pid, 500) }
+}
+
+#program_export
+main :: () -> s32 {
+    shell := Environment(Bytes("T9_TEST_SHELL"))
+    if shell == null { return 99 }
+    path: [128]u8
+    if !TerminalChildPath(":/plan9/bin:/usr/bin::", "/plan9", path[:]) || Text.TextFromCString(*path[0]) != ":/usr/bin::" { return 16 }
+    if !TerminalChildPath("/plan9/bin:", "/plan9", path[:]) || path[0] != 0 { return 17 }
+    if TerminalChildPath("/plan9/bin", "/plan9", path[:]) || TerminalChildPath("/plan9/bin-extra:/usr/bin", "/plan9", path[:]) { return 18 }
+    if TerminalChildPath("/plan9/bin:/usr/bin", "/plan9", path[0:4]) { return 19 }
+    if TerminalPtyOpen(null, null, null, 80, 24, null) != -1 { return 1 }
+    if TerminalPtyRead(-1, null, 0) != -1 || TerminalPtyWrite(-1, null, 0) != 0 || TerminalPtyChildExited(-1) != 1 || TerminalPtyWaitExit(-1, 0) != 1 { return 2 }
+    pid: s32
+    descriptor := TerminalPtyOpen(Bytes("/"), shell, Bytes("printf PTY_SMOKE_OK; pwd; exit"), 80, 24, *pid)
+    if descriptor < 0 || pid <= 0 { return 3 }
+    output: [4096]u8
+    saw := ReadUntil(descriptor, "PTY_SMOKE_OK/", output[:])
+    if TerminalPtyWaitExit(pid, 1000) != 1 { CloseChild(descriptor, pid); return 4 }
+    TerminalPtyClose(descriptor)
+    if !saw { return 5 }
+
+    descriptor = TerminalPtyOpen(Bytes("/"), shell, Bytes("printf READY; read input; printf 'GOT:%s' \"$input\"; exit"), 40, 8, *pid)
+    if descriptor < 0 || pid <= 0 { return 6 }
+    size: WindowSize
+    if Ioctl(descriptor, 0x5413, cast(*void)(*size)) != 0 || size.rows != 8 || size.cols != 40 { CloseChild(descriptor, pid); return 7 }
+    TerminalPtyResize(descriptor, 90, 30)
+    if Ioctl(descriptor, 0x5413, cast(*void)(*size)) != 0 || size.rows != 30 || size.cols != 90 { CloseChild(descriptor, pid); return 8 }
+    if !ReadUntil(descriptor, "READY", output[:]) { CloseChild(descriptor, pid); return 9 }
+    text := "hello terminal\n"
+    if TerminalPtyWrite(descriptor, cast(*void)Bytes(text), cast(s32)text.count) != cast(s32)text.count { CloseChild(descriptor, pid); return 10 }
+    saw = ReadUntil(descriptor, "GOT:hello terminal", output[:])
+    CloseChild(descriptor, pid)
+    if !saw { return 11 }
+
+    descriptor = TerminalPtyOpen(Bytes("/"), shell, Bytes("printf READY; sleep 30"), 80, 24, *pid)
+    if descriptor < 0 || pid <= 0 { return 12 }
+    if !ReadUntil(descriptor, "READY", output[:]) { CloseChild(descriptor, pid); return 13 }
+    if TerminalPtyWaitExit(pid, 0) != 0 { CloseChild(descriptor, pid); return 14 }
+    TerminalPtySignal(pid, 15)
+    if TerminalPtyWaitExit(pid, 1000) != 1 { CloseChild(descriptor, pid); return 15 }
+    TerminalPtyClose(descriptor)
+    return 0
+}

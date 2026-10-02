@@ -46,10 +46,11 @@ PANE_ZI := $(sort $(wildcard src/terminal_pane/*.zi))
 PANE_ZI_C := $(patsubst src/%.zi,$(BUILD_DIR)/generated/src/%.c,$(PANE_ZI))
 PANE_ZI_H := $(PANE_ZI_C:.c=.h)
 PANE_ZI_OBJS := $(PANE_ZI_C:.c=.o)
-PANE_RUNTIME_C = $(BUILD_DIR)/generated/src/runtime/terminal_pane.c
-PANE_RUNTIME_H = $(PANE_RUNTIME_C:.c=.h)
-PANE_RUNTIME_OBJ = $(PANE_RUNTIME_C:.c=.o)
-PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_ZI_OBJS) $(PANE_RUNTIME_OBJ)
+PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_ZI_OBJS)
+PTY_GEN := $(BUILD_DIR)/generated/pty
+PTY_MODULES := terminal_pty_linux std_byte_text_linux std_c_string
+PTY_C := $(addprefix $(PTY_GEN)/,$(addsuffix .c,$(PTY_MODULES)))
+PTY_OBJS := $(PTY_C:.c=.o)
 ENGINE_KRY := $(sort $(wildcard src/engine/*.kry))
 ENGINE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(ENGINE_KRY))
 ENGINE_KRY_H := $(ENGINE_KRY_C:.c=.h)
@@ -70,7 +71,6 @@ HOST_LIB = $(BUILD_DIR)/lib/libt9_host.a
 HOST_SO = $(BUILD_DIR)/lib/t9-host.so
 TEST = $(BUILD_DIR)/tests/terminal_test
 SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
-PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
 PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
 PANE_TEXT_TEST = $(BUILD_DIR)/tests/terminal_pane_text_test
 PANE_TEXT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_text
@@ -157,10 +157,10 @@ PANE_REFLOW_TEST_C = $(PANE_REFLOW_TEST_GEN)/terminal_pane_reflow.c \
 	$(PANE_REFLOW_TEST_GEN)/terminal_pane_reflow_test.c
 PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
-SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
-OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
+SRC_FILES := $(wildcard src/*.c)
+OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PTY_OBJS) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
 HOST_SRC_FILES := $(filter-out src/main.c,$(SRC_FILES))
-HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
+HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PTY_OBJS) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
 # Pick a module's object from its .kry port when present, else its C file.
 mod_obj = $(if $(wildcard src/engine/$(1).kry),$(BUILD_DIR)/generated/src/engine/$(1).o,$(if $(wildcard src/app/$(1).kry),$(BUILD_DIR)/generated/src/app/$(1).o,$(BUILD_DIR)/src/$(1).o))
 TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(call mod_obj,app_config) \
@@ -175,7 +175,7 @@ TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(call mod_obj,app_config) \
 	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
 	$(call mod_obj,parser) \
-	$(BUILD_DIR)/src/terminal_pty.o \
+	$(PTY_OBJS) \
 	$(call mod_obj,process) \
 	$(call mod_obj,app_session) \
 	$(call mod_obj,app_input) $(call mod_obj,app_selection) \
@@ -194,7 +194,7 @@ PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
 	$(call mod_obj,sgr) $(call mod_obj,screen) \
 	$(call mod_obj,text) \
 	$(call mod_obj,parser) \
-	$(BUILD_DIR)/src/terminal_pty.o \
+	$(PTY_OBJS) \
 	$(call mod_obj,process)
 
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
@@ -257,16 +257,23 @@ engine:
 	$(MAKE) -C $(ENGINE_DIR) KRYON_BACKEND=$(KRYON_BACKEND) \
 		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB) $(ENGINE_K2C)
 
-$(PANE_RUNTIME_C) $(PANE_RUNTIME_H) &: runtime/terminal_pane.kry | engine
-	$(ENGINE_K2C) --strict --no-main --root . -o $(BUILD_DIR)/generated/src $<
-
-$(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) $(APP_KRY_C) $(APP_KRY_H) &: $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY) $(PANE_RUNTIME_H) | engine
+$(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) $(APP_KRY_C) $(APP_KRY_H) &: $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY) $(PANE_ZI_H) | engine
 	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
 
 $(PANE_ZI_C) $(PANE_ZI_H) &: $(PANE_ZI)
 	@mkdir -p $(BUILD_DIR)/generated/src
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --no-main --root src \
 		-o $(BUILD_DIR)/generated/src $(PANE_ZI)
+
+$(PTY_C) &: src/terminal_pty_linux.zi ziran.lock $(ZIRAN)
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) \
+		--target=c --no-main --root src -o $(PTY_GEN) src/terminal_pty_linux.zi
+
+$(PTY_GEN)/%.o: $(PTY_GEN)/%.c
+	$(CC) $(CFLAGS) -I$(PTY_GEN) -fPIC -c $< -o $@
+
+.PHONY: pty-native
+pty-native: $(PTY_OBJS)
 
 $(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
 	@mkdir -p $(dir $@)
@@ -447,22 +454,15 @@ $(SIMPLE_TEST): engine $(BUILD_DIR)/tests/simple_terminal_test.o \
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(BUILD_DIR)/tests/simple_terminal_test.o \
 		$(BUILD_DIR)/src/terminal_pane/simple_terminal.o
 
-$(PANE_POLICY_TEST): engine $(BUILD_DIR)/tests/terminal_pane_policy_test.o \
-	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
-		$(BUILD_DIR)/tests/terminal_pane_policy_test.o \
-		$(PANE_OBJS) -Wl,--whole-archive $(ENGINE_LIB) \
-		-Wl,--no-whole-archive $(LDLIBS)
-
 $(PROCESS_TEST): engine $(BUILD_DIR)/tests/process_test.o \
 	$(ENGINE_CLIPBOARD_OBJ) \
 	$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
-	$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+	$(ENGINE_KRY_OBJS) $(PTY_OBJS) \
 	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
 		$(BUILD_DIR)/tests/process_test.o $(ENGINE_CLIPBOARD_OBJ) \
 		$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
-		$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+		$(ENGINE_KRY_OBJS) $(PTY_OBJS) \
 		$(PANE_OBJS) $(ENGINE_LIB) $(LDLIBS)
 
 $(PANE_SELECTION_TEST): engine $(BUILD_DIR)/tests/terminal_pane_selection_test.o \
@@ -502,7 +502,7 @@ ziran-migration-check:
 
 # Hosted pane tests use isolated clipboard providers and never need the
 # application's legacy Kryon/k2c engine or a desktop display.
-.PHONY: clipboard-test selection-test keys-test keys-plan9-test pane-ziran-test clipboard-plan9-c
+.PHONY: clipboard-test selection-test keys-test keys-plan9-test osc-test osc-plan9-test metrics-test metrics-plan9-test pty-test pty-plan9-test pane-ziran-test clipboard-plan9-c
 clipboard-test: $(PANE_CLIPBOARD_TEST)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
 
@@ -513,16 +513,34 @@ keys-test:
 	sh tests/keys_test.sh
 
 keys-plan9-test:
-	sh tests/keys_plan9_test.sh
+	sh tests/pane_plan9_test.sh keys
 
-pane-ziran-test: clipboard-test selection-test keys-test ziran-migration-check
+osc-test:
+	sh tests/osc_test.sh
+
+osc-plan9-test:
+	sh tests/pane_plan9_test.sh osc
+
+metrics-test:
+	sh tests/metrics_test.sh
+
+metrics-plan9-test:
+	sh tests/pane_plan9_test.sh metrics
+
+pty-test:
+	sh tests/pty_test.sh
+
+pty-plan9-test:
+	sh tests/pane_plan9_test.sh pty
+
+pane-ziran-test: clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
 
 clipboard-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c \
 		--root tests \
 		-o $(BUILD_ROOT)/plan9/clipboard-test tests/terminal_pane_clipboard_test.zi
 
-test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
+test: $(TEST) $(SIMPLE_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_DCS_TEST) $(PANE_SIXEL_TEST) \
@@ -530,10 +548,9 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
 	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
 	$(PANE_PROFILE_PROMPT_TEST) $(PANE_PROFILE_SETTINGS_TEST) \
-	$(PANE_PROFILE_TEST) $(PROCESS_TEST) ziran-migration-check
+	$(PANE_PROFILE_TEST) $(PROCESS_TEST) metrics-test osc-test pty-test ziran-migration-check
 	$(TEST)
 	$(SIMPLE_TEST)
-	$(PANE_POLICY_TEST)
 	$(PANE_SELECTION_TEST)
 	$(PANE_TEXT_TEST)
 	$(PANE_SGR_TEST)
@@ -586,15 +603,19 @@ PLAN9_PREP_DIR = build/plan9
 PLAN9_GENERATED = $(PLAN9_PREP_DIR)/generated
 PLAN9_FILE_LIST = $(PLAN9_PREP_DIR)/generated-c-files.txt
 
-.PHONY: kry-c-plan9
+.PHONY: kry-c-plan9 pty-plan9-c
+pty-plan9-c:
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) \
+		--target=plan9-c --no-main --root src \
+		-o $(PLAN9_GENERATED)/native src/terminal_pty_plan9.zi
+
 kry-c-plan9: engine
 	rm -rf $(PLAN9_GENERATED)
 	mkdir -p $(PLAN9_PREP_DIR)
-	$(ENGINE_K2C) --plan9 --strict --no-main --root $(abspath .) \
-		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
 	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
 		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c --no-main --root src \
-		-o $(PLAN9_GENERATED) $(PANE_ZI)
+		-o $(PLAN9_GENERATED)/src $(PANE_ZI)
+	$(MAKE) pty-plan9-c
 	(cd $(PLAN9_GENERATED) && find . -type f -name '*.c' | \
 	sed -e 's@^\./@@') | LC_ALL=C sort > $(PLAN9_FILE_LIST)

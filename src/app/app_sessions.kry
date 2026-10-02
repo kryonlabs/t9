@@ -153,18 +153,6 @@ moved_index :: (index: i32, from_index: i32, to_index: i32) -> i32 {
     return index
 }
 
-rebind_session_terminals :: (app: *State) {
-#if PLAN9_BUILD {
-    i: i32
-
-    i = 0
-    while i < app->session_count {
-        terminal_rebind(&app->sessions[i].terminal)
-        i += 1
-    }
-}
-}
-
 move_session :: (app: *State, from_index: i32, to_index: i32) #export {
     moved: Session
     i: i32
@@ -190,7 +178,6 @@ move_session :: (app: *State, from_index: i32, to_index: i32) #export {
         }
     }
     app->sessions[to_index] = moved
-    rebind_session_terminals(app)
     app->active = moved_index(app->active, from_index, to_index)
     app->rename_index = moved_index(app->rename_index, from_index, to_index)
     app->selection.active = 0
@@ -213,7 +200,6 @@ replace_last: i32) {
         i += 1
     }
     app->session_count -= 1
-    rebind_session_terminals(app)
     if app->session_count <= 0 {
         app->active = -1
         if replace_last != 0 {

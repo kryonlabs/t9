@@ -1,0 +1,97 @@
+#import "terminal_pty_plan9"
+Text :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+
+libc :: #system_library "libc";
+Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+Write :: (descriptor: s32, input: *void, count: s32) -> s32 #foreign libc "write";
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Contains :: (bytes: []u8, expected: string) -> bool {
+    for start: cast(s64)0..bytes.count - expected.count {
+        same: bool = true
+        for index: cast(s64)0..expected.count - 1 {
+            if bytes[start + index] != expected[index] { same = false; break }
+        }
+        if same { return true }
+    }
+    return false
+}
+
+ReadUntil :: (descriptor: s32, expected: string, output: []u8) -> bool {
+    used: s32
+    for attempt: 0..299 {
+        count := TerminalPtyRead(descriptor, cast(*void)(*output[used]), cast(s32)output.count - used)
+        if count > 0 {
+            used += count
+            if Contains(output[0:used], expected) { return true }
+            if used >= cast(s32)output.count { return false }
+        }
+        if count < 0 { return false }
+        Pause(10)
+    }
+    return false
+}
+
+ReadEOF :: (descriptor: s32) -> bool {
+    output: [256]u8
+    for attempt: 0..299 {
+        count := TerminalPtyRead(descriptor, cast(*void)(*output[0]), 256)
+        if count < 0 { return true }
+        Pause(10)
+    }
+    return false
+}
+
+Run :: () -> s32 {
+    if TerminalPtyOpen(null, null, null, 80, 24, null) != -1 { return 1 }
+    if TerminalPtyRead(-1, null, 0) != -1 || TerminalPtyWrite(-1, null, 0) != 0 || TerminalPtyChildExited(-1) != 1 || TerminalPtyWaitExit(-1, 0) != 1 { return 2 }
+    pid: s32
+    descriptor := TerminalPtyOpen(Bytes("/"), Bytes("/bin/rc"), Bytes("echo PTY_PLAN9_OK; pwd"), 80, 24, *pid)
+    if descriptor < 0 || pid <= 0 { return 3 }
+    output: [4096]u8
+    saw := ReadUntil(descriptor, "PTY_PLAN9_OK\n/", output[:])
+    eof := ReadEOF(descriptor)
+    exited := TerminalPtyWaitExit(pid, 500)
+    TerminalPtyClose(descriptor)
+    if !saw || !eof || exited != 1 { return 4 }
+
+    descriptor = TerminalPtyOpen(Bytes("/"), Bytes("/bin/rc"), Bytes("echo READY; input=`{read}; echo GOT:$\"input"), 40, 8, *pid)
+    if descriptor < 0 || pid <= 0 { return 5 }
+    if !ReadUntil(descriptor, "READY", output[:]) { TerminalPtyClose(descriptor); return 6 }
+    text := "hello terminal\n"
+    if TerminalPtyWrite(descriptor, cast(*void)Bytes(text), cast(s32)text.count) != cast(s32)text.count { TerminalPtyClose(descriptor); return 7 }
+    saw = ReadUntil(descriptor, "GOT:hello terminal", output[:])
+    TerminalPtyClose(descriptor)
+    if !saw { return 8 }
+
+    descriptor = TerminalPtyOpen(Bytes("/"), Bytes("/bin/rc"), Bytes("echo READY; sleep 30"), 80, 24, *pid)
+    if descriptor < 0 || pid <= 0 { return 9 }
+    if !ReadUntil(descriptor, "READY", output[:]) { TerminalPtyClose(descriptor); return 10 }
+    if TerminalPtyWaitExit(pid, 0) != 0 { TerminalPtyClose(descriptor); return 11 }
+    TerminalPtySignal(pid, 15)
+    exited = TerminalPtyWaitExit(pid, 1000)
+    TerminalPtyClose(descriptor)
+    if exited != 1 { return 12 }
+    TerminalPtySignal(1, 9)
+    TerminalPtyClose(-1)
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    result := Run()
+    if result != 0 {
+        label := "Terminal Plan 9 PTY failure: "
+        Write(1, cast(*void)Bytes(label), cast(s32)label.count)
+        digits: [32]u8
+        code := Number.FormatInteger(cast(s64)result, digits[:])
+        Write(1, cast(*void)Bytes(code), cast(s32)code.count)
+        Write(1, cast(*void)Bytes("\n"), 1)
+    }
+    return result
+}

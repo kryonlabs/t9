@@ -1,0 +1,511 @@
+#import "terminal_pane_profile_types"
+#import "terminal_pane_profile_colors"
+
+TERMINAL_PANE_OSC_COLOR_INVALID :: 0;
+TERMINAL_PANE_OSC_COLOR_FOREGROUND :: 1;
+TERMINAL_PANE_OSC_COLOR_BACKGROUND :: 2;
+TERMINAL_PANE_OSC_COLOR_CURSOR :: 3;
+TERMINAL_PANE_OSC_COLOR_MOUSE_FOREGROUND :: 4;
+TERMINAL_PANE_OSC_COLOR_MOUSE_BACKGROUND :: 5;
+TERMINAL_PANE_OSC_COLOR_SELECTION_BACKGROUND :: 6;
+TERMINAL_PANE_OSC_COLOR_SELECTION_FOREGROUND :: 7;
+
+TerminalPaneOSCColorState :: struct {
+    foreground: s32
+    background: s32
+    cursor: s32
+    mouse_foreground: s32
+    mouse_background: s32
+    selection_background: s32
+    selection_foreground: s32
+    base_foreground: s32
+    base_background: s32
+    base_cursor: s32
+    base_selection_foreground: s32
+    base_selection_background: s32
+}
+
+TerminalPaneOSCPaletteEntry :: struct {
+    index: s32
+    query: s32
+    color: s32
+    valid: s32
+}
+
+#scope_file
+Length :: (value: *u8) -> s32 {
+    if value == null { return 0 }
+    length: s32
+    while value[length] != 0 { length += 1 }
+    return length
+}
+
+Find :: (value: *u8, byte: u8) -> *u8 {
+    if value == null { return null }
+    while value.* != 0 {
+        if value.* == byte { return value }
+        value = *value[1]
+    }
+    return ifx byte == 0 then value else null
+}
+
+Starts :: (value: *u8, prefix: string) -> bool {
+    if value == null { return false }
+    for index: 0..cast(s32)prefix.count - 1 {
+        if value[index] != prefix[index] { return false }
+    }
+    return true
+}
+
+Same :: (value: *u8, text: string) -> bool {
+    return Starts(value, text) && value[text.count] == 0
+}
+
+HexValue :: (byte: u8) -> s32 {
+    if byte >= 48 && byte <= 57 { return cast(s32)byte - 48 }
+    if byte >= 97 && byte <= 102 { return cast(s32)byte - 87 }
+    if byte >= 65 && byte <= 70 { return cast(s32)byte - 55 }
+    return -1
+}
+
+HexByte :: (text: *u8) -> s32 {
+    if text == null || text[0] == 0 { return -1 }
+    high := HexValue(text[0])
+    if high < 0 { return -1 }
+    low := HexValue(text[1])
+    return (high << 4) | (ifx low < 0 then high else low)
+}
+
+HashColor :: (text: *u8) -> s32 {
+    if text == null || text[0] != 35 { return TERMINAL_PANE_COLOR_DEFAULT }
+    text = *text[1]
+    length := Length(text)
+    if length < 3 || length > 12 || length % 3 != 0 { return TERMINAL_PANE_COLOR_DEFAULT }
+    for index: 0..length - 1 {
+        if HexValue(text[index]) < 0 { return TERMINAL_PANE_COLOR_DEFAULT }
+    }
+    digits := length / 3
+    r := HexValue(text[0])
+    g := HexValue(text[digits])
+    b := HexValue(text[digits * 2])
+    if digits == 1 {
+        r = (r << 4) | r; g = (g << 4) | g; b = (b << 4) | b
+    } else {
+        r = (r << 4) | HexValue(text[1])
+        g = (g << 4) | HexValue(text[digits + 1])
+        b = (b << 4) | HexValue(text[digits * 2 + 1])
+    }
+    return TERMINAL_PANE_COLOR_TRUE_RGB | (r << 16) | (g << 8) | b
+}
+
+// Normalize decimal RGBi components before scaling, so neither huge
+// exponents nor non-finite tokens can trap the native Plan 9 FPU.
+FloatComponent :: (cursor: **u8) -> s32 {
+    if cursor == null || cursor.* == null || cursor.*.* == 0 { return -1 }
+    position := cursor.*
+    while position.* == 32 || (position.* >= 9 && position.* <= 13) { position = *position[1] }
+    negative := position.* == 45
+    if position.* == 45 || position.* == 43 { position = *position[1] }
+    digits: s32
+    whole_digits: s32
+    first: s32 = -1
+    kept: s32
+    decimal: bool
+    normalized: float64
+    factor: float64 = 0.1
+    while true {
+        byte := position.*
+        if byte == 46 && !decimal { decimal = true; position = *position[1]; continue }
+        if byte < 48 || byte > 57 { break }
+        digit := cast(s32)byte - 48
+        if !decimal { whole_digits += 1 }
+        if first < 0 && digit != 0 { first = digits }
+        if first >= 0 && kept < 16 {
+            normalized += cast(float64)digit * factor
+            factor *= 0.1; kept += 1
+        }
+        digits += 1; position = *position[1]
+    }
+    if digits == 0 { return -1 }
+    exponent: s32
+    if position.* == 101 || position.* == 69 {
+        position = *position[1]
+        minus := position.* == 45
+        if position.* == 45 || position.* == 43 { position = *position[1] }
+        if position.* < 48 || position.* > 57 { return -1 }
+        while position.* >= 48 && position.* <= 57 {
+            if exponent < 1000000 { exponent = exponent * 10 + cast(s32)position.* - 48 }
+            position = *position[1]
+        }
+        if minus { exponent = -exponent }
+    }
+    cursor.* = position
+    if first < 0 { return 0 }
+    magnitude := whole_digits - first + exponent
+    if magnitude > 1 || negative { return -1 }
+    if magnitude <= -3 { return 0 }
+    if magnitude == 1 { normalized *= 10.0 }
+    else {
+        while magnitude < 0 { normalized *= 0.1; magnitude += 1 }
+    }
+    value := cast(float32)normalized
+    if value > 1.0 { return -1 }
+    return cast(s32)(value * 255.0 + 0.5)
+}
+
+FloatColor :: (text: *u8) -> s32 {
+    cursor := *text[5]
+    r := FloatComponent(*cursor)
+    if r < 0 || cursor.* != 47 { return TERMINAL_PANE_COLOR_DEFAULT }
+    cursor = *cursor[1]
+    g := FloatComponent(*cursor)
+    if g < 0 || cursor.* != 47 { return TERMINAL_PANE_COLOR_DEFAULT }
+    cursor = *cursor[1]
+    b := FloatComponent(*cursor)
+    if b < 0 || cursor.* != 0 { return TERMINAL_PANE_COLOR_DEFAULT }
+    return TERMINAL_PANE_COLOR_TRUE_RGB | (r << 16) | (g << 8) | b
+}
+
+DecimalSpan :: (start: *u8, end: *u8, maximum: s32, output: *s32) -> bool {
+    if start == null || end == null || start == end || output == null || maximum < 0 { return false }
+    value: s32
+    while start != end {
+        if start.* < 48 || start.* > 57 { return false }
+        digit := cast(s32)start.* - 48
+        if value > maximum / 10 || (value == maximum / 10 && digit > maximum % 10) { return false }
+        value = value * 10 + digit
+        start = *start[1]
+    }
+    output.* = value
+    return true
+}
+
+CopyToken :: (cursor: **u8, output: *u8, capacity: s32) -> bool {
+    if cursor == null || cursor.* == null || cursor.*.* == 0 || output == null || capacity <= 0 { return false }
+    used: s32
+    start := cursor.*
+    while start.* != 0 && start.* != 59 {
+        if used + 1 < capacity { output[used] = start.*; used += 1 }
+        start = *start[1]
+    }
+    output[used] = 0
+    cursor.* = ifx start.* == 59 then *start[1] else start
+    return true
+}
+
+// Like snprintf, report the required length and always terminate a positive
+// capacity. Callers can distinguish a complete response from truncation.
+Output :: struct { data: *u8; capacity: s32; used: s32; }
+
+Put :: (output: *Output, byte: u8) {
+    if output.used + 1 < output.capacity {
+        output.data[output.used] = byte
+        output.data[output.used + 1] = 0
+    }
+    output.used += 1
+}
+
+PutText :: (output: *Output, text: string) {
+    for index: 0..cast(s32)text.count - 1 { Put(output, text[index]) }
+}
+
+PutInteger :: (output: *Output, value: s32) {
+    number := cast(s64)value
+    if number < 0 { Put(output, 45); number = -number }
+    digits: [20]u8
+    used: s32
+    while number > 0 || used == 0 {
+        digits[used] = cast(u8)(48 + number % 10)
+        used += 1; number /= 10
+    }
+    while used > 0 { used -= 1; Put(output, digits[used]) }
+}
+
+PutHexByte :: (output: *Output, byte: s32) {
+    digits := "0123456789abcdef"
+    Put(output, digits[(byte >> 4) & 15]); Put(output, digits[byte & 15])
+}
+
+PutRGB :: (output: *Output, color: s32) {
+    PutText(output, ";rgb:")
+    for component: cast(s32)0..cast(s32)2 {
+        byte := (color >> (16 - component * 8)) & 255
+        PutHexByte(output, byte); PutHexByte(output, byte)
+        if component != 2 { Put(output, 47) }
+    }
+    Put(output, 7)
+}
+
+CopyRaw :: (output: *u8, capacity: s32, text: *u8) {
+    if output == null || capacity <= 0 { return }
+    used: s32
+    if text != null {
+        while used + 1 < capacity && text[used] != 0 {
+            output[used] = text[used]; used += 1
+        }
+    }
+    output[used] = 0
+}
+
+#scope_export
+#program_export
+ParseTerminalPaneOSCColor :: (text: *u8) -> s32 {
+    if text == null { return TERMINAL_PANE_COLOR_DEFAULT }
+    if text[0] == 35 { return HashColor(text) }
+    if Starts(text, "rgbi:") { return FloatColor(text) }
+    if Starts(text, "rgb:") || Starts(text, "rgba:") {
+        cursor := Find(text, 58)
+        r := HexByte(*cursor[1])
+        cursor = Find(*cursor[1], 47)
+        if cursor == null { return TERMINAL_PANE_COLOR_DEFAULT }
+        g := HexByte(*cursor[1])
+        cursor = Find(*cursor[1], 47)
+        if cursor == null { return TERMINAL_PANE_COLOR_DEFAULT }
+        b := HexByte(*cursor[1])
+        if r >= 0 && g >= 0 && b >= 0 { return TERMINAL_PANE_COLOR_TRUE_RGB | (r << 16) | (g << 8) | b }
+    }
+    return TERMINAL_PANE_COLOR_DEFAULT
+}
+
+#program_export
+ParseTerminalPaneOSCCommand :: (text: *u8, output_code: *s32, output_payload: **u8) -> s32 {
+    if output_code != null { output_code.* = -1 }
+    if output_payload != null { output_payload.* = TerminalPaneTextBytes("") }
+    if text == null { return 0 }
+    separator := Find(text, 59)
+    end := ifx separator != null then separator else *text[Length(text)]
+    code: s32
+    if !DecimalSpan(text, end, 999999, *code) { return 0 }
+    if output_code != null { output_code.* = code }
+    if output_payload != null { output_payload.* = ifx separator != null then *separator[1] else TerminalPaneTextBytes("") }
+    return 1
+}
+
+#program_export
+NextTerminalPaneOSCPaletteEntry :: (cursor: **u8, output: *TerminalPaneOSCPaletteEntry) -> s32 {
+    index_text: [16]u8
+    color_text: [128]u8
+    if output != null { output.* = TerminalPaneOSCPaletteEntry.{-1, 0, TERMINAL_PANE_COLOR_DEFAULT, 0} }
+    if !CopyToken(cursor, *index_text[0], 16) { return 0 }
+    if !CopyToken(cursor, *color_text[0], 128) || output == null { return 1 }
+    index: s32
+    if !DecimalSpan(*index_text[0], *index_text[Length(*index_text[0])], 255, *index) { return 1 }
+    if Same(*color_text[0], "?") {
+        output.index = index; output.query = 1; output.valid = 1
+        return 1
+    }
+    color := ParseTerminalPaneOSCColor(*color_text[0])
+    if color == TERMINAL_PANE_COLOR_DEFAULT { return 1 }
+    output.index = index; output.color = color; output.valid = 1
+    return 1
+}
+
+#program_export
+NextTerminalPaneOSCPaletteResetIndex :: (cursor: **u8, output_index: *s32) -> s32 {
+    text: [16]u8
+    index: s32 = -1
+    if output_index != null { output_index.* = -1 }
+    if !CopyToken(cursor, *text[0], 16) { return 0 }
+    if DecimalSpan(*text[0], *text[Length(*text[0])], 255, *index) && output_index != null { output_index.* = index }
+    return 1
+}
+
+#program_export
+TerminalPaneDefaultPaletteColor :: (index: s32) -> s32 {
+    if index < 0 { index = 0 }
+    if index > 255 { index = 255 }
+    return TerminalPaneDefaultPalettePixel(index)
+}
+
+#program_export
+TerminalPaneOSCColorTargetForCode :: (code: s32) -> s32 {
+    if code == 10 { return TERMINAL_PANE_OSC_COLOR_FOREGROUND }
+    if code == 11 { return TERMINAL_PANE_OSC_COLOR_BACKGROUND }
+    if code == 12 { return TERMINAL_PANE_OSC_COLOR_CURSOR }
+    if code == 13 { return TERMINAL_PANE_OSC_COLOR_MOUSE_FOREGROUND }
+    if code == 14 { return TERMINAL_PANE_OSC_COLOR_MOUSE_BACKGROUND }
+    if code == 17 { return TERMINAL_PANE_OSC_COLOR_SELECTION_BACKGROUND }
+    if code == 19 { return TERMINAL_PANE_OSC_COLOR_SELECTION_FOREGROUND }
+    return TERMINAL_PANE_OSC_COLOR_INVALID
+}
+
+#program_export
+TerminalPaneOSCColorTargetForResetCode :: (code: s32) -> s32 {
+    if code < 100 { return TERMINAL_PANE_OSC_COLOR_INVALID }
+    return TerminalPaneOSCColorTargetForCode(code - 100)
+}
+
+#program_export
+TerminalPaneOSCColorQueryValue :: (target: s32, state: TerminalPaneOSCColorState) -> s32 {
+    if target == TERMINAL_PANE_OSC_COLOR_FOREGROUND { return ifx state.foreground != -1 then state.foreground else state.base_foreground }
+    if target == TERMINAL_PANE_OSC_COLOR_BACKGROUND { return ifx state.background != -1 then state.background else state.base_background }
+    if target == TERMINAL_PANE_OSC_COLOR_CURSOR { return ifx state.cursor != -1 then state.cursor else state.base_cursor }
+    if target == TERMINAL_PANE_OSC_COLOR_MOUSE_FOREGROUND {
+        if state.mouse_foreground != -1 { return state.mouse_foreground }
+        return ifx state.foreground != -1 then state.foreground else state.base_foreground
+    }
+    if target == TERMINAL_PANE_OSC_COLOR_MOUSE_BACKGROUND {
+        if state.mouse_background != -1 { return state.mouse_background }
+        return ifx state.background != -1 then state.background else state.base_background
+    }
+    if target == TERMINAL_PANE_OSC_COLOR_SELECTION_BACKGROUND { return ifx state.selection_background != -1 then state.selection_background else state.base_selection_background }
+    if target == TERMINAL_PANE_OSC_COLOR_SELECTION_FOREGROUND { return ifx state.selection_foreground != -1 then state.selection_foreground else state.base_selection_foreground }
+    return TERMINAL_PANE_COLOR_DEFAULT
+}
+
+#program_export
+FormatTerminalPaneOSCColorResponse :: (output: *u8, capacity: s32, code: s32, color: s32) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if color < 0 || (color & TERMINAL_PANE_COLOR_TRUE_RGB) == 0 { return 0 }
+    buffer := Output.{output, capacity, 0}
+    PutText(*buffer, "\x1b]"); PutInteger(*buffer, code); PutRGB(*buffer, color)
+    return buffer.used
+}
+
+#program_export
+FormatTerminalPaneOSCPaletteResponse :: (output: *u8, capacity: s32, index: s32, color: s32) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if index < 0 || index >= 256 || color < 0 || (color & TERMINAL_PANE_COLOR_TRUE_RGB) == 0 { return 0 }
+    buffer := Output.{output, capacity, 0}
+    PutText(*buffer, "\x1b]4;"); PutInteger(*buffer, index); PutRGB(*buffer, color)
+    return buffer.used
+}
+
+#program_export
+CopyTerminalPaneOSCHyperlinkURL :: (output: *u8, capacity: s32, url: *u8) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if url == null { return 0 }
+    used: s32
+    while url.* != 0 {
+        byte := url.*; url = *url[1]
+        if byte < 32 || byte == 127 { continue }
+        if used + 1 >= capacity { break }
+        output[used] = byte; used += 1
+    }
+    output[used] = 0
+    return ifx used > 0 then 1 else 0
+}
+
+#program_export
+CopyTerminalPaneOSCHyperlinkID :: (output: *u8, capacity: s32, params: *u8) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if params == null { return 0 }
+    cursor := params
+    end := Find(params, 59)
+    if end == null { end = *params[Length(params)] }
+    while cursor != end {
+        token_end := cursor
+        while token_end != end && token_end.* != 58 { token_end = *token_end[1] }
+        if Starts(cursor, "id=") {
+            value := *cursor[3]
+            used: s32
+            while value != token_end && used + 1 < capacity {
+                byte := value.*; value = *value[1]
+                if byte < 32 || byte == 127 { continue }
+                output[used] = byte; used += 1
+            }
+            output[used] = 0
+            return ifx used > 0 then 1 else 0
+        }
+        if token_end == end { break }
+        cursor = *token_end[1]
+    }
+    return 0
+}
+
+#program_export
+TerminalPaneOSCTitleTargets :: (payload: *u8, window: *s32, icon: *s32) -> s32 {
+    if window != null { window.* = 0 }
+    if icon != null { icon.* = 0 }
+    cursor := payload
+    saw_token: bool
+    if cursor != null {
+        while cursor.* != 0 {
+            if cursor.* == 59 { cursor = *cursor[1]; continue }
+            start := cursor
+            while cursor.* != 0 && cursor.* != 59 { cursor = *cursor[1] }
+            saw_token = true
+            value: s32
+            if !DecimalSpan(start, cursor, 999999, *value) { continue }
+            if (value == 0 || value == 1) && icon != null { icon.* = 1 }
+            if (value == 0 || value == 2) && window != null { window.* = 1 }
+        }
+    }
+    if !saw_token {
+        if window != null { window.* = 1 }
+        if icon != null { icon.* = 1 }
+    }
+    return 1
+}
+
+#program_export
+CopyTerminalPaneTitleText :: (output: *u8, capacity: s32, title: *u8) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    used: s32
+    if title != null {
+        while title.* != 0 {
+            byte := title.*; title = *title[1]
+            if byte < 32 && byte != 9 { continue }
+            if used + 1 >= capacity { output[0] = 0; return 0 }
+            output[used] = byte; used += 1
+        }
+    }
+    output[used] = 0
+    return 1
+}
+
+#program_export
+FormatTerminalPaneOSCTitleReport :: (output: *u8, capacity: s32, icon: s32, title: *u8) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if capacity < 5 { return 0 }
+    output[0] = 27; output[1] = 93; output[2] = ifx icon != 0 then 76 else 108
+    if CopyTerminalPaneTitleText(*output[3], capacity - 3, title) == 0 { output[0] = 0; return 0 }
+    used := 3 + Length(*output[3])
+    if used + 2 >= capacity { output[0] = 0; return 0 }
+    output[used] = 27; output[used + 1] = 92; output[used + 2] = 0
+    return used + 2
+}
+
+#program_export
+TerminalPaneOSCPushTitle :: (stack: *u8, depth: s32, item_size: s32, count: *s32, value: *u8) {
+    if stack == null || depth <= 0 || item_size <= 0 || count == null { return }
+    if count.* < 0 { count.* = 0 }
+    if count.* >= depth {
+        for index: 1..depth - 1 { CopyRaw(*stack[(index - 1) * item_size], item_size, *stack[index * item_size]) }
+        count.* = depth - 1
+    }
+    CopyRaw(*stack[count.* * item_size], item_size, value)
+    count.* += 1
+}
+
+#program_export
+TerminalPaneOSCPopTitle :: (stack: *u8, depth: s32, item_size: s32, count: *s32, value: *u8, capacity: s32) {
+    if stack == null || depth <= 0 || item_size <= 0 || count == null || value == null || capacity <= 0 || count.* <= 0 { return }
+    if count.* > depth { count.* = depth }
+    count.* -= 1
+    item := *stack[count.* * item_size]
+    CopyRaw(value, capacity, item); item[0] = 0
+}
+
+#program_export
+DecodeTerminalPaneOSCFileURIPath :: (output: *u8, capacity: s32, uri: *u8) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    if !Starts(uri, "file://") { return 0 }
+    path := Find(*uri[7], 47)
+    if path == null { return 0 }
+    used: s32
+    while path.* != 0 && used < capacity - 1 {
+        if path[0] == 37 && path[1] != 0 && HexValue(path[1]) >= 0 && HexValue(path[2]) >= 0 {
+            output[used] = cast(u8)((HexValue(path[1]) << 4) | HexValue(path[2])); path = *path[3]
+        } else { output[used] = path.*; path = *path[1] }
+        used += 1
+    }
+    output[used] = 0
+    return ifx used > 0 then 1 else 0
+}

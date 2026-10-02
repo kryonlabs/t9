@@ -1,0 +1,27 @@
+#import "terminal_pane_metrics"
+using Geometry :: #import "kryon/geometry";
+
+Same :: (got: Rectangle, x: float32, y: float32, width: float32, height: float32) -> bool {
+    return got.x == x && got.y == y && got.width == width && got.height == height
+}
+
+#program_export
+main :: () -> s32 {
+    policy := TerminalPaneMetricsPolicyFor(0.0)
+    if policy.font_size != 13 || policy.line_gap != 2 || policy.padding != 6 || policy.min_cols != 8 || policy.min_rows != 4 { return 1 }
+    policy = TerminalPaneMetricsPolicyFor(2.0)
+    if policy.font_size != 26 || policy.line_gap != 4 || policy.padding != 12 { return 2 }
+    if TerminalPaneFontSizeFor(0, policy) != 26 || TerminalPaneFontSizeFor(15, policy) != 15 { return 3 }
+    if TerminalPaneLineHeightFor(20, 18, policy) != 22 || TerminalPaneLineHeightFor(24, 18, policy) != 24 { return 4 }
+    if TerminalPanePaddingFor(-1, policy) != 12 || TerminalPanePaddingFor(0, policy) != 0 { return 5 }
+    if !Same(TerminalPaneContentBoundsFor(Rectangle.{10, 20, 120, 80}, -4, 6), 16, 26, 108, 68) { return 6 }
+    if !Same(TerminalPaneContentBoundsFor(Rectangle.{10, 20, 8, 7}, 4, 6), 16, 30, 0, 0) { return 7 }
+    if TerminalPaneClampCols(2, 100, policy) != 8 || TerminalPaneClampCols(120, 100, policy) != 100 || TerminalPaneClampCols(42, 100, policy) != 42 { return 8 }
+    if TerminalPaneClampRows(1, 40, policy) != 4 || TerminalPaneClampRows(50, 40, policy) != 40 || TerminalPaneClampRows(12, 40, policy) != 12 { return 9 }
+    indicator := TerminalPaneScrollIndicatorMetricsFor(1.0)
+    if indicator.font_size != 13 || indicator.right_offset != 16 || indicator.top_offset != 6 || indicator.width_pad != 10 || indicator.height != 22 || indicator.text_x != 5 || indicator.text_y != 4 { return 10 }
+    if !Same(TerminalPaneScrollIndicatorBoundsFor(Rectangle.{10, 20, 200, 90}, 60, indicator), 134, 26, 70, 22) { return 11 }
+    if !Same(TerminalPaneScrollIndicatorBoundsFor(Rectangle.{10, 20, 40, 90}, 60, indicator), 10, 26, 40, 22) { return 12 }
+    if !Same(TerminalPaneScrollIndicatorBoundsFor(Rectangle.{10, 20, 40, 90}, 0, indicator), 0, 0, 0, 0) { return 13 }
+    return 0
+}

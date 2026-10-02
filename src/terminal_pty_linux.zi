@@ -1,0 +1,193 @@
+// The Linux process boundary. Parsing and application state stay in the
+// terminal engine; this module only owns a child and its pseudoterminal.
+Text :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+
+#scope_file
+libc :: #system_library "c";
+OpenPTY :: (flags: s32) -> s32 #foreign libc "posix_openpt";
+GrantPTY :: (descriptor: s32) -> s32 #foreign libc "grantpt";
+UnlockPTY :: (descriptor: s32) -> s32 #foreign libc "unlockpt";
+PTYName :: (descriptor: s32) -> *s8 #foreign libc "ptsname";
+Fork :: () -> s32 #foreign libc "fork";
+NewSession :: () -> s32 #foreign libc "setsid";
+Open :: (path: *s8, flags: s32) -> s32 #foreign libc "open";
+Close :: (descriptor: s32) -> s32 #foreign libc "close";
+Duplicate :: (descriptor: s32, target: s32) -> s32 #foreign libc "dup2";
+ChangeDirectory :: (path: *s8) -> s32 #foreign libc "chdir";
+GetEnvironment :: (name: *s8) -> *s8 #foreign libc "getenv";
+SetEnvironment :: (name: *s8, value: *s8, overwrite: s32) -> s32 #foreign libc "setenv";
+Execute :: (path: *s8, arguments: **s8) -> s32 #foreign libc "execv";
+Exit :: (status: s32) #foreign libc "_exit";
+DescriptorFlags :: (descriptor: s32, command: s32, flags: s32) -> s32 #foreign libc "fcntl";
+Ioctl :: (descriptor: s32, request: usize, value: *void) -> s32 #foreign libc "ioctl";
+Read :: (descriptor: s32, output: *void, capacity: usize) -> isize #foreign libc "read";
+Write :: (descriptor: s32, input: *void, count: usize) -> isize #foreign libc "write";
+Wait :: (pid: s32, status: *s32, options: s32) -> s32 #foreign libc "waitpid";
+Signal :: (pid: s32, number: s32) -> s32 #foreign libc "kill";
+ErrorPointer :: () -> *s32 #foreign libc "__errno_location";
+Pause :: (microseconds: u32) -> s32 #foreign libc "usleep";
+
+WindowSize :: struct { rows: u16; cols: u16; width: u16; height: u16; }
+
+Bytes :: (value: string) -> *s8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return cast(*s8)descriptor.data
+}
+
+RawText :: (data: *u8) -> string { return Text.TextFromCString(data) }
+
+Environment :: (name: string) -> *u8 { return cast(*u8)GetEnvironment(Bytes(name)) }
+
+Resize :: (descriptor: s32, cols: s32, rows: s32) {
+    size := WindowSize.{cast(u16)rows, cast(u16)cols, 0, 0}
+    Ioctl(descriptor, 0x5414, cast(*void)(*size))
+}
+
+#scope_export
+// Remove only plan9port's bin directory. Empty PATH entries are meaningful:
+// they name the working directory, even at the start or end of the list.
+#program_export
+TerminalChildPath :: (path: string, plan9: string, output: []u8) -> bool {
+    if path.count == 0 || plan9.count == 0 || output.count <= path.count { return false }
+    used: s64
+    start: s64
+    changed: bool
+    kept: bool
+    for index: cast(s64)0..path.count {
+        if index < path.count && path[index] != 58 { continue }
+        segment := path[start:index]
+        same := segment.count == plan9.count + 4
+        if same {
+            for byte: cast(s64)0..plan9.count - 1 {
+                if segment[byte] != plan9[byte] { same = false; break }
+            }
+            if same { same = segment[plan9.count:] == "/bin" }
+        }
+        if same { changed = true }
+        else {
+            if kept { output[used] = 58; used += 1 }
+            for byte: cast(s64)0..segment.count - 1 { output[used] = segment[byte]; used += 1 }
+            kept = true
+        }
+        start = index + 1
+    }
+    output[used] = 0
+    return changed && kept
+}
+
+#scope_file
+SanitizePath :: () {
+    clean: [4096]u8
+    if TerminalChildPath(RawText(Environment("PATH")), RawText(Environment("PLAN9")), clean[:]) {
+        SetEnvironment(Bytes("PATH"), cast(*s8)(*clean[0]), 1)
+    }
+}
+
+IsBash :: (path: *u8) -> bool {
+    value := RawText(path)
+    start: s64
+    for index: cast(s64)0..value.count - 1 { if value[index] == 47 { start = index + 1 } }
+    return value[start:] == "bash"
+}
+
+RunChild :: (master: s32, cwd: *u8, shell: *u8, command: *u8) {
+    name := PTYName(master)
+    path: [256]u8
+    if name == null || !CString.CopyCString(RawText(cast(*u8)name), path[:]) { Exit(127); return }
+    if NewSession() < 0 { Exit(127); return }
+    Close(master)
+    slave := Open(cast(*s8)(*path[0]), 2)
+    if slave < 0 { Exit(127); return }
+    Ioctl(slave, 0x540e, null)
+    if Duplicate(slave, 0) < 0 || Duplicate(slave, 1) < 0 || Duplicate(slave, 2) < 0 { Exit(127); return }
+    if slave > 2 { Close(slave) }
+    if cwd != null && cwd[0] != 0 && ChangeDirectory(cast(*s8)cwd) != 0 { Exit(127); return }
+    SetEnvironment(Bytes("TERM"), Bytes("xterm-256color"), 1)
+    SetEnvironment(Bytes("COLORTERM"), Bytes("truecolor"), 1)
+    SanitizePath()
+    run_shell := shell
+    if run_shell == null || run_shell[0] == 0 { run_shell = Environment("SHELL") }
+    if run_shell == null || run_shell[0] == 0 { run_shell = cast(*u8)Bytes("/bin/sh") }
+    arguments: [5]*s8
+    arguments[0] = cast(*s8)run_shell
+    if command != null && command[0] != 0 {
+        if IsBash(run_shell) {
+            arguments[1] = Bytes("-i"); arguments[2] = Bytes("-c"); arguments[3] = cast(*s8)command
+        } else {
+            arguments[1] = Bytes("-lc"); arguments[2] = cast(*s8)command
+        }
+    } else { arguments[1] = Bytes("-i") }
+    Execute(cast(*s8)run_shell, *arguments[0])
+    Exit(127)
+}
+
+#scope_export
+#program_export
+TerminalPtyOpen :: (cwd: *u8, shell: *u8, command: *u8, cols: s32, rows: s32, output_pid: *s32) -> s32 {
+    if output_pid == null { return -1 }
+    output_pid.* = -1
+    master := OpenPTY(2 | 0x100)
+    if master < 0 { return -1 }
+    if GrantPTY(master) != 0 || UnlockPTY(master) != 0 { Close(master); return -1 }
+    Resize(master, cols, rows)
+    pid := Fork()
+    if pid < 0 { Close(master); return -1 }
+    if pid == 0 { RunChild(master, cwd, shell, command); return -1 }
+    flags := DescriptorFlags(master, 3, 0)
+    if flags >= 0 { DescriptorFlags(master, 4, flags | 0x800) }
+    output_pid.* = pid
+    return master
+}
+
+#program_export
+TerminalPtyWrite :: (descriptor: s32, data: *void, count: s32) -> s32 {
+    if descriptor < 0 || data == null || count <= 0 { return 0 }
+    written := Write(descriptor, data, cast(usize)count)
+    return ifx written > 0 then cast(s32)written else 0
+}
+
+#program_export
+TerminalPtyRead :: (descriptor: s32, data: *void, capacity: s32) -> s32 {
+    if descriptor < 0 || data == null || capacity <= 0 { return -1 }
+    count := Read(descriptor, data, cast(usize)capacity)
+    if count > 0 { return cast(s32)count }
+    if count == 0 { return -1 }
+    error := ErrorPointer().*
+    return ifx error == 4 || error == 11 then 0 else -1
+}
+
+#program_export
+TerminalPtyResize :: (descriptor: s32, cols: s32, rows: s32) {
+    if descriptor >= 0 { Resize(descriptor, cols, rows) }
+}
+
+#program_export
+TerminalPtyChildExited :: (pid: s32) -> s32 {
+    if pid <= 0 { return 1 }
+    status: s32
+    return ifx Wait(pid, *status, 1) > 0 then 1 else 0
+}
+
+#program_export
+TerminalPtySignal :: (pid: s32, number: s32) {
+    if pid > 0 && Signal(-pid, number) != 0 { Signal(pid, number) }
+}
+
+#program_export
+TerminalPtyWaitExit :: (pid: s32, timeout_ms: s32) -> s32 {
+    if pid <= 0 { return 1 }
+    elapsed: s32
+    status: s32
+    while true {
+        result := Wait(pid, *status, 1)
+        if result > 0 || (result < 0 && ErrorPointer().* == 10) { return 1 }
+        if result < 0 && ErrorPointer().* == 4 { continue }
+        if result < 0 { return 1 }
+        if elapsed >= timeout_ms { return 0 }
+        Pause(10000); elapsed += 10
+    }
+}
+
+#program_export
+TerminalPtyClose :: (descriptor: s32) { if descriptor >= 0 { Close(descriptor) } }

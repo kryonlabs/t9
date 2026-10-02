@@ -1,0 +1,114 @@
+#import "terminal_pane_osc"
+#import "terminal_pane_profile_types"
+#import "terminal_pane_profile_colors_theme"
+
+Bytes :: (text: string) -> *u8 { return TerminalPaneTextBytes(text) }
+
+Same :: (text: *u8, expected: string) -> bool {
+    if text == null { return false }
+    for index: 0..cast(s32)expected.count - 1 {
+        if text[index] != expected[index] { return false }
+    }
+    return text[expected.count] == 0
+}
+
+ColorCase :: struct { text: string; color: s32; }
+
+#program_export
+main :: () -> s32 {
+    colors: [18]ColorCase = .{
+        .{"#abc", 0x01aabbcc}, .{"#123456", 0x01123456},
+        .{"#123456789", 0x01124578}, .{"#123456789abc", 0x0112569a},
+        .{"rgb:1/23/4567", 0x01112345}, .{"rgba:10/30/50/70", 0x01103050},
+        .{"rgbi:1/0.5/0", 0x01ff8000}, .{"rgbi:.2/1e-1/+0", 0x01331a00},
+        .{"rgb:zz/00/00", -1}, .{"#12", -1}, .{"#1234", -1},
+        .{"#12345g", -1}, .{"rgbi:1.1/0/0", -1}, .{"rgbi:0/0/0x", -1},
+        .{"rgbi:nan/0/0", -1}, .{"rgbi:inf/0/0", -1},
+        .{"rgb:12/34", -1}, .{"", -1}
+    }
+    for index: cast(s32)0..cast(s32)17 {
+        if ParseTerminalPaneOSCColor(Bytes(colors[index].text)) != colors[index].color { return 10 + index }
+    }
+    if ParseTerminalPaneOSCColor(null) != -1 { return 30 }
+
+    code: s32
+    payload: *u8
+    if ParseTerminalPaneOSCCommand(Bytes("2;Terminal;tab"), *code, *payload) != 1 || code != 2 || !Same(payload, "Terminal;tab") { return 31 }
+    if ParseTerminalPaneOSCCommand(Bytes("110"), *code, *payload) != 1 || code != 110 || !Same(payload, "") { return 32 }
+    invalid: [5]string = .{"", "x;Title", "2x;Title", "1000000;Title", "999999999999999999999999999999;Title"}
+    for index: 0..4 {
+        if ParseTerminalPaneOSCCommand(Bytes(invalid[index]), *code, *payload) != 0 || code != -1 || !Same(payload, "") { return 33 }
+    }
+    if ParseTerminalPaneOSCCommand(null, null, null) != 0 || ParseTerminalPaneOSCCommand(Bytes("2;x"), null, null) != 1 { return 34 }
+
+    cursor := Bytes("1;rgb:10/20/30;200;?;999;#abc;2;invalid;3")
+    entry: TerminalPaneOSCPaletteEntry
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 1 || entry.index != 1 || entry.color != 0x01102030 || entry.query != 0 || entry.valid != 1 { return 35 }
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 1 || entry.index != 200 || entry.query != 1 || entry.valid != 1 { return 36 }
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 1 || entry.valid != 0 || entry.index != -1 { return 37 }
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 1 || entry.valid != 0 { return 38 }
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 1 || entry.valid != 0 { return 39 }
+    if NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 0 { return 40 }
+    cursor = Bytes("0;255;256;x")
+    index: s32
+    if NextTerminalPaneOSCPaletteResetIndex(*cursor, *index) != 1 || index != 0 { return 41 }
+    if NextTerminalPaneOSCPaletteResetIndex(*cursor, *index) != 1 || index != 255 { return 42 }
+    if NextTerminalPaneOSCPaletteResetIndex(*cursor, *index) != 1 || index != -1 { return 43 }
+    if NextTerminalPaneOSCPaletteResetIndex(*cursor, *index) != 1 || index != -1 { return 44 }
+    if NextTerminalPaneOSCPaletteResetIndex(*cursor, *index) != 0 || index != -1 { return 45 }
+    if TerminalPaneDefaultPaletteColor(-10) != 0x01181818 || TerminalPaneDefaultPaletteColor(999) != 0x01eeeeee { return 46 }
+
+    state := TerminalPaneOSCColorState.{-1, -1, -1, -1, -1, -1, -1, 10, 20, 30, 40, 50}
+    if TerminalPaneOSCColorQueryValue(1, state) != 10 || TerminalPaneOSCColorQueryValue(2, state) != 20 || TerminalPaneOSCColorQueryValue(3, state) != 30 || TerminalPaneOSCColorQueryValue(4, state) != 10 || TerminalPaneOSCColorQueryValue(5, state) != 20 || TerminalPaneOSCColorQueryValue(6, state) != 50 || TerminalPaneOSCColorQueryValue(7, state) != 40 || TerminalPaneOSCColorQueryValue(0, state) != -1 { return 47 }
+    state.foreground = 60; state.mouse_foreground = 70
+    if TerminalPaneOSCColorQueryValue(4, state) != 70 { return 48 }
+    state.mouse_foreground = -1
+    if TerminalPaneOSCColorQueryValue(4, state) != 60 { return 49 }
+    if TerminalPaneOSCColorTargetForCode(19) != 7 || TerminalPaneOSCColorTargetForCode(99) != 0 || TerminalPaneOSCColorTargetForResetCode(112) != 3 || TerminalPaneOSCColorTargetForResetCode(99) != 0 { return 50 }
+
+    output: [128]u8
+    if FormatTerminalPaneOSCColorResponse(*output[0], 128, 10, 0x01123456) != 24 || !Same(*output[0], "\x1b]10;rgb:1212/3434/5656\a") { return 51 }
+    if FormatTerminalPaneOSCPaletteResponse(*output[0], 128, 255, 0x01aabbcc) != 27 || !Same(*output[0], "\x1b]4;255;rgb:aaaa/bbbb/cccc\a") { return 52 }
+    if FormatTerminalPaneOSCColorResponse(*output[0], 5, 10, 0x01123456) != 24 || !Same(*output[0], "\x1b]10") { return 53 }
+    if FormatTerminalPaneOSCPaletteResponse(*output[0], 1, 1, 0x01123456) != 25 || output[0] != 0 { return 54 }
+    if FormatTerminalPaneOSCPaletteResponse(*output[0], 128, 256, 0x01123456) != 0 || output[0] != 0 { return 55 }
+    if FormatTerminalPaneOSCColorResponse(*output[0], 128, 10, -1) != 0 || output[0] != 0 { return 56 }
+
+    if CopyTerminalPaneOSCHyperlinkURL(*output[0], 128, Bytes("https://example.com/\x1b\x7f\a\tpath")) != 1 || !Same(*output[0], "https://example.com/path") { return 57 }
+    if CopyTerminalPaneOSCHyperlinkURL(*output[0], 5, Bytes("https://example.com")) != 1 || !Same(*output[0], "http") { return 58 }
+    if CopyTerminalPaneOSCHyperlinkID(*output[0], 128, Bytes("foo=x:id=a\x1bb\x7fc;https://example.com")) != 1 || !Same(*output[0], "abc") { return 59 }
+    if CopyTerminalPaneOSCHyperlinkID(*output[0], 128, Bytes("foo=x")) != 0 || output[0] != 0 { return 60 }
+    if CopyTerminalPaneOSCHyperlinkID(*output[0], 128, Bytes("id=;https://example.com")) != 0 || output[0] != 0 { return 61 }
+
+    window: s32; icon: s32
+    TerminalPaneOSCTitleTargets(Bytes(""), *window, *icon)
+    if window != 1 || icon != 1 { return 62 }
+    TerminalPaneOSCTitleTargets(Bytes("1;2;99"), *window, *icon)
+    if window != 1 || icon != 1 { return 63 }
+    TerminalPaneOSCTitleTargets(Bytes("1x;2"), *window, *icon)
+    if window != 1 || icon != 0 { return 64 }
+    TerminalPaneOSCTitleTargets(Bytes("x"), *window, *icon)
+    if window != 0 || icon != 0 { return 65 }
+    if CopyTerminalPaneTitleText(*output[0], 128, Bytes("Tab\x1b\a\n\t1")) != 1 || !Same(*output[0], "Tab\t1") { return 66 }
+    if CopyTerminalPaneTitleText(*output[0], 4, Bytes("Terminal")) != 0 || output[0] != 0 { return 67 }
+    if FormatTerminalPaneOSCTitleReport(*output[0], 128, 1, Bytes("Tab\a1")) != 9 || !Same(*output[0], "\x1b]LTab1\x1b\\") { return 68 }
+    if FormatTerminalPaneOSCTitleReport(*output[0], 9, 0, Bytes("Tab1")) != 0 || output[0] != 0 { return 69 }
+    if FormatTerminalPaneOSCTitleReport(*output[0], 10, 0, Bytes("Tab1")) != 9 || !Same(*output[0], "\x1b]lTab1\x1b\\") { return 70 }
+    titles: [3][8]u8
+    depth: s32 = -1
+    TerminalPaneOSCPushTitle(*titles[0][0], 3, 8, *depth, Bytes("one"))
+    TerminalPaneOSCPushTitle(*titles[0][0], 3, 8, *depth, Bytes("two"))
+    TerminalPaneOSCPushTitle(*titles[0][0], 3, 8, *depth, Bytes("three"))
+    TerminalPaneOSCPushTitle(*titles[0][0], 3, 8, *depth, Bytes("four-long"))
+    if depth != 3 || !Same(*titles[0][0], "two") || !Same(*titles[2][0], "four-lo") { return 71 }
+    TerminalPaneOSCPopTitle(*titles[0][0], 3, 8, *depth, *output[0], 128)
+    if depth != 2 || !Same(*output[0], "four-lo") || titles[2][0] != 0 { return 72 }
+    TerminalPaneOSCPopTitle(*titles[0][0], 3, 8, *depth, *output[0], 3)
+    if depth != 1 || !Same(*output[0], "th") { return 73 }
+
+    if DecodeTerminalPaneOSCFileURIPath(*output[0], 128, Bytes("file://host/home/a%20b%2Fc")) != 1 || !Same(*output[0], "/home/a b/c") { return 74 }
+    if DecodeTerminalPaneOSCFileURIPath(*output[0], 128, Bytes("file:///a%2%xx%")) != 1 || !Same(*output[0], "/a%2%xx%") { return 75 }
+    if DecodeTerminalPaneOSCFileURIPath(*output[0], 5, Bytes("file:///long/path")) != 1 || !Same(*output[0], "/lon") { return 76 }
+    if DecodeTerminalPaneOSCFileURIPath(*output[0], 128, Bytes("https://example.com")) != 0 || output[0] != 0 { return 77 }
+    return 0
+}
