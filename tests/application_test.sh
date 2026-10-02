@@ -6,6 +6,7 @@ suite=${1:-application}
 case "$suite" in
     application) module=terminal_application_test ;;
     input) module=terminal_input_test ;;
+    view) module=terminal_view_test ;;
     *) echo "Unknown Terminal application suite: $suite" >&2; exit 2 ;;
 esac
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY ENV BASH_ENV

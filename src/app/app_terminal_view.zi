@@ -1,0 +1,339 @@
+#scope_module
+using UI :: #import "kryon/Widgets";
+Frames :: #import "kryon/session";
+Paint :: #import "kryon/paint_queue";
+Geometry :: #import "kryon/geometry";
+Tree :: #import "kryon/tree";
+Kinds :: #import "kryon/widget_kind";
+State :: #import "app_state";
+Chrome :: #import "app_chrome";
+Menu :: #import "app_menu";
+Tabs :: #import "app_sessions";
+Records :: #import "app_session";
+Profile :: #import "app_profile";
+Palette :: #import "app_palette";
+Context :: #import "app_context_menu";
+Search :: #import "app_search";
+Dialog :: #import "app_dialog";
+Engine :: #import "terminal";
+Pane :: #import "terminal_pane_widget";
+Render :: #import "terminal_pane_render";
+Selection :: #import "terminal_pane_selection";
+Colors :: #import "terminal_pane_profile_colors";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/text_buffer";
+
+Clamp :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+Opaque :: (value: Color) -> Color { value.a = 255; return value }
+Opacity :: (value: Color, percent: s32) -> Color {
+    value.a = cast(u8)(Clamp(percent, 0, 100) * 255 / 100)
+    return value
+}
+Fill :: (frame: Frames.Session, node: s32, bounds: Rectangle,
+    color: Color, clip: Rectangle) {
+    bounds = Geometry.RectangleIntersection(bounds, clip)
+    if bounds.width > 0.0 && bounds.height > 0.0 {
+        Paint.PaintRoundedFill(frame, node, bounds, 0.0, 0, color)
+    }
+}
+ColorFor :: (app: *State.State, terminal: *Engine.Terminal,
+    value: s32, fallback: Color) -> Color {
+    return Colors.ResolveTerminalPaneColorWithOverrides(*app.palette.terminal_palette,
+        *terminal.palette_overrides[0], value, fallback)
+}
+BackgroundImage :: (frame: Frames.Session, app: *State.State, viewport: Rectangle) {
+    path := Text.TextUntilNul(app.config.background_image[:])
+    if path == "" || viewport.width <= 0.0 || viewport.height <= 0.0 { return }
+    props: ImageProps
+    props.key = cast(u64)1401; props.asset_path = path
+    props.bounds = viewport; props.fit = ImageFit.ImageFitCover
+    Image(frame, props)
+}
+
+DrawTabs :: (frame: Frames.Session, app: *State.State, bounds: Rectangle,
+    input: ViewInput) {
+    if !Chrome.TabBarVisible(app) { return }
+    tabs: [8]Tab
+    for index: 0..app.session_count - 1 {
+        tabs[index].key = cast(u64)(1500 + index)
+        tabs[index].label = Records.Title(*app.sessions[index])
+        tabs[index].closeable = app.session_count > 1
+    }
+    props: TabBarProps
+    props.key = cast(u64)1500; props.bounds = bounds; props.scale = app.scale
+    props.selected_index = app.active
+    props.min_tab_width = cast(s32)(72.0 * app.scale)
+    props.max_tab_width = cast(s32)(280.0 * app.scale)
+    props.scroll_offset = app.tab_scroll; props.focus_selected = true
+    props.reorder_enabled = true
+    props.dragging = app.tab_dragging; props.drag_from = app.tab_drag_from
+    props.last_clicked_index = app.tab_last_clicked_index
+    props.last_clicked_at = app.tab_last_clicked_at
+    props.last_click_valid = app.tab_last_click_valid
+    props.input.now = cast(float32)input.now
+    props.input.middle_click = input.middle_pressed
+    props.input.middle_x = input.middle_x; props.input.middle_y = input.middle_y
+    result := TabBar(frame, props, tabs[0:app.session_count])
+    app.tab_scroll = result.scroll_offset
+    app.tab_dragging = result.dragging; app.tab_drag_from = result.drag_from
+    app.tab_last_clicked_index = result.last_clicked_index
+    app.tab_last_clicked_at = result.last_clicked_at
+    app.tab_last_click_valid = result.last_click_valid
+    if result.reordered_from >= 0 && result.reordered_to >= 0 {
+        Tabs.Move(app, result.reordered_from, result.reordered_to)
+        app.tab_last_click_valid = false
+    } else if result.middle_clicked_index >= 0 && app.config.middle_click_closes_tab != 0 {
+        Tabs.Close(app, result.middle_clicked_index)
+        app.tab_last_click_valid = false
+    } else if result.closed_index >= 0 {
+        Tabs.Close(app, result.closed_index)
+        app.tab_last_click_valid = false
+    } else if result.double_clicked_index >= 0 && result.double_clicked_index < app.session_count {
+        index := result.double_clicked_index
+        app.rename_index = index; app.rename_focused = true
+        Records.CopyText(app.rename_text[:], Records.Title(*app.sessions[index]))
+        app.rename_cursor = cast(s32)Text.TextUntilNul(app.rename_text[:]).count
+        app.rename_text_anchor = app.rename_cursor; app.rename_scroll_x = 0
+        app.rename_anchor = result.selected_tab_bounds
+        Tabs.SetActive(app, index)
+    } else if result.activated_index >= 0 {
+        Tabs.SetActive(app, result.activated_index)
+    }
+}
+
+DrawCells :: (frame: Frames.Session, node: s32, app: *State.State,
+    terminal: *Engine.Terminal, theme: Colors.TerminalPaneColors,
+    colors: Colors.TerminalPaneViewColors, blink_on: bool) {
+    for row: 0..app.visible_rows - 1 {
+        visible_row := app.first_visible_row + row
+        if visible_row >= Engine.terminal_visible_line_count(terminal) { break }
+        y := cast(s32)app.viewport.y + row * app.line_h
+        for col: 0..terminal.cols - 1 {
+            cell := Engine.terminal_visible_cell(terminal, col, visible_row)
+            if cell == null || (cell.style & Engine.STYLE_WIDE_CONT) != 0 { continue }
+            selected := Selection.TerminalPaneSelectionContains(*app.selection, visible_row, col) != 0
+            foreground := ColorFor(app, terminal, cell.fg, colors.foreground)
+            background := ColorFor(app, terminal, cell.bg, colors.background)
+            underline := ColorFor(app, terminal, cell.underline, foreground)
+            linked := cell.hyperlink > 0
+            if linked { foreground = theme.link }
+            if (cell.style & Engine.STYLE_INVERSE) != 0 {
+                swap := foreground; foreground = background; background = swap
+            }
+            if (cell.style & Engine.STYLE_FAINT) != 0 {
+                mixed := Palette.Mix(foreground, background, 0.45)
+                mixed.a = foreground.a; foreground = mixed
+            }
+            bounds := Rectangle.{app.viewport.x + cast(float32)(col * app.cell_w),
+                cast(float32)y, cast(float32)app.cell_w, cast(float32)app.line_h}
+            if selected {
+                Fill(frame, node, bounds, colors.selection_background, app.viewport)
+                foreground = colors.selection_foreground; underline = foreground
+            } else if cell.bg != Engine.COLOR_DEFAULT || (cell.style & Engine.STYLE_INVERSE) != 0 {
+                Fill(frame, node, bounds, background, app.viewport)
+            }
+            if cell.codepoint == cast(u32)0 || cell.codepoint == cast(u32)32 ||
+                (cell.style & Engine.STYLE_CONCEAL) != 0 ||
+                ((cell.style & Engine.STYLE_BLINK) != 0 && !blink_on) { continue }
+            Render.DrawTerminalPaneGlyphCell(frame, node, cell.codepoint, cell.combining,
+                cast(s32)bounds.x, y, app.config.font_size, foreground, app.viewport)
+            if app.config.allow_bold != 0 && (cell.style & Engine.STYLE_BOLD) != 0 {
+                Render.DrawTerminalPaneGlyphCell(frame, node, cell.codepoint, cell.combining,
+                    cast(s32)bounds.x + 1, y, app.config.font_size, foreground, app.viewport)
+            }
+            if linked && !selected { underline = theme.link }
+            if (cell.style & Engine.STYLE_UNDERLINE) != 0 || linked {
+                Fill(frame, node, Rectangle.{bounds.x, bounds.y + bounds.height - 3.0,
+                    bounds.width, 1.0}, underline, app.viewport)
+            }
+            if (cell.style & Engine.STYLE_OVERLINE) != 0 {
+                Fill(frame, node, Rectangle.{bounds.x, bounds.y + 1.0,
+                    bounds.width, 1.0}, underline, app.viewport)
+            }
+        }
+    }
+}
+
+DrawSixel :: (frame: Frames.Session, node: s32, app: *State.State,
+    terminal: *Engine.Terminal, colors: Colors.TerminalPaneViewColors) {
+    for index: 0..Engine.terminal_sixel_count(terminal) - 1 {
+        image := Engine.terminal_sixel_image(terminal, index)
+        if image == null || image.pixels == null || image.alternate_screen != terminal.alternate_screen { continue }
+        pixel_h := cast(float32)app.line_h / 6.0
+        pixel_w := cast(float32)app.cell_w / 6.0
+        if image.pixel_aspect_num > 0 && image.pixel_aspect_den > 0 {
+            pixel_w *= cast(float32)image.pixel_aspect_num / cast(float32)image.pixel_aspect_den
+        }
+        visible_row := image.row
+        if terminal.alternate_screen == 0 { visible_row += terminal.scrollback_count }
+        origin_x := app.viewport.x + cast(float32)(image.col * app.cell_w)
+        origin_y := app.viewport.y + cast(float32)((visible_row - app.first_visible_row) * app.line_h)
+        for y: 0..image.height - 1 {
+            dest_y := origin_y + cast(float32)y * pixel_h
+            if dest_y + pixel_h <= app.viewport.y || dest_y >= app.viewport.y + app.viewport.height { continue }
+            x: s32
+            while x < image.width {
+                pixel := image.pixels[y * image.width + x]
+                if pixel == Engine.COLOR_DEFAULT { x += 1; continue }
+                run: s32 = 1
+                while x + run < image.width && image.pixels[y * image.width + x + run] == pixel { run += 1 }
+                Fill(frame, node, Rectangle.{origin_x + cast(float32)x * pixel_w,
+                    dest_y, cast(float32)run * pixel_w, pixel_h},
+                    ColorFor(app, terminal, pixel, colors.foreground), app.viewport)
+                x += run
+            }
+        }
+    }
+}
+
+DrawCursor :: (frame: Frames.Session, node: s32, app: *State.State,
+    session: *Records.Session, colors: Colors.TerminalPaneViewColors, blink_on: bool) {
+    terminal := *session.terminal
+    if terminal.cursor_visible == 0 || session.scroll_offset != 0 ||
+        (terminal.cursor_blink != 0 && !blink_on) { return }
+    visible_row := terminal.cursor_row
+    if terminal.alternate_screen == 0 { visible_row += terminal.scrollback_count }
+    row := visible_row - app.first_visible_row
+    if row < 0 || row >= app.visible_rows || terminal.cursor_col < 0 || terminal.cursor_col >= terminal.cols { return }
+    bounds := Rectangle.{app.viewport.x + cast(float32)(terminal.cursor_col * app.cell_w),
+        app.viewport.y + cast(float32)(row * app.line_h),
+        cast(float32)app.cell_w, cast(float32)app.line_h}
+    style := terminal.cursor_style
+    if style == Engine.TERMINAL_CURSOR_DEFAULT { style = app.config.cursor_style }
+    if style == Engine.TERMINAL_CURSOR_BAR { bounds.width = 2.0 }
+    else if style == Engine.TERMINAL_CURSOR_UNDERLINE { bounds.y += bounds.height - 3.0; bounds.height = 2.0 }
+    Fill(frame, node, bounds, colors.cursor, app.viewport)
+    if style != Engine.TERMINAL_CURSOR_BAR && style != Engine.TERMINAL_CURSOR_UNDERLINE {
+        cell := Engine.terminal_cell(terminal, terminal.cursor_col, terminal.cursor_row)
+        if cell != null {
+            Render.DrawTerminalPaneGlyphCell(frame, node, cell.codepoint, cell.combining,
+                cast(s32)bounds.x, cast(s32)bounds.y, app.config.font_size, colors.background, app.viewport)
+        }
+    }
+}
+
+DrawDialogs :: (frame: Frames.Session, app: *State.State, persist: bool) -> bool {
+    Context.Draw(frame, app, persist)
+    if app.about_visible {
+        key := KeyboardTake(frame)
+        ignored: [128]u8
+        TypedTextTake(frame, ignored[:])
+        props: ActionModalProps
+        props.key = cast(u64)9100; props.title = "Terminal"
+        props.message = "A Kryon terminal application."; props.scale = app.scale
+        props.show_close = true; props.close_label = "Close"
+        actions: [1]ActionModalAction
+        actions[0].key = cast(u64)9101; actions[0].label = "OK"
+        result := ActionModal(frame, props, actions[:])
+        if result.action != 0 || key == KeyEscape || key == KeyEnter { app.about_visible = false }
+    }
+    Search.Draw(frame, app)
+    font_changed: bool
+    if app.profile_prompt != Types.TERMINAL_PANE_PROFILE_PROMPT_NONE {
+        typed: [128]u8
+        key := KeyboardTake(frame)
+        input := TextFieldInputFor(key, KeyboardModifiers(frame), TypedTextTake(frame, typed[:]))
+        result := Dialog.Draw(frame, cast(u64)9400, Profile.PromptTitle(app.profile_prompt), "Save",
+            app.profile_text[:], *app.profile_cursor, *app.profile_anchor, *app.profile_scroll_x,
+            *app.profile_focused, input, app.scale)
+        if result == 2 { font_changed = Profile.ApplyPrompt(app, persist).font }
+        if result != 0 { app.profile_prompt = Types.TERMINAL_PANE_PROFILE_PROMPT_NONE; app.profile_focused = false }
+    }
+    if app.rename_index >= 0 && app.rename_index < app.session_count {
+        typed: [128]u8
+        key := KeyboardTake(frame)
+        input := TextFieldInputFor(key, KeyboardModifiers(frame), TypedTextTake(frame, typed[:]))
+        result := Dialog.Draw(frame, cast(u64)9300, "Title", "Rename", app.rename_text[:],
+            *app.rename_cursor, *app.rename_text_anchor, *app.rename_scroll_x, *app.rename_focused, input, app.scale)
+        if result == 2 { Records.SetTitle(*app.sessions[app.rename_index], Text.TextUntilNul(app.rename_text[:])) }
+        if result != 0 { app.rename_index = -1; app.rename_focused = false }
+    } else if app.rename_index >= 0 { app.rename_index = -1; app.rename_focused = false }
+    return font_changed
+}
+
+#scope_export
+// Hosts supply device edges and time; widget interaction and painting stay here.
+ViewInput :: struct {
+    now: float64
+    menu_key_fresh: bool
+    middle_pressed: bool
+    middle_x: float32
+    middle_y: float32
+}
+ViewResult :: struct { node: s32; font_changed: bool; }
+
+Draw :: (frame: Frames.Session, app: *State.State, bounds: Rectangle,
+    input: ViewInput, persist: bool = true) -> ViewResult {
+    result: ViewResult
+    result.node = -1
+    if app == null || !Frames.SessionValid(frame) || !Tree.TreeIsBuilding(frame) { return result }
+    Paint.PaintRoundedFill(frame, Tree.TreeCurrentParent(frame), bounds, 0.0, 0, Opaque(app.palette.background))
+    menu_h := Chrome.MenuBarHeight(app)
+    if menu_h > 0 {
+        Menu.Draw(frame, app, Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)menu_h},
+            persist, input.menu_key_fresh)
+    }
+    tab_h := Chrome.TabBarHeight(app)
+    if tab_h > 0 {
+        DrawTabs(frame, app, Rectangle.{bounds.x, bounds.y + cast(float32)menu_h,
+            bounds.width, cast(float32)tab_h}, input)
+    }
+    viewport := Pane.TerminalPaneContentBounds(bounds, Chrome.Height(app), 0, app.scale)
+    BackgroundImage(frame, app, viewport)
+    result.node = Tree.TreeSubmitCurrent(frame, cast(u64)1400,
+        cast(s32)Kinds.WidgetKind.WidgetKindTextArea, viewport)
+    Tree.TreeSetInteractive(frame, result.node, false, false, 0)
+    active := Tabs.Active(app)
+    theme := Colors.GetTerminalPaneThemeColors()
+    if active == null {
+        Paint.PaintRoundedFill(frame, result.node, viewport, 0.0, 0,
+            Opacity(theme.background, app.config.background_opacity))
+        props: TextProps
+        props.key = cast(u64)1402; props.text = "Starting terminal..."
+        props.bounds = Rectangle.{viewport.x + 10.0, viewport.y + 10.0,
+            viewport.width - 20.0, 24.0 * app.scale}
+        props.font = app.config.font_size; props.wrap = TextWrap.TextWrapNone
+        UI.Text(frame, props)
+    } else {
+        terminal := *active.terminal
+        Profile.SeedMissing(*app.config, *app.palette, terminal)
+        measured := Pane.MeasureTerminalPaneContent(viewport, app.config.font_size, app.scale)
+        app.viewport = measured.content; app.cell_w = measured.cell_width
+        app.line_h = measured.line_height; app.visible_rows = measured.rows
+        Engine.terminal_resize(terminal, measured.cols, measured.rows)
+        total := Engine.terminal_visible_line_count(terminal)
+        max_scroll := total - app.visible_rows
+        if max_scroll < 0 { max_scroll = 0 }
+        active.scroll_offset = Clamp(active.scroll_offset, 0, max_scroll)
+        app.first_visible_row = Selection.TerminalPaneSelectionFirstVisibleRow(total, app.visible_rows, active.scroll_offset)
+        values := Colors.TerminalPaneProfileColors.{terminal.default_fg, terminal.default_bg,
+            terminal.cursor_color, terminal.selection_fg, terminal.selection_bg}
+        colors := Colors.ResolveTerminalPaneViewColors(*app.palette.terminal_palette,
+            *terminal.palette_overrides[0], values, theme)
+        Paint.PaintRoundedFill(frame, result.node, viewport, 0.0, 0,
+            Opacity(colors.background, app.config.background_opacity))
+        blink_on := (cast(s64)(input.now * 2.0) & 1) == 0
+        DrawSixel(frame, result.node, app, terminal, colors)
+        DrawCells(frame, result.node, app, terminal, theme, colors, blink_on)
+        DrawCursor(frame, result.node, app, active, colors, blink_on)
+        if app.bell_until > input.now {
+            alpha := cast(float32)((app.bell_until - input.now) / 0.18)
+            if alpha > 1.0 { alpha = 1.0 }
+            overlay := theme.bell_overlay; border := theme.bell_border
+            overlay.a = cast(u8)(cast(float32)overlay.a * alpha)
+            border.a = cast(u8)(cast(float32)border.a * alpha)
+            Paint.PaintRoundedFill(frame, result.node, viewport, 0.0, 0, overlay)
+            Paint.PaintRoundedOutline(frame, result.node, viewport, 0.0, 0, 1.0, border)
+        }
+        if active.scroll_offset > 0 {
+            Pane.DrawTerminalPaneScrollIndicator(frame, result.node,
+                .{viewport, active.scroll_offset, cast(s32)(13.0 * app.scale), theme}, app.scale)
+        }
+    }
+    result.font_changed = DrawDialogs(frame, app, persist)
+    return result
+}

@@ -11,7 +11,7 @@ the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
 tab lifecycle, selection/clipboard routing, palette and profile changes,
 commands, search dialogs, the context menu, application input routing and the
-menu bar. There are three legacy `.kry`
+menu bar and graphical view. There are two legacy `.kry`
 inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -68,7 +68,7 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`aa7b7ec7`) and compiler (`86b3148`) master commits. The Kryon dependency
+Kryon (`5073c3f2`) and compiler (`3c8239b`) master commits. The Kryon dependency
 is published; the complete fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -295,14 +295,39 @@ The legacy menu implementation is removed; its old header remains migration
 input for the graphical view. These gates do not establish complete graphical
 application or Rill builds.
 
-The next source boundary is the graphical view.
-Migrate its consumers to these current modules, then migrate app
+## Application graphical view
+
+`app_terminal_view.zi` composes the menu, tabs, terminal grid, images and
+dialogs through current Kryon sessions, widgets and queued paint. The legacy
+view implementation is removed. Glyph text and background image paths are
+owned by the frame, including the complete 240-by-120 grid. Terminal colors,
+selection, wide and combining cells, bold and faint styles, decorations,
+blinking, Sixel pixel runs, cursor styles, scroll indicators and bell overlays
+retain their application behavior. Glyphs and Sixel runs are clipped to the
+terminal viewport. Background images use asset-backed `ImageProps`.
+
+Tabs retain activation, closing, configured middle-click closing,
+double-click renaming and reordering through Kryon's retained `TabBar`.
+Dialogs retain keyboard and button actions; applying a font-file setting
+reports the change to the host so it can load the new source.
+
+`make view-test` checks source and saved-IR execution in C and C++;
+`make view-plan9-test` checks the same fixture with actual native Plan 9
+8c/8l execution. The fixtures verify queued glyph and image ownership,
+rendering, clipping, cursor and scroll behavior, tab lifecycle and dialog
+actions. These checks do not establish whole-application graphics, host font
+loading or OS input.
+
+The next source boundary is the standalone and embedded application hosts.
+Migrate their consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
 release gates. Independent module checks remain separate evidence until
 those whole-application gates pass.
 
 ## Completed modules
+
+- `src/app/app_terminal_view.zi`
 
 - `src/terminal_pane/terminal_pane_text.zi`
 - `src/terminal_pane/terminal_pane_sgr.zi`

@@ -32,6 +32,11 @@ State :: struct {
     scale: float32
     menu: Menus.MenuState
     tab_scroll: s32
+    tab_drag_from: s32
+    tab_dragging: bool
+    tab_last_clicked_index: s32
+    tab_last_clicked_at: float32
+    tab_last_click_valid: bool
     quit_requested: bool
     window_focused: bool
     about_visible: bool
@@ -82,6 +87,7 @@ Init :: (app: *State) {
     Config.Defaults(*app.config); Launch.Defaults(*app.launch); Colors.Defaults(*app.palette)
     for tab: cast(s32)0..cast(s32)7 { Sessions.Init(*app.sessions[tab]) }
     app.active = -1; app.rename_index = -1; Menus.MenuStateInit(*app.menu)
+    app.tab_drag_from = -1; app.tab_last_clicked_index = -1
     app.mouse_report_col = -1; app.mouse_report_row = -1
     app.mouse_report_x = -1; app.mouse_report_y = -1
     app.mouse_report_button = Mouse.TERMINAL_PANE_MOUSE_RELEASE

@@ -1,0 +1,362 @@
+View :: #import "app_terminal_view";
+State :: #import "app_state";
+Records :: #import "app_session";
+Profile :: #import "app_profile";
+Engine :: #import "terminal";
+Colors :: #import "terminal_pane_profile_colors";
+Types :: #import "terminal_pane_profile_types";
+Frames :: #import "kryon/session";
+Frame :: #import "kryon/Frame";
+Tree :: #import "kryon/tree";
+Input :: #import "kryon/tree_input";
+Paint :: #import "kryon/paint_queue";
+using Drawing :: #import "kryon/drawing_props";
+using Geometry :: #import "kryon/geometry";
+Text :: #import "std/byte_text_linux";
+Buffer :: #import "std/text_buffer";
+Host :: #import "terminal_view_host";
+ClipboardHost :: #import "terminal_clipboard_host";
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Feed :: (terminal: *Engine.Terminal, value: string) {
+    Engine.terminal_feed(terminal, cast(*void)Bytes(value), cast(s32)value.count)
+}
+Application :: () -> *State.State {
+    app := State.Allocate()
+    if app != null {
+        app.config.font_size = 14; app.config.background_opacity = 50
+        app.launch.show_menubar = false; app.launch.show_toolbar = false
+        app.session_count = 1; app.active = 0
+        app.sessions[0].terminal.cursor_visible = 0
+    }
+    return app
+}
+Begin :: (frame: Frames.Session, app: *State.State, bounds: Rectangle,
+    now: float64 = 0.0, middle: bool = false, x: float32 = 0.0, y: float32 = 0.0) -> View.ViewResult {
+    Host.Reset()
+    Frame.BeginFrame(frame, cast(u64)1, bounds)
+    return View.Draw(frame, app, bounds, .{now, true, middle, x, y}, false)
+}
+Finish :: (frame: Frames.Session) -> bool { return cast(s32)Frame.EndFrame(frame) == 0 }
+Same :: (first: Color, second: Color) -> bool {
+    return first.r == second.r && first.g == second.g && first.b == second.b && first.a == second.a
+}
+TextCount :: (frame: Frames.Session, value: string) -> s32 {
+    count: s32
+    paint_count := Paint.PendingPaintCount(frame)
+    for index: 0..paint_count - 1 {
+        if Paint.PendingPaintAt(frame, index).value == value { count += 1 }
+    }
+    return count
+}
+Label :: (frame: Frames.Session, value: string) -> Paint.PaintCommand {
+    paint_count := Paint.PendingPaintCount(frame)
+    for index: 0..paint_count - 1 {
+        command := Paint.PendingPaintAt(frame, index)
+        if command.value == value { return command }
+    }
+    return Paint.PaintCommand.{}
+}
+HasFill :: (frame: Frames.Session, bounds: Rectangle, color: Color) -> bool {
+    paint_count := Paint.PendingPaintCount(frame)
+    for index: 0..paint_count - 1 {
+        command := Paint.PendingPaintAt(frame, index)
+        if command.kind == 2 && Same(command.color, color) &&
+            command.bounds.x == bounds.x && command.bounds.y == bounds.y &&
+            command.bounds.width == bounds.width && command.bounds.height == bounds.height { return true }
+    }
+    return false
+}
+ClickKey :: (frame: Frames.Session, key: u64) -> bool {
+    tree_count := Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.key == key && node.bounds.width > 0.0 && node.bounds.height > 0.0 {
+            x := node.bounds.x + node.bounds.width * 0.5
+            y := node.bounds.y + node.bounds.height * 0.5
+            Input.TreePointerUpdate(frame, .{x, y, true, true, false})
+            Input.TreePointerUpdate(frame, .{x, y, false, false, true})
+            return true
+        }
+    }
+    return false
+}
+Failure :: (message: string) -> bool { print("Terminal view: %\n", message); return false }
+ReportTree :: (frame: Frames.Session) {
+    for index: 0..Tree.TreeCount(frame) - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        print("node % key % kind % label [%] bounds %,%,%,%\n", index, node.key, node.kind, node.semantic_label,
+            cast(s32)node.bounds.x, cast(s32)node.bounds.y, cast(s32)node.bounds.width, cast(s32)node.bounds.height)
+    }
+}
+
+CheckCells :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    bounds := Rectangle.{10.0, 20.0, 128.0, 64.0}
+    Begin(frame, app, bounds)
+    if app.cell_w != 8 || app.line_h != 16 || app.visible_rows != 4 || !Finish(frame) { return Failure("viewport metrics") }
+    terminal := *app.sessions[0].terminal
+    Feed(terminal, "Á界🙂BCDE")
+    cell := Engine.terminal_cell(terminal, 0, 0)
+    cell.style |= Engine.STYLE_BOLD | Engine.STYLE_UNDERLINE | Engine.STYLE_OVERLINE
+    cell.fg = Engine.COLOR_TRUE_RGB | 0x010203; cell.bg = Engine.COLOR_TRUE_RGB | 0x102030
+    cell.underline = Engine.COLOR_TRUE_RGB | 0x405060
+    cell = Engine.terminal_cell(terminal, 5, 0)
+    cell.style |= Engine.STYLE_INVERSE
+    cell.fg = Engine.COLOR_TRUE_RGB | 0x112233; cell.bg = Engine.COLOR_TRUE_RGB | 0x445566
+    cell = Engine.terminal_cell(terminal, 6, 0)
+    cell.style |= Engine.STYLE_FAINT
+    cell.fg = Engine.COLOR_TRUE_RGB | 0xffffff; cell.bg = Engine.COLOR_TRUE_RGB
+    Engine.terminal_cell(terminal, 7, 0).style |= Engine.STYLE_CONCEAL
+    Engine.terminal_cell(terminal, 8, 0).style |= Engine.STYLE_BLINK
+    app.config.allow_bold = 1
+    Begin(frame, app, bounds)
+    if TextCount(frame, "Á") != 2 || Label(frame, "界").x != 18 || Label(frame, "🙂").x != 34 ||
+        TextCount(frame, "D") != 0 || TextCount(frame, "E") != 1 { return Failure("Unicode, wide cells and styles") }
+    if !Same(Label(frame, "Á").color, .{1, 2, 3, 255}) ||
+        !Same(Label(frame, "B").color, .{68, 85, 102, 255}) ||
+        !Same(Label(frame, "C").color, .{140, 140, 140, 255}) { return Failure("cell colors") }
+    if !HasFill(frame, bounds, Color.{app.palette.terminal_background.r,
+        app.palette.terminal_background.g, app.palette.terminal_background.b, 127}) ||
+        !HasFill(frame, .{10.0, 33.0, 8.0, 1.0}, .{64, 80, 96, 255}) ||
+        !HasFill(frame, .{10.0, 21.0, 8.0, 1.0}, .{64, 80, 96, 255}) ||
+        Label(frame, "Á").clip.width != 128.0 || !Finish(frame) { return Failure("background, decorations and clipping") }
+    Begin(frame, app, bounds, 0.75)
+    if TextCount(frame, "E") != 0 || !Finish(frame) { return Failure("text blink") }
+    app.config.allow_bold = 0
+    app.selection.active = 1; app.selection.start_col = 0; app.selection.end_col = 1
+    terminal.selection_fg = Engine.COLOR_TRUE_RGB | 0xabcdef
+    terminal.selection_bg = Engine.COLOR_TRUE_RGB | 0x123456
+    Begin(frame, app, bounds)
+    if TextCount(frame, "Á") != 1 || !Same(Label(frame, "Á").color, .{171, 205, 239, 255}) ||
+        !HasFill(frame, .{10.0, 20.0, 8.0, 16.0}, .{18, 52, 86, 255}) || !Finish(frame) {
+        return Failure("selection colors and bold switch")
+    }
+    return true
+}
+
+CheckGraphicsAndCursor :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    bounds := Rectangle.{10.0, 20.0, 64.0, 64.0}
+    Begin(frame, app, bounds); if !Finish(frame) { return false }
+    terminal := *app.sessions[0].terminal
+    Feed(terminal, "\x1bPq#1;2;100;0;0!60~\x1b\\")
+    if Engine.terminal_sixel_count(terminal) != 1 { return Failure("Sixel fixture") }
+    Begin(frame, app, bounds)
+    red: s32
+    paint_count := Paint.PendingPaintCount(frame)
+    for index: 0..paint_count - 1 {
+        command := Paint.PendingPaintAt(frame, index)
+        if command.kind == 2 && Same(command.color, .{255, 0, 0, 255}) {
+            red += 1
+            if command.bounds.x < 10.0 || command.bounds.x + command.bounds.width > 74.0 ||
+                command.bounds.y < 20.0 || command.bounds.y + command.bounds.height > 84.0 {
+                return Failure("Sixel clip")
+            }
+        }
+    }
+    if red != 6 || !Finish(frame) { return Failure("Sixel pixel runs") }
+    terminal.alternate_screen = 1
+    Begin(frame, app, bounds)
+    paint_count = Paint.PendingPaintCount(frame)
+    for index: 0..paint_count - 1 {
+        if Same(Paint.PendingPaintAt(frame, index).color, Color.{255, 0, 0, 255}) { return Failure("alternate-screen image isolation") }
+    }
+    if !Finish(frame) { return false }
+    terminal.alternate_screen = 0
+    terminal.cursor_col = 1; terminal.cursor_row = 2; terminal.cursor_visible = 1
+    terminal.cursor_blink = 0; terminal.cursor_color = Engine.COLOR_TRUE_RGB | 0x123456
+    terminal.cursor_style = Engine.TERMINAL_CURSOR_BAR
+    Begin(frame, app, bounds)
+    if !HasFill(frame, .{18.0, 52.0, 2.0, 16.0}, .{18, 52, 86, 255}) || !Finish(frame) { return Failure("bar cursor") }
+    terminal.cursor_style = Engine.TERMINAL_CURSOR_UNDERLINE
+    Begin(frame, app, bounds)
+    if !HasFill(frame, .{18.0, 65.0, 8.0, 2.0}, .{18, 52, 86, 255}) || !Finish(frame) { return Failure("underline cursor") }
+    terminal.cursor_style = Engine.TERMINAL_CURSOR_DEFAULT; app.config.cursor_style = Engine.TERMINAL_CURSOR_BLOCK
+    Begin(frame, app, bounds)
+    if !HasFill(frame, .{18.0, 52.0, 8.0, 16.0}, .{18, 52, 86, 255}) || !Finish(frame) { return Failure("configured block cursor") }
+    terminal.cursor_blink = 1
+    Begin(frame, app, bounds, 0.75)
+    if HasFill(frame, .{18.0, 52.0, 8.0, 16.0}, .{18, 52, 86, 255}) || !Finish(frame) { return Failure("cursor blink") }
+    Records.CopyText(app.config.background_image[:], "background")
+    Begin(frame, app, bounds)
+    Records.CopyText(app.config.background_image[:], "changed")
+    if !Finish(frame) || Host.images != 1 || TextView(Host.image_path[0:Host.image_path_length]) != "background" {
+        return Failure("asset-backed background image ownership")
+    }
+    return true
+}
+
+CheckScrollAndBell :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    bounds := Rectangle.{0.0, 0.0, 240.0, 64.0}
+    Begin(frame, app, bounds); if !Finish(frame) { return false }
+    Feed(*app.sessions[0].terminal, "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven")
+    app.sessions[0].scroll_offset = 999
+    Begin(frame, app, bounds)
+    if app.sessions[0].scroll_offset != 3 || app.first_visible_row != 0 ||
+        TextCount(frame, "3 lines") != 1 || !Finish(frame) { return Failure("scroll limits and indicator") }
+    app.sessions[0].scroll_offset = -50; app.bell_until = 1.30
+    Begin(frame, app, bounds, 1.0)
+    theme := Colors.GetTerminalPaneThemeColors()
+    if app.sessions[0].scroll_offset != 0 || app.first_visible_row != 3 ||
+        !HasFill(frame, bounds, theme.bell_overlay) || !Finish(frame) { return Failure("scroll reset and bell overlay") }
+    Begin(frame, app, bounds, 2.0)
+    if HasFill(frame, bounds, theme.bell_overlay) || !Finish(frame) { return Failure("bell expiration") }
+    return true
+}
+
+CheckTabsAndDialogs :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    app.launch.show_toolbar = true; app.session_count = 2
+    Records.SetTitle(*app.sessions[0], "first"); Records.SetTitle(*app.sessions[1], "second")
+    bounds := Rectangle.{0.0, 0.0, 640.0, 320.0}
+    Begin(frame, app, bounds); if !Finish(frame) { return false }
+    // The tab widget derives each tab key from its bar key and public Tab.
+    target: u64
+    tree_count := Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.semantic_label == "second" { target = node.key }
+    }
+    if target == cast(u64)0 || !ClickKey(frame, target) {
+        print("tab titles [%] [%], target %\n", Records.Title(*app.sessions[0]), Records.Title(*app.sessions[1]), target)
+        ReportTree(frame)
+        return Failure("retained tab hit target")
+    }
+    Begin(frame, app, bounds, 0.1)
+    if app.active != 1 || !Finish(frame) { return Failure("tab activation") }
+    if !ClickKey(frame, target) { return false }
+    Begin(frame, app, bounds, 0.2)
+    if app.rename_index != 1 || !app.rename_focused || !Finish(frame) { return Failure("double-click rename") }
+    Records.CopyText(app.rename_text[:], "renamed")
+    app.rename_cursor = 7; app.rename_text_anchor = 7
+    Input.KeyboardSend(frame, Input.KeyEnter)
+    Begin(frame, app, bounds, 0.3)
+    if app.rename_index != -1 || Records.Title(*app.sessions[1]) != "renamed" || !Finish(frame) {
+        return Failure("rename commit")
+    }
+    app.about_visible = true
+    Begin(frame, app, bounds); if !Finish(frame) || !ClickKey(frame, cast(u64)9101) { return Failure("About action") }
+    Begin(frame, app, bounds)
+    if app.about_visible || !Finish(frame) { return Failure("About dismissal") }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_FONT_SIZE)
+    Records.CopyText(app.profile_text[:], "19"); app.profile_cursor = 2; app.profile_anchor = 2
+    Input.KeyboardSend(frame, Input.KeyEnter)
+    result := Begin(frame, app, bounds)
+    if result.font_changed || app.config.font_size != 19 || app.profile_prompt != 0 || !Finish(frame) {
+        return Failure("profile font-size Save")
+    }
+    Profile.OpenPrompt(app, Types.TERMINAL_PANE_PROFILE_PROMPT_TERMINAL_FONT)
+    Records.CopyText(app.profile_text[:], "terminal.ttf")
+    app.profile_cursor = 12; app.profile_anchor = 12
+    Input.KeyboardSend(frame, Input.KeyEnter)
+    result = Begin(frame, app, bounds)
+    if !result.font_changed || Buffer.TextUntilNul(app.config.terminal_font[:]) != "terminal.ttf" ||
+        app.profile_prompt != 0 || !Finish(frame) { return Failure("font-file Save and host notification") }
+    app.rename_index = 7; app.rename_focused = true
+    Begin(frame, app, bounds)
+    if app.rename_index != -1 || app.rename_focused || !Finish(frame) { return Failure("stale rename index") }
+    tab_bounds: Rectangle
+    tree_count = Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.semantic_label == "renamed" { tab_bounds = node.bounds }
+    }
+    if tab_bounds.width <= 0.0 { return Failure("renamed tab hit target") }
+    app.config.middle_click_closes_tab = 0
+    Begin(frame, app, bounds, 1.0, true, tab_bounds.x + 5.0, tab_bounds.y + 5.0)
+    if app.session_count != 2 || !Finish(frame) { return Failure("disabled middle-click close") }
+    app.config.middle_click_closes_tab = 1
+    Begin(frame, app, bounds, 1.1, true, tab_bounds.x + 5.0, tab_bounds.y + 5.0)
+    if app.session_count != 1 || app.active != 0 || !Finish(frame) { return Failure("middle-click close") }
+    return true
+}
+
+CheckLargeGrid :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    bounds := Rectangle.{0.0, 0.0, 1920.0, 1920.0}
+    Begin(frame, app, bounds); if !Finish(frame) { return false }
+    terminal := *app.sessions[0].terminal
+    if terminal.cols != 240 || terminal.rows != 120 { return Failure("maximum grid sizing") }
+    for row: cast(s32)0..cast(s32)119 {
+        for col: cast(s32)0..cast(s32)239 {
+            cell := Engine.terminal_cell(terminal, col, row)
+            cell.codepoint = cast(u32)(65 + col % 26); cell.combining = 769
+        }
+    }
+    Begin(frame, app, bounds)
+    last := Paint.PendingPaintAt(frame, Paint.PendingPaintCount(frame) - 1)
+    if last.value != "F́" || last.x != 1912 || last.y != 1904 || Paint.PaintOverflow(frame) || !Finish(frame) ||
+        Host.texts != 28800 || TextView(Host.last_text[0:Host.last_length]) != "F́" { return Failure("large grid glyph ownership") }
+    return true
+}
+
+CheckTabReordering :: () -> bool {
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    app := Application(); if app == null { return false }; defer State.Dispose(app)
+    app.launch.show_toolbar = true; app.session_count = 3
+    Records.SetTitle(*app.sessions[0], "first")
+    Records.SetTitle(*app.sessions[1], "second")
+    Records.SetTitle(*app.sessions[2], "third")
+    bounds := Rectangle.{0.0, 0.0, 640.0, 320.0}
+    Begin(frame, app, bounds); if !Finish(frame) { return false }
+    first: Rectangle; third: Rectangle
+    tree_count := Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.semantic_label == "first" { first = node.bounds }
+        if node.semantic_label == "third" { third = node.bounds }
+    }
+    if first.width <= 0.0 || third.width <= 0.0 { return Failure("drag tab targets") }
+    x := first.x + first.width * 0.5; y := first.y + first.height * 0.5
+    Input.TreePointerUpdate(frame, .{x, y, true, true, false})
+    Begin(frame, app, bounds, 1.0); if !Finish(frame) { return false }
+    x = third.x + third.width * 0.6
+    Input.TreePointerUpdate(frame, .{x, y, true, false, false})
+    Begin(frame, app, bounds, 1.1)
+    if !app.tab_dragging || app.tab_drag_from != 0 || !Finish(frame) { return Failure("retained tab drag") }
+    Input.TreePointerUpdate(frame, .{x, y, false, false, true})
+    Begin(frame, app, bounds, 1.2)
+    if app.tab_dragging || app.active != 2 || app.session_count != 3 ||
+        Records.Title(*app.sessions[0]) != "second" || Records.Title(*app.sessions[1]) != "third" ||
+        Records.Title(*app.sessions[2]) != "first" || !Finish(frame) {
+        print("reorder active %, dragging %, count %, titles [%] [%] [%]\n", app.active,
+            app.tab_dragging, app.session_count, Records.Title(*app.sessions[0]),
+            Records.Title(*app.sessions[1]), Records.Title(*app.sessions[2]))
+        return Failure("tab reorder and active session")
+    }
+    Input.TreePointerUpdate(frame, .{x, y, false, false, false})
+    Begin(frame, app, bounds, 1.3); if !Finish(frame) { return false }
+    close_key: u64
+    tree_count = Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.semantic_label == "Close tab" { close_key = node.key; break }
+    }
+    if close_key == cast(u64)0 || !ClickKey(frame, close_key) { return Failure("tab close target") }
+    Begin(frame, app, bounds, 1.4)
+    if app.session_count != 2 || app.active != 1 || Records.Title(*app.sessions[0]) != "third" ||
+        Records.Title(*app.sessions[1]) != "first" || !Finish(frame) { return Failure("closing a reordered tab") }
+    return true
+}
+
+#program_export
+main :: () -> s32 {
+    if !CheckCells() { return 1 }
+    if !CheckGraphicsAndCursor() { return 2 }
+    if !CheckScrollAndBell() { return 3 }
+    if !CheckTabsAndDialogs() { return 4 }
+    if !CheckLargeGrid() { return 5 }
+    if !CheckTabReordering() { return 6 }
+    print("Terminal view rendering and retained interaction passed\n")
+    return 0
+}

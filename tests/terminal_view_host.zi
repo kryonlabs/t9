@@ -1,0 +1,62 @@
+using Drawing :: #import "kryon/drawing_props";
+using Geometry :: #import "kryon/geometry";
+
+texts: s32;
+fills: s32;
+images: s32;
+last_text: [16]u8;
+last_length: s32;
+image_path: [64]u8;
+image_path_length: s32;
+Reset :: () { texts = 0; fills = 0; images = 0; last_length = 0; image_path_length = 0 }
+
+#program_export
+MeasureGlyphWidth :: (value: string, font: s32, typeface: string) -> s32 {
+    unused font; unused typeface
+    return cast(s32)value.count * 8
+}
+#program_export
+MeasureGlyphLineHeight :: (font: s32, typeface: string) -> s32 {
+    unused font; unused typeface
+    return 12
+}
+#program_export
+RasterText :: (value: string, x: s32, y: s32, font: s32, color: Color) {
+    unused x; unused y; unused font; unused color
+    texts += 1
+    last_length = cast(s32)value.count
+    if last_length > 16 { last_length = 16 }
+    for index: 0..last_length - 1 { last_text[index] = value[index] }
+}
+#program_export
+RasterTextClipped :: (value: string, x: s32, y: s32, font: s32,
+    color: Color, clip: Rectangle) {
+    unused clip
+    RasterText(value, x, y, font, color)
+}
+#program_export
+RasterLine :: (bounds: Rectangle, color: Color) { unused bounds; unused color }
+#program_export
+RasterRoundedRectangle :: (bounds: Rectangle, radius: float32, segments: s32, color: Color) {
+    unused bounds; unused radius; unused segments; unused color
+    fills += 1
+}
+#program_export
+RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,
+    segments: s32, width: float32, color: Color) {
+    unused bounds; unused radius; unused segments; unused width; unused color
+}
+#program_export
+ImageWidth :: (path: string) -> s32 { return ifx path == "background" then 64 else 0 }
+#program_export
+ImageHeight :: (path: string) -> s32 { return ifx path == "background" then 32 else 0 }
+#program_export
+RasterImage :: (path: string, id: u32, source: Rectangle, destination: Rectangle,
+    clip: Rectangle, origin: Vector2, rotation: float32, radius: float32, tint: Color) {
+    unused id; unused source; unused destination; unused clip
+    unused origin; unused rotation; unused radius; unused tint
+    images += 1
+    image_path_length = cast(s32)path.count
+    if image_path_length > 64 { image_path_length = 64 }
+    for index: 0..image_path_length - 1 { image_path[index] = path[index] }
+}
