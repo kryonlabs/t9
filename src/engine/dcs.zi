@@ -1,0 +1,103 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+terminal_dcs_begin :: (terminal: *Terminal) {
+    if terminal == null { return }
+    PaneDCS.ResetTerminalPaneDCSBuffer(*terminal.dcs)
+}
+
+#scope_export
+#program_export
+terminal_dcs_append :: (terminal: *Terminal,
+codepoint: u32) {
+    if terminal == null { return }
+    PaneDCS.AppendTerminalPaneDCSCodepoint(*terminal.dcs, codepoint)
+}
+
+#scope_export
+#program_export
+terminal_dcs_finish :: (terminal: *Terminal) -> s32 {
+    rows_used: s32 = 0
+
+    if terminal == null { return 0 }
+    payload: *u8 = PaneDCS.GetTerminalPaneDCSBufferText(*terminal.dcs)
+    if payload != null {
+        if terminal_dcs_finish_decrqss(terminal, payload) == 0 &&
+        terminal_dcs_finish_xtgettcap(terminal, payload) == 0 &&
+        strchr(payload, #char"q") != null {
+            rows_used = terminal_sixel_finish(terminal, payload)
+        }
+    }
+    PaneDCS.ResetTerminalPaneDCSBuffer(*terminal.dcs)
+    return rows_used
+}
+
+#scope_export
+#program_export
+terminal_dcs_finish_xtgettcap :: (terminal: *Terminal,
+payload: *u8) -> s32 {
+    if terminal == null || payload == null ||
+    strncmp(payload, RawBytes("+q"), 2) != 0 {
+        return 0
+    }
+    response: [1024]u8
+    len: s32 = PaneDCS.FormatTerminalPaneXTGETTCAPResponse( *response[0],
+    cast(s32)size_of(type_of(response)), payload)
+    if len <= 0 { return 1 }
+    terminal_write_text(terminal, *response[0])
+    return 1
+}
+
+#scope_module
+current_sgr_status :: (terminal: *Terminal,
+buffer: *u8, buffer_size: s32) {
+    if buffer == null || buffer_size <= 0 { return }
+    buffer[0] = 0
+    if terminal == null { return }
+    status: PaneSGR.TerminalPaneSGRStatus = PaneSGR.TerminalPaneSGRStatus.{
+        terminal.current_style &
+        (STYLE_BOLD | STYLE_ITALIC | STYLE_UNDERLINE | STYLE_INVERSE |
+        STYLE_STRIKE | STYLE_FAINT | STYLE_CONCEAL | STYLE_BLINK |
+        STYLE_OVERLINE),
+        terminal.current_fg,
+        terminal.current_bg,
+        terminal.current_underline,
+    }
+    PaneSGR.FormatTerminalPaneSGRStatus( *buffer[0], buffer_size, status)
+}
+
+#scope_export
+#program_export
+terminal_dcs_finish_decrqss :: (terminal: *Terminal,
+payload: *u8) -> s32 {
+    if terminal == null || payload == null ||
+    strncmp(payload, RawBytes("$q"), 2) != 0 {
+        return 0
+    }
+    status: [256]u8
+    report: Report
+    selector := *payload[2]
+    ReportText(*report, "\x1bP1$r")
+    if strcmp(selector, RawBytes("m")) == 0 {
+        current_sgr_status(terminal, *status[0], 256)
+        ReportRaw(*report, *status[0])
+    } else if strcmp(selector, RawBytes("r")) == 0 {
+        ReportInteger(*report, terminal.scroll_top + 1)
+        ReportText(*report, ";")
+        ReportInteger(*report, terminal.scroll_bottom + 1)
+        ReportText(*report, "r")
+    } else if strcmp(selector, RawBytes(" q")) == 0 {
+        ReportInteger(*report, PaneProfile.TerminalPaneCursorStyleReportCode(
+            terminal.cursor_style, terminal.cursor_blink))
+        ReportText(*report, " q")
+    } else if strcmp(selector, RawBytes("\" q")) == 0 {
+        ReportText(*report, "0\"q")
+    } else {
+        terminal_write_text(terminal, RawBytes("\x1bP0$r\x1b\\"))
+        return 1
+    }
+    ReportText(*report, "\x1b\\")
+    WriteReport(terminal, *report)
+    return 1
+}

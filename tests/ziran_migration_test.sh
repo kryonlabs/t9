@@ -24,4 +24,8 @@ if [ -e src/terminal_pty.c ] || [ -e src/terminal_pty_plan9.c ]; then
     echo 'Terminal process transports must use their Ziran implementation' >&2
     status=1
 fi
+if rg --files src/engine -g '*.kry' -g '*.c' | rg -q .; then
+    echo 'Terminal engine implementations must use the loaded Ziran modules' >&2
+    status=1
+fi
 exit "$status"

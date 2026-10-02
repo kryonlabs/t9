@@ -1,0 +1,216 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_module
+terminal_screen_cells_const :: (
+terminal: *Terminal) -> *Cell {
+    return (ifx terminal != null &&
+    terminal.alternate_screen != 0 then terminal.alt_cells else terminal.main_cells)
+}
+
+#scope_export
+#program_export
+terminal_cell :: (terminal: *Terminal, col: s32,
+row: s32) -> *Cell {
+    cells: *Cell = terminal_screen_cells_const(terminal)
+
+    if terminal == null || cells == null || col < 0 || row < 0 ||
+    col >= terminal.cols || row >= terminal.rows {
+        return null
+    }
+    return *cells[row * terminal.cols + col]
+}
+
+#scope_export
+#program_export
+terminal_visible_cell :: (terminal: *Terminal,
+col: s32, visible_row: s32) -> *Cell {
+    if terminal == null || col < 0 || visible_row < 0 ||
+    col >= terminal.cols {
+        return null
+    }
+    scrollback_count: s32 = (ifx terminal.alternate_screen != 0 then 0 else terminal.scrollback_count)
+    if visible_row < scrollback_count {
+        if terminal.scrollback == null ||
+        terminal.scrollback_capacity <= 0 {
+            return null
+        }
+        physical: s32 = (terminal.scrollback_head -
+        scrollback_count + visible_row +
+        terminal.scrollback_capacity) %
+        terminal.scrollback_capacity
+        return *terminal.scrollback[physical * terminal.cols + col]
+    }
+    return terminal_cell(terminal, col,
+    visible_row - scrollback_count)
+}
+
+#scope_export
+#program_export
+terminal_hyperlink :: (terminal: *Terminal,
+hyperlink: s32) -> *u8 {
+    if terminal == null || hyperlink <= 0 ||
+    hyperlink > terminal.hyperlink_count {
+        return null
+    }
+    return *terminal.hyperlinks[hyperlink - 1][0]
+}
+
+#scope_export
+#program_export
+terminal_hyperlink_id :: (terminal: *Terminal,
+hyperlink: s32) -> *u8 {
+    if terminal == null || hyperlink <= 0 ||
+    hyperlink > terminal.hyperlink_count {
+        return null
+    }
+    return *terminal.hyperlink_ids[hyperlink - 1][0]
+}
+
+#scope_module
+copy_terminal_line :: (cells: *Cell, cols: s32, row: s32,
+out: *u8, out_size: s32) {
+    used: s32 = 0
+
+    if out == null || out_size <= 0 { return }
+    out[0] = 0
+    if cells == null || row < 0 { return }
+    end: s32 = cols
+    while end > 0 &&
+    cells[row * cols + end - 1].codepoint == #char" " {
+        end -= 1
+    }
+    col: s32 = 0
+    while col < end {
+        cp: u32 = cells[row * cols + col].codepoint
+
+        if (cells[row * cols + col].style & STYLE_WIDE_CONT) != 0 {
+            col += 1
+            continue
+        }
+        if cp == 0 { cp = #char" " }
+        if cast(s32)PaneText.AppendTerminalPaneUTF8Codepoint(out, out_size, *used,
+        cp) == 0 {
+            break
+        }
+        if cells[row * cols + col].combining != 0 &&
+        cast(s32)PaneText.AppendTerminalPaneUTF8Codepoint(out, out_size, *used,
+        cells[row * cols + col].combining) == 0 {
+            break
+        }
+        col += 1
+    }
+    out[used] = 0
+}
+
+#scope_export
+#program_export
+terminal_line :: (terminal: *Terminal, row: s32,
+out: *u8, out_size: s32) {
+    if out == null || out_size <= 0 { return }
+    out[0] = 0
+    if terminal == null || row < 0 || row >= terminal.rows {
+        return
+    }
+    copy_terminal_line(terminal_screen_cells_const(terminal),
+    terminal.cols, row, out, out_size)
+}
+
+#scope_export
+#program_export
+terminal_scrollback_line :: (terminal: *Terminal,
+row: s32, out: *u8, out_size: s32) {
+    if out == null || out_size <= 0 { return }
+    out[0] = 0
+    if terminal == null || terminal.scrollback == null ||
+    row < 0 || row >= terminal.scrollback_count {
+        return
+    }
+    physical: s32 = terminal.scrollback_head -
+    terminal.scrollback_count + row
+    while physical < 0 {
+        physical += terminal.scrollback_capacity
+    }
+    physical %= terminal.scrollback_capacity
+    copy_terminal_line(terminal.scrollback, terminal.cols,
+    physical, out, out_size)
+}
+
+#scope_export
+#program_export
+terminal_visible_line_count :: (
+terminal: *Terminal) -> s32 {
+    if terminal == null { return 0 }
+    if terminal.alternate_screen != 0 { return terminal.rows }
+    return terminal.scrollback_count + terminal.rows
+}
+
+#scope_export
+#program_export
+terminal_scrollback_rows :: (
+terminal: *Terminal) -> s32 {
+    return (ifx terminal != null then terminal.scrollback_count else 0)
+}
+
+#scope_export
+#program_export
+terminal_visible_line :: (terminal: *Terminal,
+visible_row: s32, out: *u8, out_size: s32) {
+    if out == null || out_size <= 0 { return }
+    out[0] = 0
+    if terminal == null || visible_row < 0 { return }
+    scrollback_count: s32 = (ifx terminal.alternate_screen != 0 then 0 else terminal.scrollback_count)
+    if visible_row < scrollback_count {
+        terminal_scrollback_line(terminal, visible_row, out,
+        out_size)
+        return
+    }
+    terminal_line(terminal, visible_row - scrollback_count, out,
+    out_size)
+}
+
+#scope_export
+#program_export
+terminal_visible_line_wrapped :: (
+terminal: *Terminal, visible_row: s32) -> s32 {
+    if terminal == null || visible_row < 0 { return 0 }
+    scrollback_count: s32 = (ifx terminal.alternate_screen != 0 then 0 else terminal.scrollback_count)
+    if visible_row < scrollback_count {
+        if terminal.scrollback_wrapped == null ||
+        terminal.scrollback_capacity <= 0 {
+            return 0
+        }
+        physical: s32 = terminal.scrollback_head -
+        scrollback_count + visible_row
+        while physical < 0 {
+            physical += terminal.scrollback_capacity
+        }
+        physical %= terminal.scrollback_capacity
+        return (ifx terminal.scrollback_wrapped[physical] != 0 then 1 else 0)
+    }
+    row: s32 = visible_row - scrollback_count
+    if row < 0 || row >= terminal.rows { return 0 }
+    if terminal.alternate_screen != 0 {
+        return (ifx terminal.alt_wrapped != null &&
+        terminal.alt_wrapped[row] != 0 then 1 else 0)
+    }
+    return (ifx terminal.main_wrapped != null &&
+    terminal.main_wrapped[row] != 0 then 1 else 0)
+}
+
+#scope_export
+#program_export
+terminal_sixel_count :: (
+terminal: *Terminal) -> s32 {
+    return (ifx terminal != null then terminal.sixel_count else 0)
+}
+
+#scope_export
+#program_export
+terminal_sixel_image :: (terminal: *Terminal,
+index: s32) -> *SixelImage {
+    if terminal == null || index < 0 ||
+    index >= terminal.sixel_count {
+        return null
+    }
+    return *terminal.sixel_images[index]
+}

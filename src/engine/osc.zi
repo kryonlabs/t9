@@ -1,0 +1,334 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+write_osc52_response :: (userdata: *void, text: *u8,
+size: s32) -> s32 {
+    terminal: *Terminal = cast(*Terminal)userdata
+
+    if terminal == null || text == null || size <= 0 { return 0 }
+    return terminal_write(terminal, cast(*void)text, size)
+}
+
+#scope_export
+#program_export
+terminal_default_palette_color :: (index: s32) -> s32 {
+    return PaneOSC.TerminalPaneDefaultPaletteColor(index)
+}
+
+#scope_module
+find_or_add_hyperlink :: (terminal: *Terminal, id: *u8,
+url: *u8) -> s32 {
+    if terminal == null || url == null || url[0] == 0 { return 0 }
+    if id == null { id = RawBytes("") }
+    i: s32 = 0
+    while i < terminal.hyperlink_count {
+        if id[0] != 0 {
+            if strcmp(*terminal.hyperlink_ids[i][0], id) == 0 &&
+            strcmp(*terminal.hyperlinks[i][0], url) == 0 {
+                return i + 1
+            }
+        } else if terminal.hyperlink_ids[i][0] == 0 &&
+        strcmp(*terminal.hyperlinks[i][0], url) == 0 {
+            return i + 1
+        }
+        i += 1
+    }
+    if terminal.hyperlink_count >= MAX_HYPERLINKS {
+        return 0
+    }
+    CopyRaw(*terminal.hyperlink_ids[terminal.hyperlink_count][0], HYPERLINK_ID_SIZE, id)
+    CopyRaw(*terminal.hyperlinks[terminal.hyperlink_count][0], HYPERLINK_SIZE, url)
+    terminal.hyperlink_count += 1
+    return terminal.hyperlink_count
+}
+
+#scope_module
+send_osc_color_response :: (terminal: *Terminal, code: s32,
+color: s32) -> s32 {
+    response: [64]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneOSC.FormatTerminalPaneOSCColorResponse( *response[0],
+    cast(s32)size_of(type_of(response)), code, color)
+    if len <= 0 || len >= cast(s32)size_of(type_of(response)) { return 0 }
+    return terminal_write_text(terminal, *response[0])
+}
+
+#scope_module
+send_osc_palette_response :: (terminal: *Terminal, index: s32,
+color: s32) -> s32 {
+    response: [80]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneOSC.FormatTerminalPaneOSCPaletteResponse( *response[0],
+    cast(s32)size_of(type_of(response)), index, color)
+    if len <= 0 || len >= cast(s32)size_of(type_of(response)) { return 0 }
+    return terminal_write_text(terminal, *response[0])
+}
+
+#scope_module
+terminal_osc_color_state :: (
+terminal: *Terminal) -> PaneOSC.TerminalPaneOSCColorState {
+    state: PaneOSC.TerminalPaneOSCColorState = PaneOSC.TerminalPaneOSCColorState.{}
+
+    if terminal == null { return state }
+    state.foreground = terminal.default_fg
+    state.background = terminal.default_bg
+    state.cursor = terminal.cursor_color
+    state.mouse_foreground = terminal.mouse_fg
+    state.mouse_background = terminal.mouse_bg
+    state.selection_foreground = terminal.selection_fg
+    state.selection_background = terminal.selection_bg
+    state.base_foreground = terminal.base_fg
+    state.base_background = terminal.base_bg
+    state.base_cursor = terminal.base_cursor_color
+    state.base_selection_foreground = terminal.base_selection_fg
+    state.base_selection_background = terminal.base_selection_bg
+    return state
+}
+
+#scope_module
+terminal_osc_color_slot :: (terminal: *Terminal,
+target: s32) -> *s32 {
+    if terminal == null { return null }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_FOREGROUND {
+        return *terminal.default_fg
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_BACKGROUND {
+        return *terminal.default_bg
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_CURSOR {
+        return *terminal.cursor_color
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_MOUSE_FOREGROUND {
+        return *terminal.mouse_fg
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_MOUSE_BACKGROUND {
+        return *terminal.mouse_bg
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_SELECTION_BACKGROUND {
+        return *terminal.selection_bg
+    }
+    if target == PaneOSC.TERMINAL_PANE_OSC_COLOR_SELECTION_FOREGROUND {
+        return *terminal.selection_fg
+    }
+    return null
+}
+
+#scope_export
+#program_export
+terminal_send_title_report :: (terminal: *Terminal,
+icon: s32) -> s32 {
+    response: [320]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneOSC.FormatTerminalPaneOSCTitleReport( *response[0],
+    cast(s32)size_of(type_of(response)), icon,
+    (ifx icon != 0 then *terminal.icon_title[0] else *terminal.title[0]))
+    if len <= 0 || len >= cast(s32)size_of(type_of(response)) { return 0 }
+    return terminal_write_text(terminal, *response[0])
+}
+
+#scope_export
+#program_export
+terminal_push_title_targets :: (terminal: *Terminal,
+target: s32) {
+    if terminal == null { return }
+    if target == 0 || target == 2 {
+        PaneOSC.TerminalPaneOSCPushTitle(
+        cast(*u8)(*terminal.title_stack[0][0]), TITLE_STACK_DEPTH,
+        cast(s32)size_of(type_of(terminal.title_stack[0])),
+        *terminal.title_stack_count, *terminal.title[0])
+    }
+    if target == 0 || target == 1 {
+        PaneOSC.TerminalPaneOSCPushTitle(
+        cast(*u8)(*terminal.icon_title_stack[0][0]), TITLE_STACK_DEPTH,
+        cast(s32)size_of(type_of(terminal.icon_title_stack[0])),
+        *terminal.icon_title_stack_count, *terminal.icon_title[0])
+    }
+}
+
+#scope_export
+#program_export
+terminal_pop_title_targets :: (terminal: *Terminal,
+target: s32) {
+    if terminal == null { return }
+    if target == 0 || target == 2 {
+        PaneOSC.TerminalPaneOSCPopTitle(
+        cast(*u8)(*terminal.title_stack[0][0]), TITLE_STACK_DEPTH,
+        cast(s32)size_of(type_of(terminal.title_stack[0])),
+        *terminal.title_stack_count, *terminal.title[0],
+        cast(s32)size_of(type_of(terminal.title)))
+    }
+    if target == 0 || target == 1 {
+        PaneOSC.TerminalPaneOSCPopTitle(
+        cast(*u8)(*terminal.icon_title_stack[0][0]), TITLE_STACK_DEPTH,
+        cast(s32)size_of(type_of(terminal.icon_title_stack[0])),
+        *terminal.icon_title_stack_count, *terminal.icon_title[0],
+        cast(s32)size_of(type_of(terminal.icon_title)))
+    }
+}
+
+#scope_module
+push_titles :: (terminal: *Terminal, payload: *u8) {
+    window: s32
+    icon: s32
+
+    if terminal == null { return }
+    PaneOSC.TerminalPaneOSCTitleTargets(payload, *window, *icon)
+    if window != 0 && icon != 0 {
+        terminal_push_title_targets(terminal, 0)
+    } else if icon != 0 {
+        terminal_push_title_targets(terminal, 1)
+    } else if window != 0 {
+        terminal_push_title_targets(terminal, 2)
+    }
+}
+
+#scope_module
+pop_titles :: (terminal: *Terminal, payload: *u8) {
+    window: s32
+    icon: s32
+
+    if terminal == null { return }
+    PaneOSC.TerminalPaneOSCTitleTargets(payload, *window, *icon)
+    if window != 0 && icon != 0 {
+        terminal_pop_title_targets(terminal, 0)
+    } else if icon != 0 {
+        terminal_pop_title_targets(terminal, 1)
+    } else if window != 0 {
+        terminal_pop_title_targets(terminal, 2)
+    }
+}
+
+#scope_export
+#program_export
+terminal_finish_osc :: (terminal: *Terminal) {
+    payload: *u8
+    code: s32
+
+    if terminal == null || terminal.osc_overflow { return }
+    terminal.osc[size_of(type_of(terminal.osc)) - 1] = 0
+    if PaneOSC.ParseTerminalPaneOSCCommand( *terminal.osc[0], *code,
+    *payload) == 0 {
+        return
+    }
+    if code == 0 || code == 2 {
+        PaneOSC.CopyTerminalPaneTitleText( *terminal.title[0],
+        cast(s32)size_of(type_of(terminal.title)), payload)
+        if code == 2 { return }
+    }
+    if code == 0 || code == 1 {
+        PaneOSC.CopyTerminalPaneTitleText( *terminal.icon_title[0],
+        cast(s32)size_of(type_of(terminal.icon_title)), payload)
+        return
+    }
+    if code == 7 {
+        PaneOSC.DecodeTerminalPaneOSCFileURIPath( *terminal.current_directory[0],
+        cast(s32)size_of(type_of(terminal.current_directory)), payload)
+        return
+    }
+    if code == 22 {
+        push_titles(terminal, payload)
+        return
+    }
+    if code == 23 {
+        pop_titles(terminal, payload)
+        return
+    }
+    {
+        target: s32 = PaneOSC.TerminalPaneOSCColorTargetForCode(code)
+        slot: *s32 = terminal_osc_color_slot(terminal, target)
+
+        if slot != null {
+            if payload[0] == #char"?" {
+                color: s32 = PaneOSC.TerminalPaneOSCColorQueryValue(
+                target, terminal_osc_color_state(terminal))
+                send_osc_color_response(terminal, code, color)
+                return
+            }
+            color: s32 = PaneOSC.ParseTerminalPaneOSCColor(payload)
+            if color == COLOR_DEFAULT { return }
+            slot.* = color
+            return
+        }
+    }
+    {
+        target: s32 = PaneOSC.TerminalPaneOSCColorTargetForResetCode(code)
+        slot: *s32 = terminal_osc_color_slot(terminal, target)
+
+        if slot != null {
+            slot.* = COLOR_DEFAULT
+            return
+        }
+    }
+    if code == 4 {
+        cursor: *u8 = payload
+        entry: PaneOSC.TerminalPaneOSCPaletteEntry
+
+        while PaneOSC.NextTerminalPaneOSCPaletteEntry(*cursor, *entry) != 0 {
+            if entry.valid == 0 { continue }
+            if entry.query != 0 {
+                value: s32 = terminal.palette_overrides[entry.index]
+
+                if value == COLOR_DEFAULT {
+                    value = terminal_default_palette_color(
+                    entry.index)
+                }
+                send_osc_palette_response(terminal, entry.index,
+                value)
+            } else {
+                terminal.palette_overrides[entry.index] =
+                entry.color
+            }
+        }
+        return
+    }
+    if code == 104 {
+        cursor: *u8 = payload
+        index: s32
+
+        if cursor[0] == 0 {
+            i: s32 = 0
+            while i < 256 {
+                terminal.palette_overrides[i] = COLOR_DEFAULT
+                i += 1
+            }
+            return
+        }
+        while PaneOSC.NextTerminalPaneOSCPaletteResetIndex(*cursor,
+        *index) != 0 {
+            if index >= 0 {
+                terminal.palette_overrides[index] =
+                COLOR_DEFAULT
+            }
+        }
+        return
+    }
+    if code == 8 {
+        safe_id: [HYPERLINK_ID_SIZE]u8
+        safe_url: [HYPERLINK_SIZE]u8
+        url: *u8 = strchr(payload, #char";")
+
+        if url == null { return }
+        url = *url[1]
+        if url[0] == 0 {
+            terminal.current_hyperlink = 0
+            return
+        }
+        if PaneOSC.CopyTerminalPaneOSCHyperlinkURL( *safe_url[0],
+        cast(s32)size_of(type_of(safe_url)), url) == 0 {
+            return
+        }
+        PaneOSC.CopyTerminalPaneOSCHyperlinkID( *safe_id[0],
+        cast(s32)size_of(type_of(safe_id)), payload)
+        terminal.current_hyperlink =
+        find_or_add_hyperlink(terminal, *safe_id[0], *safe_url[0])
+        return
+    }
+    if code == 52 {
+        Clipboard.HandleClipboardOSC52(*terminal.clipboard, payload,
+        write_osc52_response, cast(*void)terminal)
+    }
+}

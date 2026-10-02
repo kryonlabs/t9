@@ -1,0 +1,116 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_module
+// An omitted or zero parameter uses the command's default.
+#scope_export
+#program_export
+terminal_csi_arg :: (terminal: *Terminal, index: s32, fallback: s32) -> s32 {
+    if terminal == null || index < 0 || index >= terminal.csi_count ||
+       terminal.csi_args[index] == 0 { return fallback }
+    return terminal.csi_args[index]
+}
+
+#scope_module
+Clamped :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+#scope_export
+#program_export
+terminal_csi_cursor_row_from_arg :: (
+terminal: *Terminal, index: s32,
+fallback: s32) -> s32 {
+    if terminal == null { return 0 }
+    row: s32 = terminal_csi_arg(terminal, index, fallback) - 1
+    if terminal.origin_mode != 0 {
+        row += terminal.scroll_top
+    }
+    return row
+}
+
+#scope_export
+#program_export
+terminal_csi_set_modifier_key_mode :: (
+terminal: *Terminal) {
+    if terminal == null { return }
+    resource: s32 = terminal_csi_arg(terminal, 0, 0)
+    value: s32 = terminal_csi_arg(terminal, 1, 0)
+    if resource != 4 { return }
+    terminal.modify_other_keys = Clamped(value, 0, 2)
+}
+
+#scope_export
+#program_export
+terminal_csi_disable_modifier_key_mode :: (
+terminal: *Terminal) {
+    if terminal == null { return }
+    resource: s32 = terminal_csi_arg(terminal, 0, 2)
+    if resource == 4 { terminal.modify_other_keys = -1 }
+}
+
+#scope_export
+#program_export
+terminal_csi_set_mode :: (terminal: *Terminal, mode: s32,
+enabled: s32) {
+    if terminal == null { return }
+    state: PaneModes.TerminalPaneModeState = terminal_mode_state(terminal)
+    PaneModes.TerminalPaneModeStateSetMode(*state, mode, enabled)
+    terminal.insert_mode = state.insert_mode
+    terminal.newline_mode = state.newline_mode
+}
+
+#scope_export
+#program_export
+terminal_csi_apply_cursor_style :: (terminal: *Terminal) {
+    if terminal == null { return }
+    style: s32 = terminal_csi_arg(terminal, 0, 0)
+    decoded_style: s32
+    decoded_blink: s32
+
+    if PaneProfile.DecodeTerminalPaneCursorStyleRequest(style, *decoded_style,
+    *decoded_blink) != 0 {
+        terminal.cursor_style = decoded_style
+        terminal.cursor_blink = decoded_blink
+    }
+}
+
+#scope_export
+#program_export
+terminal_csi_send_private_mode_report :: (terminal: *Terminal,
+mode: s32) {
+    response: [32]u8
+
+    if PaneModes.FormatTerminalPaneModeReport( *response[0], cast(s32)size_of(type_of(response)),
+    terminal_mode_state(terminal), 1, mode) > 0 {
+        terminal_write_text(terminal, *response[0])
+    }
+}
+
+#scope_export
+#program_export
+terminal_csi_send_mode_report :: (terminal: *Terminal,
+mode: s32) {
+    response: [32]u8
+
+    if PaneModes.FormatTerminalPaneModeReport( *response[0], cast(s32)size_of(type_of(response)),
+    terminal_mode_state(terminal), 0, mode) > 0 {
+        terminal_write_text(terminal, *response[0])
+    }
+}
+
+#scope_export
+#program_export
+terminal_csi_send_device_status_report :: (
+terminal: *Terminal) {
+    response: [32]u8
+
+    if terminal == null { return }
+    request: s32 = terminal_csi_arg(terminal, 0, 0)
+    if PaneCSI.FormatTerminalPaneDeviceStatusReport( *response[0],
+    cast(s32)size_of(type_of(response)), cast(s32)(terminal.csi_private == #char"?"),
+    request, terminal.cursor_row, terminal.cursor_col) > 0 {
+        terminal_write_text(terminal, *response[0])
+    }
+}

@@ -1,0 +1,229 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_module
+PaletteSlot :: struct { callback: PaneSixel.TerminalPaneSixelPaletteFn; }
+
+clamp_sixel_int :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+#scope_module
+remove_sixel_image :: (terminal: *Terminal, index: s32) {
+    if terminal == null || index < 0 || index >= terminal.sixel_count {
+        return
+    }
+    image: *SixelImage = *terminal.sixel_images[index]
+    if image.pixels != null {
+        terminal.sixel_total_pixels -= image.width * image.height
+        if terminal.sixel_total_pixels < 0 {
+            terminal.sixel_total_pixels = 0
+        }
+        free(cast(*void)(image.pixels))
+    }
+    if index + 1 < terminal.sixel_count {
+        memmove(cast(*void)(*terminal.sixel_images[index]), cast(*void)(*terminal.sixel_images[index + 1]), cast(usize)(terminal.sixel_count - index - 1) *
+        size_of(SixelImage))
+    }
+    terminal.sixel_count -= 1
+}
+
+#scope_export
+#program_export
+terminal_sixel_clear_images :: (terminal: *Terminal,
+alternate_filter: s32) {
+    if terminal == null { return }
+    i: s32 = terminal.sixel_count - 1
+    while i >= 0 {
+        if alternate_filter < 0 ||
+        terminal.sixel_images[i].alternate_screen ==
+        alternate_filter {
+            remove_sixel_image(terminal, i)
+        }
+        i -= 1
+    }
+}
+
+#scope_module
+sixel_image_intersects_range :: (terminal: *Terminal,
+image: *SixelImage, start: s32, end: s32) -> s32 {
+    if terminal == null || image == null || terminal.cols <= 0 ||
+    image.alternate_screen != terminal.alternate_screen ||
+    start >= end {
+        return 0
+    }
+    rows_used: s32 = (image.height + 5) / 6
+    cols_used: s32 = (image.width + 5) / 6
+    if rows_used < 1 { rows_used = 1 }
+    if cols_used < 1 { cols_used = 1 }
+    row: s32 = image.row
+    while row < image.row + rows_used {
+        if row < 0 || row >= terminal.rows {
+            row += 1
+            continue
+        }
+        row_start: s32 = row * terminal.cols + image.col
+        row_end: s32 = row_start + cols_used
+
+        if row_start < row * terminal.cols {
+            row_start = row * terminal.cols
+        }
+        if row_end > (row + 1) * terminal.cols {
+            row_end = (row + 1) * terminal.cols
+        }
+        if end > row_start && start < row_end {
+            return 1
+        }
+        row += 1
+    }
+    return 0
+}
+
+#scope_export
+#program_export
+terminal_sixel_prune_scrollback :: (terminal: *Terminal) {
+    if terminal == null { return }
+    i: s32 = terminal.sixel_count - 1
+    while i >= 0 {
+        image: *SixelImage = *terminal.sixel_images[i]
+
+        if image.alternate_screen != 0 || image.row >= 0 {
+            i -= 1
+            continue
+        }
+        if image.row < -terminal.scrollback_count {
+            remove_sixel_image(terminal, i)
+        }
+        i -= 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_sixel_clear_range :: (terminal: *Terminal, start: s32,
+end: s32) {
+    if terminal == null { return }
+    start = clamp_sixel_int(start, 0, terminal.cols * terminal.rows)
+    end = clamp_sixel_int(end, 0, terminal.cols * terminal.rows)
+    if start >= end { return }
+    i: s32 = terminal.sixel_count - 1
+    while i >= 0 {
+        if sixel_image_intersects_range(terminal,
+        *terminal.sixel_images[i], start, end) != 0 {
+            remove_sixel_image(terminal, i)
+        }
+        i -= 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_sixel_shift :: (terminal: *Terminal, top: s32,
+bottom: s32, delta: s32) {
+    if terminal == null || delta == 0 { return }
+    i: s32 = terminal.sixel_count - 1
+    while i >= 0 {
+        image: *SixelImage = *terminal.sixel_images[i]
+        in_scrollback: s32 = (ifx (delta < 0 && top == 0 &&
+        terminal.alternate_screen == 0 &&
+        image.alternate_screen == 0 && image.row < 0) then 1 else 0)
+
+        if image.alternate_screen != terminal.alternate_screen {
+            i -= 1
+            continue
+        }
+        if in_scrollback == 0 &&
+        (image.row < top || image.row > bottom) {
+            i -= 1
+            continue
+        }
+        image.row += delta
+        if image.row < top || image.row > bottom {
+            if delta < 0 && top == 0 &&
+            terminal.alternate_screen == 0 &&
+            image.alternate_screen == 0 && image.row < 0 &&
+            image.row >= -terminal.scrollback_count {
+                i -= 1
+                continue
+            }
+            remove_sixel_image(terminal, i)
+        }
+        i -= 1
+    }
+}
+
+#scope_module
+add_sixel_image :: (terminal: *Terminal, pixels: *s32,
+stride: s32, width: s32, height: s32, pixel_aspect_num: s32,
+pixel_aspect_den: s32) -> s32 {
+    if terminal == null || pixels == null || width <= 0 ||
+    height <= 0 || stride < width {
+        return 0
+    }
+    if cast(usize)width * cast(usize)height >
+    cast(usize)MAX_SIXEL_IMAGE_PIXELS {
+        return 0
+    }
+    while terminal.sixel_count >= MAX_SIXEL_IMAGES ||
+    terminal.sixel_total_pixels + width * height >
+    MAX_SIXEL_TOTAL_PIXELS {
+        remove_sixel_image(terminal, 0)
+    }
+    if terminal.sixel_count >= terminal.sixel_capacity {
+        capacity: s32 = (ifx terminal.sixel_capacity > 0 then terminal.sixel_capacity * 2 else 8)
+
+        if capacity > MAX_SIXEL_IMAGES {
+            capacity = MAX_SIXEL_IMAGES
+        }
+        images: *SixelImage = cast(*SixelImage)realloc(cast(*void)(terminal.sixel_images), cast(usize)capacity * size_of(SixelImage))
+        if images == null { return 0 }
+        terminal.sixel_images = images
+        terminal.sixel_capacity = capacity
+    }
+    copy: *s32 = cast(*s32)malloc(cast(usize)width *
+    cast(usize)height * size_of(s32))
+    if copy == null { return 0 }
+    row: s32 = 0
+    while row < height {
+        memcpy(cast(*void)(*copy[row * width]), cast(*void)(*pixels[row * stride]), cast(usize)width * size_of(s32))
+        row += 1
+    }
+    terminal.sixel_images[terminal.sixel_count].col =
+    terminal.cursor_col
+    terminal.sixel_images[terminal.sixel_count].row =
+    terminal.cursor_row
+    terminal.sixel_images[terminal.sixel_count].alternate_screen =
+    terminal.alternate_screen
+    terminal.sixel_images[terminal.sixel_count].width = width
+    terminal.sixel_images[terminal.sixel_count].height = height
+    terminal.sixel_images[terminal.sixel_count].pixel_aspect_num =
+    (ifx pixel_aspect_num > 0 then pixel_aspect_num else 1)
+    terminal.sixel_images[terminal.sixel_count].pixel_aspect_den =
+    (ifx pixel_aspect_den > 0 then pixel_aspect_den else 1)
+    terminal.sixel_images[terminal.sixel_count].pixels = copy
+    terminal.sixel_count += 1
+    terminal.sixel_total_pixels += width * height
+    return 1
+}
+
+#scope_export
+#program_export
+terminal_sixel_finish :: (terminal: *Terminal,
+payload: *u8) -> s32 {
+    no_palette: PaletteSlot
+    image: PaneSixel.TerminalPaneSixelImage
+    rows_used: s32 = 0
+
+    if terminal == null || payload == null { return 0 }
+    rows_used = PaneSixel.DecodeTerminalPaneSixel(*image, payload,
+    COLOR_TRUE_RGB, no_palette.callback, null)
+    if rows_used > 0 &&
+    add_sixel_image(terminal, image.pixels, image.width,
+    image.width, image.height, image.pixel_aspect_num,
+    image.pixel_aspect_den) == 0 {
+        rows_used = 0
+    }
+    PaneSixel.FreeTerminalPaneSixelImage(*image)
+    return rows_used
+}

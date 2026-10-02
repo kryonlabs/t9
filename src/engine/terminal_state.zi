@@ -1,0 +1,72 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+terminal_init :: (terminal: *Terminal) {
+    if terminal == null { return }
+    memset(cast(*void)(terminal), 0, size_of(Terminal))
+    terminal.fd = -1
+    terminal.cursor_visible = 1
+    terminal.cursor_blink = 1
+    terminal.autowrap = 1
+    terminal.insert_mode = 0
+    terminal.scrollback_limit = SCROLLBACK_LIMIT
+    terminal.default_fg = COLOR_DEFAULT
+    terminal.default_bg = COLOR_DEFAULT
+    terminal.cursor_color = COLOR_DEFAULT
+    terminal.mouse_fg = COLOR_DEFAULT
+    terminal.mouse_bg = COLOR_DEFAULT
+    terminal.selection_fg = COLOR_DEFAULT
+    terminal.selection_bg = COLOR_DEFAULT
+    terminal.base_fg = COLOR_DEFAULT
+    terminal.base_bg = COLOR_DEFAULT
+    terminal.base_cursor_color = COLOR_DEFAULT
+    terminal.base_selection_fg = COLOR_DEFAULT
+    terminal.base_selection_bg = COLOR_DEFAULT
+    terminal.cursor_style = TERMINAL_CURSOR_DEFAULT
+    Clipboard.InitClipboardBuffer(*terminal.clipboard, RawBytes(""))
+    PaneDCS.InitTerminalPaneDCSBuffer(*terminal.dcs, 0)
+    terminal.current_hyperlink = 0
+    terminal.hyperlink_count = 0
+    terminal_reset_charsets(terminal)
+    i: s32 = 0
+    while i < 256 {
+        terminal.palette_overrides[i] = COLOR_DEFAULT
+        i += 1
+    }
+    terminal_reset_style(terminal)
+    terminal_save_cursor_state(terminal)
+}
+
+#scope_export
+#program_export
+terminal_send_alternate_scroll :: (terminal: *Terminal,
+direction: s32, mods: s32) -> s32 {
+    if terminal == null || direction == 0 ||
+    terminal.alternate_screen == 0 ||
+    terminal.alternate_scroll == 0 ||
+    terminal.mouse_mode != 0 {
+        return 0
+    }
+    return terminal_send_key(terminal,
+    (ifx direction > 0 then KEY_UP_CODE else KEY_DOWN_CODE), mods)
+}
+
+#scope_export
+#program_export
+terminal_send_focus :: (terminal: *Terminal,
+focused: s32) -> s32 {
+    if terminal == null || terminal.focus_reporting == 0 {
+        return 0
+    }
+    return terminal_write_text(terminal,
+    RawBytes(ifx focused != 0 then "\x1b[I" else "\x1b[O"))
+}
+
+#scope_export
+#program_export
+terminal_consume_bell :: (terminal: *Terminal) -> s32 {
+    if terminal == null || terminal.bell_pending == 0 { return 0 }
+    terminal.bell_pending = 0
+    return 1
+}

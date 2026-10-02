@@ -1,0 +1,110 @@
+// Native storage operations; allocation and every owned lifetime stay in Ziran.
+#scope_module
+libc :: #system_library "c";
+MallocHost :: (size: usize) -> *void #foreign libc "malloc";
+CallocHost :: (count: usize, size: usize) -> *void #foreign libc "calloc";
+ReallocHost :: (pointer: *void, size: usize) -> *void #foreign libc "realloc";
+FreeHost :: (pointer: *void) #foreign libc "free";
+CopyHost :: (output: *void, input: *void, size: usize) -> *void #foreign libc "memcpy";
+MoveHost :: (output: *void, input: *void, size: usize) -> *void #foreign libc "memmove";
+FillHost :: (output: *void, value: s32, size: usize) -> *void #foreign libc "memset";
+
+malloc :: (size: usize) -> *void { return MallocHost(size) }
+calloc :: (count: usize, size: usize) -> *void { return CallocHost(count, size) }
+realloc :: (pointer: *void, size: usize) -> *void { return ReallocHost(pointer, size) }
+free :: (pointer: *void) { FreeHost(pointer) }
+memcpy :: (output: *void, input: *void, size: usize) { CopyHost(output, input, size) }
+memmove :: (output: *void, input: *void, size: usize) { MoveHost(output, input, size) }
+memset :: (output: *void, value: s32, size: usize) { FillHost(output, value, size) }
+
+RawBytes :: (text: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*text)
+    return descriptor.data
+}
+
+strlen :: (text: *u8) -> s32 {
+    if text == null { return 0 }
+    count: s32
+    while text[count] != 0 { count += 1 }
+    return count
+}
+
+strcmp :: (left: *u8, right: *u8) -> s32 {
+    if left == null || right == null { return ifx left == right then 0 else 1 }
+    index: s32
+    while left[index] != 0 && left[index] == right[index] { index += 1 }
+    return cast(s32)left[index] - cast(s32)right[index]
+}
+
+strncmp :: (left: *u8, right: *u8, count: s32) -> s32 {
+    if left == null || right == null { return ifx left == right then 0 else 1 }
+    for index: 0..count - 1 {
+        if left[index] != right[index] || left[index] == 0 {
+            return cast(s32)left[index] - cast(s32)right[index]
+        }
+    }
+    return 0
+}
+
+strchr :: (text: *u8, value: u8) -> *u8 {
+    if text == null { return null }
+    while text.* != value {
+        if text.* == 0 { return null }
+        text = *text[1]
+    }
+    return text
+}
+
+CopyRaw :: (output: *u8, capacity: s32, text: *u8) {
+    if output == null || capacity <= 0 { return }
+    used: s32
+    if text != null {
+        while used < capacity - 1 && text[used] != 0 {
+            output[used] = text[used]
+            used += 1
+        }
+    }
+    output[used] = 0
+}
+
+// Reports own their bytes and do not hold a pointer into a movable record.
+Report :: struct { bytes: [1024]u8; used: s32; }
+
+ReportByte :: (report: *Report, byte: u8) {
+    if report.used >= 1023 { return }
+    report.bytes[report.used] = byte
+    report.used += 1
+    report.bytes[report.used] = 0
+}
+
+ReportText :: (report: *Report, text: string) {
+    for index: 0..text.count - 1 { ReportByte(report, text[index]) }
+}
+
+ReportRaw :: (report: *Report, text: *u8) {
+    if text == null { return }
+    index: s32
+    while text[index] != 0 {
+        ReportByte(report, text[index])
+        index += 1
+    }
+}
+
+ReportInteger :: (report: *Report, value: s32) {
+    digits: [10]u8
+    used: s32
+    remaining: u32
+    if value < 0 { ReportByte(report, 45); remaining = 0 - cast(u32)value }
+    else { remaining = cast(u32)value }
+    while true {
+        digits[used] = cast(u8)(48 + remaining % 10)
+        used += 1
+        remaining /= 10
+        if remaining == 0 { break }
+    }
+    while used > 0 { used -= 1; ReportByte(report, digits[used]) }
+}
+
+WriteReport :: (terminal: *Terminal, report: *Report) -> s32 {
+    return terminal_write(terminal, cast(*void)(*report.bytes[0]), report.used)
+}

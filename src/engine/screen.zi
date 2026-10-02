@@ -1,0 +1,1035 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+terminal_clamp_int :: (value: s32, low: s32, high: s32) -> s32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+#scope_export
+#program_export
+terminal_blank_cell :: (
+terminal: *Terminal) -> Cell {
+    cell: Cell
+
+    cell.codepoint = #char" "
+    cell.combining = 0
+    cell.fg = (ifx terminal != null then terminal.current_fg else COLOR_DEFAULT)
+    cell.bg = (ifx terminal != null then terminal.current_bg else COLOR_DEFAULT)
+    cell.underline = (ifx terminal != null then terminal.current_underline else COLOR_DEFAULT)
+    cell.hyperlink = (ifx terminal != null then terminal.current_hyperlink else 0)
+    cell.style = (ifx terminal != null then cast(u16)terminal.current_style else 0)
+    return cell
+}
+
+#scope_export
+#program_export
+terminal_screen_cells :: (terminal: *Terminal) -> *Cell {
+    return (ifx terminal != null &&
+    terminal.alternate_screen != 0 then terminal.alt_cells else terminal.main_cells)
+}
+
+#scope_export
+#program_export
+terminal_screen_wrapped :: (
+terminal: *Terminal) -> *u8 {
+    return (ifx terminal != null &&
+    terminal.alternate_screen != 0 then terminal.alt_wrapped else terminal.main_wrapped)
+}
+
+#scope_export
+#program_export
+terminal_reset_tab_stops :: (terminal: *Terminal) {
+    if terminal == null || terminal.tab_stops == null { return }
+    memset(cast(*void)(terminal.tab_stops), 0, cast(usize)terminal.cols)
+    col: s32 = 8
+    while col < terminal.cols {
+        terminal.tab_stops[col] = 1
+        col += 8
+    }
+}
+
+#scope_export
+#program_export
+terminal_clear_tab_stops :: (terminal: *Terminal) {
+    if terminal == null || terminal.tab_stops == null { return }
+    memset(cast(*void)(terminal.tab_stops), 0, cast(usize)terminal.cols)
+}
+
+#scope_export
+#program_export
+terminal_clear_cell_block :: (terminal: *Terminal,
+cells: *Cell) {
+    if terminal == null || cells == null { return }
+    blank: Cell = terminal_blank_cell(terminal)
+    count: s32 = terminal.cols * terminal.rows
+    i: s32 = 0
+    while i < count {
+        cells[i] = blank
+        i += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_clear_row :: (terminal: *Terminal, row: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+    wrapped: *u8 = terminal_screen_wrapped(terminal)
+
+    if terminal == null || cells == null || row < 0 ||
+    row >= terminal.rows {
+        return
+    }
+    terminal_sixel_clear_range(terminal, row * terminal.cols,
+    (row + 1) * terminal.cols)
+    blank: Cell = terminal_blank_cell(terminal)
+    col: s32 = 0
+    while col < terminal.cols {
+        cells[row * terminal.cols + col] = blank
+        col += 1
+    }
+    if wrapped != null { wrapped[row] = 0 }
+}
+
+#scope_export
+#program_export
+terminal_clear_screen :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal_clear_cell_block(terminal,
+    terminal_screen_cells(terminal))
+    if terminal_screen_wrapped(terminal) != null {
+        memset(cast(*void)(terminal_screen_wrapped(terminal)), 0, cast(usize)terminal.rows)
+    }
+    terminal.cursor_col = 0
+    terminal.cursor_row = 0
+    terminal_sixel_clear_images(terminal,
+    terminal.alternate_screen)
+}
+
+#scope_export
+#program_export
+terminal_screen_alignment_test :: (terminal: *Terminal) {
+    if terminal == null { return }
+    cells: *Cell = terminal_screen_cells(terminal)
+    if cells == null { return }
+    cell: Cell = terminal_blank_cell(terminal)
+    cell.codepoint = #char"E"
+    cell.combining = 0
+    cell.style &= ~STYLE_WIDE_CONT
+    count: s32 = terminal.cols * terminal.rows
+    i: s32 = 0
+    while i < count {
+        cells[i] = cell
+        i += 1
+    }
+    wrapped: *u8 = terminal_screen_wrapped(terminal)
+    if wrapped != null {
+        memset(cast(*void)(wrapped), 0, cast(usize)terminal.rows)
+    }
+    terminal.cursor_col = 0
+    terminal.cursor_row = 0
+    terminal_sixel_clear_images(terminal,
+    terminal.alternate_screen)
+}
+
+#scope_export
+#program_export
+terminal_clear_alternate_screen :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal_clear_cell_block(terminal, terminal.alt_cells)
+    if terminal.alt_wrapped != null {
+        memset(cast(*void)(terminal.alt_wrapped), 0, cast(usize)terminal.rows)
+    }
+    terminal_sixel_clear_images(terminal, 1)
+}
+
+#scope_export
+#program_export
+terminal_clear_scrollback :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal.scrollback_count = 0
+    terminal.scrollback_head = 0
+    if terminal.scrollback_wrapped != null &&
+    terminal.scrollback_capacity > 0 {
+        memset(cast(*void)(terminal.scrollback_wrapped), 0, cast(usize)terminal.scrollback_capacity)
+    }
+    terminal_sixel_prune_scrollback(terminal)
+}
+
+#scope_export
+#program_export
+terminal_allocate_scrollback :: (
+terminal: *Terminal) -> s32 {
+    if terminal == null { return 0 }
+    limit: s32 = (ifx terminal.scrollback_limit > 0 then terminal.scrollback_limit else SCROLLBACK_LIMIT)
+    if terminal.cols <= 0 { return 0 }
+    if terminal.scrollback != null && terminal.scrollback_wrapped != null &&
+       terminal.scrollback_capacity == limit { return 1 }
+    // Allocate both buffers before replacing either one. Preserve the newest
+    // logical rows even when the old ring has wrapped or its limit shrinks.
+    scrollback: *Cell = cast(*Cell)calloc(cast(usize)limit * cast(usize)terminal.cols, size_of(Cell))
+    if scrollback == null { return 0 }
+    wrapped: *u8 = cast(*u8)calloc(cast(usize)limit, 1)
+    if wrapped == null { free(cast(*void)scrollback); return 0 }
+    count := terminal_clamp_int(terminal.scrollback_count, 0, limit)
+    if terminal.scrollback == null || terminal.scrollback_capacity <= 0 { count = 0 }
+    for row: 0..count - 1 {
+        physical := (terminal.scrollback_head - count + row +
+                     terminal.scrollback_capacity) % terminal.scrollback_capacity
+        memcpy(cast(*void)(*scrollback[row * terminal.cols]),
+               cast(*void)(*terminal.scrollback[physical * terminal.cols]),
+               cast(usize)terminal.cols * size_of(Cell))
+        if terminal.scrollback_wrapped != null { wrapped[row] = terminal.scrollback_wrapped[physical] }
+    }
+    free(cast(*void)terminal.scrollback)
+    free(cast(*void)terminal.scrollback_wrapped)
+    terminal.scrollback = scrollback
+    terminal.scrollback_wrapped = wrapped
+    terminal.scrollback_capacity = limit
+    terminal.scrollback_count = count
+    terminal.scrollback_head = count % limit
+    terminal_sixel_prune_scrollback(terminal)
+    return 1
+}
+
+#scope_module
+row_text_end :: (cells: *Cell, cols: s32, row: s32,
+keep_full: s32) -> s32 {
+    end: s32 = cols
+
+    if cells == null || cols <= 0 || row < 0 { return 0 }
+    if keep_full != 0 { return cols }
+    while end > 0 && cells[row * cols + end - 1].codepoint == #char" " {
+        end -= 1
+    }
+    return end
+}
+
+#scope_export
+#program_export
+reflow_cell_blank :: (cell: *void, userdata: *void) -> s32 {
+    terminal_cell: *Cell = cast(*Cell)cell
+
+    return (ifx terminal_cell == null ||
+    terminal_cell.codepoint == #char" " then 1 else 0)
+}
+
+#scope_module
+init_reflow_row :: (rows: *Cell, initialized: *u8,
+cols: s32, max_rows: s32, row: s32, blank: Cell) {
+    if rows == null || initialized == null || cols <= 0 || row < 0 ||
+    row >= max_rows || initialized[row] != 0 {
+        return
+    }
+    col: s32 = 0
+    while col < cols {
+        rows[row * cols + col] = blank
+        col += 1
+    }
+    initialized[row] = 1
+}
+
+#scope_module
+append_reflow_cell :: (rows: *Cell, wrapped: *u8,
+initialized: *u8, cols: s32, max_rows: s32,
+out_row: *s32, out_col: *s32, blank: Cell, cell: Cell) {
+    if rows == null || wrapped == null || initialized == null ||
+    out_row == null || out_col == null || cols <= 0 ||
+    max_rows <= 0 {
+        return
+    }
+    if out_col.* >= cols {
+        if out_row.* >= 0 && out_row.* < max_rows {
+            wrapped[out_row.*] = 1
+        }
+        out_row.* += 1
+        out_col.* = 0
+    }
+    if out_row.* >= max_rows { return }
+    init_reflow_row(rows, initialized, cols, max_rows, out_row.*,
+    blank)
+    rows[out_row.* * cols + out_col.*] = cell
+    out_col.* += 1
+}
+
+#scope_module
+finish_reflow_line :: (rows: *Cell, initialized: *u8,
+cols: s32, max_rows: s32, out_row: *s32, out_col: *s32,
+blank: Cell) {
+    if out_row == null || out_col == null { return }
+    if out_row.* < max_rows {
+        init_reflow_row(rows, initialized, cols, max_rows,
+        out_row.*, blank)
+        out_row.* += 1
+    }
+    out_col.* = 0
+}
+
+#scope_module
+terminal_append_scrollback :: (terminal: *Terminal,
+row: *Cell, wrapped: s32) {
+    if terminal == null || row == null ||
+    terminal.scrollback == null ||
+    terminal.scrollback_capacity <= 0 {
+        return
+    }
+    index: s32 = terminal.scrollback_head
+    memcpy(cast(*void)(*terminal.scrollback[index * terminal.cols]), cast(*void)(row), cast(usize)terminal.cols * size_of(Cell))
+    if terminal.scrollback_wrapped != null {
+        terminal.scrollback_wrapped[index] =
+        (ifx wrapped != 0 then 1 else 0)
+    }
+    terminal.scrollback_head =
+    (terminal.scrollback_head + 1) %
+    terminal.scrollback_capacity
+    if terminal.scrollback_count < terminal.scrollback_capacity {
+        terminal.scrollback_count += 1
+    }
+}
+
+#scope_module
+terminal_push_scrollback :: (terminal: *Terminal,
+row: *Cell, wrapped: s32) {
+    if terminal == null || terminal.alternate_screen != 0 {
+        return
+    }
+    terminal_append_scrollback(terminal, row, wrapped)
+}
+
+#scope_module
+reflow_main_screen :: (terminal: *Terminal,
+old_cells: *Cell, old_wrapped: *u8,
+old_cols: s32, old_rows: s32, old_cursor_col: s32,
+old_cursor_row: s32, new_cursor_col: *s32,
+new_cursor_row: *s32) -> s32 {
+    if terminal == null || terminal.main_cells == null ||
+    old_cells == null || old_cols <= 0 || old_rows <= 0 ||
+    terminal.cols <= 0 {
+        return 0
+    }
+    cursor_row: s32 = -1
+    cursor_col: s32 = -1
+    out_row: s32 = 0
+    max_lines: s32 = old_rows *
+    ((old_cols + terminal.cols - 1) / terminal.cols + 2)
+    if max_lines < terminal.rows {
+        max_lines = terminal.rows
+    }
+    lines: *Cell = cast(*Cell)calloc(
+    cast(usize)max_lines * cast(usize)terminal.cols, size_of(Cell))
+    wrapped: *u8 = cast(*u8)calloc(
+    cast(usize)max_lines, 1)
+    if lines == null || wrapped == null {
+        free(cast(*void)(lines))
+        free(cast(*void)(wrapped))
+        return 0
+    }
+    blank: Cell = terminal_blank_cell(terminal)
+    spec: PaneReflow.TerminalPaneReflowSpec
+    spec = PaneReflow.TerminalPaneReflowSpec.{}
+    spec.input_cells = cast(*void)old_cells
+    spec.input_wrapped = old_wrapped
+    spec.input_cols = old_cols
+    spec.input_rows = old_rows
+    spec.output_cells = cast(*void)lines
+    spec.output_wrapped = wrapped
+    spec.output_cols = terminal.cols
+    spec.output_rows = max_lines
+    spec.cell_size = size_of(Cell)
+    spec.blank_cell = cast(*void)(*blank)
+    spec.is_blank = reflow_cell_blank
+    spec.trim_blank_rows_after_cursor = 1
+    spec.cursor_input_col = old_cursor_col
+    spec.cursor_input_row = old_cursor_row
+    spec.cursor_output_col = *cursor_col
+    spec.cursor_output_row = *cursor_row
+    spec.output_row_count = *out_row
+    if PaneReflow.TerminalPaneReflowRows(*spec) == 0 {
+        free(cast(*void)(lines))
+        free(cast(*void)(wrapped))
+        return 0
+    }
+    if out_row <= 0 {
+        free(cast(*void)(lines))
+        free(cast(*void)(wrapped))
+        return 1
+    }
+    copy_rows: s32 = (ifx out_row < terminal.rows then out_row else terminal.rows)
+    start_row: s32 = out_row - copy_rows
+    memcpy(cast(*void)(terminal.main_cells), cast(*void)(*lines[start_row * terminal.cols]), cast(usize)copy_rows * cast(usize)terminal.cols * size_of(Cell))
+    memcpy(cast(*void)(terminal.main_wrapped), cast(*void)(*wrapped[start_row]), cast(usize)copy_rows)
+    if cursor_row >= start_row &&
+    cursor_row < start_row + copy_rows {
+        if new_cursor_row != null {
+            new_cursor_row.* = cursor_row - start_row
+        }
+        if new_cursor_col != null {
+            new_cursor_col.* = cursor_col
+        }
+    } else {
+        if new_cursor_row != null {
+            new_cursor_row.* = terminal_clamp_int(old_cursor_row,
+            0, copy_rows - 1)
+        }
+        if new_cursor_col != null {
+            new_cursor_col.* = old_cursor_col
+        }
+    }
+    free(cast(*void)(lines))
+    free(cast(*void)(wrapped))
+    return 1
+}
+
+#scope_module
+reflow_scrollback :: (terminal: *Terminal,
+old_cells: *Cell, old_wrapped: *u8,
+old_cols: s32, old_count: s32, old_head: s32,
+old_capacity: s32) {
+    if terminal == null || old_cells == null || old_cols <= 0 ||
+    old_count <= 0 || old_capacity <= 0 || terminal.cols <= 0 {
+        return
+    }
+    out_row: s32 = 0
+    out_col: s32 = 0
+    max_lines: s32 = old_count *
+    ((old_cols + terminal.cols - 1) / terminal.cols + 2)
+    if max_lines < old_count { max_lines = old_count }
+    blank: Cell = terminal_blank_cell(terminal)
+    lines: *Cell = cast(*Cell)malloc(cast(usize)max_lines *
+    cast(usize)terminal.cols * size_of(Cell))
+    wrapped: *u8 = cast(*u8)calloc(
+    cast(usize)max_lines, 1)
+    initialized: *u8 = cast(*u8)calloc(
+    cast(usize)max_lines, 1)
+    if lines == null || wrapped == null || initialized == null {
+        free(cast(*void)(lines))
+        free(cast(*void)(wrapped))
+        free(cast(*void)(initialized))
+        return
+    }
+    index: s32 = 0
+    while index < old_count {
+        physical: s32 = (old_head - old_count + index +
+        old_capacity) % old_capacity
+        soft: s32 = (ifx old_wrapped != null &&
+        old_wrapped[physical] != 0 then 1 else 0)
+        end: s32 = row_text_end(old_cells, old_cols, physical,
+        soft)
+        col: s32 = 0
+
+        while col < end {
+            append_reflow_cell(lines, wrapped, initialized,
+            terminal.cols, max_lines, *out_row, *out_col,
+            blank, old_cells[physical * old_cols + col])
+            col += 1
+        }
+        if soft == 0 {
+            finish_reflow_line(lines, initialized,
+            terminal.cols, max_lines, *out_row, *out_col,
+            blank)
+        }
+        index += 1
+    }
+    if out_col > 0 {
+        finish_reflow_line(lines, initialized, terminal.cols,
+        max_lines, *out_row, *out_col, blank)
+    }
+    row: s32 = 0
+    while row < out_row {
+        terminal_append_scrollback(terminal,
+        *lines[row * terminal.cols], wrapped[row])
+        row += 1
+    }
+    free(cast(*void)(lines))
+    free(cast(*void)(wrapped))
+    free(cast(*void)(initialized))
+}
+
+ReflowStream :: struct {
+    terminal: *Terminal
+    blank: Cell
+    current: *Cell
+    recent: *Cell
+    recent_wrapped: *u8
+    current_col: s32
+    current_wrapped: s32
+    total_rows: s32
+    failed: s32
+}
+
+#scope_module
+reflow_stream_blank_current :: (stream: *ReflowStream) {
+    if stream == null || stream.current == null ||
+    stream.terminal == null {
+        return
+    }
+    col: s32 = 0
+    while col < stream.terminal.cols {
+        stream.current[col] = stream.blank
+        col += 1
+    }
+    stream.current_col = 0
+    stream.current_wrapped = 0
+}
+
+#scope_module
+reflow_stream_init :: (stream: *ReflowStream,
+terminal: *Terminal) -> s32 {
+    if stream == null || terminal == null || terminal.cols <= 0 ||
+    terminal.rows <= 0 {
+        return 0
+    }
+    memset(cast(*void)(stream), 0, size_of(ReflowStream))
+    stream.terminal = terminal
+    stream.blank = terminal_blank_cell(terminal)
+    stream.current = cast(*Cell)malloc(
+    cast(usize)terminal.cols * size_of(Cell))
+    stream.recent = cast(*Cell)malloc(
+    cast(usize)terminal.rows * cast(usize)terminal.cols *
+    size_of(Cell))
+    stream.recent_wrapped = cast(*u8)calloc(
+    cast(usize)terminal.rows, 1)
+    if stream.current == null || stream.recent == null ||
+    stream.recent_wrapped == null {
+        free(cast(*void)(stream.current))
+        free(cast(*void)(stream.recent))
+        free(cast(*void)(stream.recent_wrapped))
+        memset(cast(*void)(stream), 0, size_of(ReflowStream))
+        return 0
+    }
+    reflow_stream_blank_current(stream)
+    return 1
+}
+
+#scope_module
+reflow_stream_close :: (stream: *ReflowStream) {
+    if stream == null { return }
+    free(cast(*void)(stream.current))
+    free(cast(*void)(stream.recent))
+    free(cast(*void)(stream.recent_wrapped))
+    memset(cast(*void)(stream), 0, size_of(ReflowStream))
+}
+
+#scope_module
+reflow_stream_emit :: (stream: *ReflowStream) {
+    if stream == null || stream.terminal == null ||
+    stream.failed != 0 {
+        return
+    }
+    slot: s32
+    if stream.total_rows >= stream.terminal.rows {
+        slot = stream.total_rows % stream.terminal.rows
+        terminal_append_scrollback(stream.terminal,
+        *stream.recent[slot * stream.terminal.cols],
+        stream.recent_wrapped[slot])
+    } else {
+        slot = stream.total_rows
+    }
+    memcpy(cast(*void)(*stream.recent[slot * stream.terminal.cols]), cast(*void)(stream.current), cast(usize)stream.terminal.cols * size_of(Cell))
+    stream.recent_wrapped[slot] =
+    (ifx stream.current_wrapped != 0 then 1 else 0)
+    stream.total_rows += 1
+    reflow_stream_blank_current(stream)
+}
+
+#scope_module
+reflow_stream_append_cell :: (stream: *ReflowStream,
+cell: Cell) {
+    if stream == null || stream.terminal == null ||
+    stream.failed != 0 {
+        return
+    }
+    if stream.current_col >= stream.terminal.cols {
+        stream.current_wrapped = 1
+        reflow_stream_emit(stream)
+    }
+    if stream.current_col < stream.terminal.cols {
+        stream.current[stream.current_col] = cell
+        stream.current_col += 1
+    }
+}
+
+#scope_module
+reflow_stream_finish_line :: (stream: *ReflowStream) {
+    reflow_stream_emit(stream)
+}
+
+#scope_module
+reflow_stream_flush_partial :: (stream: *ReflowStream) {
+    if stream != null && stream.current_col > 0 {
+        reflow_stream_emit(stream)
+    }
+}
+
+#scope_module
+reflow_stream_copy_main :: (stream: *ReflowStream,
+cursor_row: s32, cursor_col: s32, old_cursor_col: s32,
+old_cursor_row: s32, new_cursor_col: *s32,
+new_cursor_row: *s32) -> s32 {
+    if stream == null || stream.terminal == null ||
+    stream.failed != 0 {
+        return 0
+    }
+    terminal: *Terminal = stream.terminal
+    copy_rows: s32 = (ifx stream.total_rows < terminal.rows then stream.total_rows else terminal.rows)
+    start_row: s32 = stream.total_rows - copy_rows
+    row: s32 = 0
+    while row < copy_rows {
+        slot: s32 = (start_row + row) % terminal.rows
+
+        memcpy(cast(*void)(*terminal.main_cells[row * terminal.cols]), cast(*void)(*stream.recent[slot * terminal.cols]), cast(usize)terminal.cols * size_of(Cell))
+        terminal.main_wrapped[row] =
+        stream.recent_wrapped[slot]
+        row += 1
+    }
+    if cursor_row >= start_row &&
+    cursor_row < start_row + copy_rows {
+        if new_cursor_row != null {
+            new_cursor_row.* = cursor_row - start_row
+        }
+        if new_cursor_col != null {
+            new_cursor_col.* = terminal_clamp_int(cursor_col, 0,
+            terminal.cols - 1)
+        }
+    } else {
+        if new_cursor_row != null {
+            new_cursor_row.* = terminal_clamp_int(old_cursor_row,
+            0, terminal.rows - 1)
+        }
+        if new_cursor_col != null {
+            new_cursor_col.* = terminal_clamp_int(old_cursor_col,
+            0, terminal.cols - 1)
+        }
+    }
+    return 1
+}
+
+#scope_module
+reflow_scrollback_and_main :: (terminal: *Terminal,
+old_scrollback: *Cell,
+old_scrollback_wrapped: *u8, old_cols: s32,
+old_scrollback_count: s32, old_scrollback_head: s32,
+old_scrollback_capacity: s32, old_main: *Cell,
+old_main_wrapped: *u8, old_rows: s32,
+old_cursor_col: s32, old_cursor_row: s32,
+new_cursor_col: *s32, new_cursor_row: *s32) -> s32 {
+    if terminal == null || old_scrollback == null ||
+    old_main == null || old_cols <= 0 || old_rows <= 0 ||
+    old_scrollback_count <= 0 || old_scrollback_capacity <= 0 ||
+    terminal.cols <= 0 {
+        return 0
+    }
+    stream: ReflowStream
+    cursor_row: s32 = -1
+    cursor_col: s32 = -1
+    input_rows: s32 = old_rows
+
+    while input_rows > old_cursor_row + 1 {
+        soft: s32 = (ifx old_main_wrapped != null &&
+        old_main_wrapped[input_rows - 1] != 0 then 1 else 0)
+
+        if soft != 0 || row_text_end(old_main, old_cols,
+        input_rows - 1, 0) > 0 {
+            break
+        }
+        input_rows -= 1
+    }
+    if reflow_stream_init(*stream, terminal) == 0 {
+        return 0
+    }
+    row: s32 = 0
+    while row < old_scrollback_count {
+        physical: s32 = (old_scrollback_head -
+        old_scrollback_count + row + old_scrollback_capacity) %
+        old_scrollback_capacity
+        soft: s32 = (ifx old_scrollback_wrapped != null &&
+        old_scrollback_wrapped[physical] != 0 then 1 else 0)
+        end: s32 = row_text_end(old_scrollback, old_cols,
+        physical, soft)
+        col: s32 = 0
+
+        while col < end {
+            reflow_stream_append_cell(*stream,
+            old_scrollback[physical * old_cols + col])
+            col += 1
+        }
+        if soft == 0 {
+            reflow_stream_finish_line(*stream)
+        }
+        row += 1
+    }
+    row = 0
+    while row < input_rows {
+        soft: s32 = (ifx old_main_wrapped != null &&
+        old_main_wrapped[row] != 0 then 1 else 0)
+        end: s32 = row_text_end(old_main, old_cols, row, soft)
+        col: s32 = 0
+
+        while col < end {
+            if row == old_cursor_row && col == old_cursor_col {
+                cursor_row = stream.total_rows
+                cursor_col = stream.current_col
+            }
+            reflow_stream_append_cell(*stream,
+            old_main[row * old_cols + col])
+            col += 1
+        }
+        if row == old_cursor_row && cursor_row < 0 {
+            cursor_row = stream.total_rows
+            cursor_col = stream.current_col +
+            ((ifx old_cursor_col > end then old_cursor_col - end else 0))
+            while cursor_col >= terminal.cols {
+                cursor_row += 1
+                cursor_col -= terminal.cols
+            }
+        }
+        if soft == 0 {
+            reflow_stream_finish_line(*stream)
+        }
+        row += 1
+    }
+    reflow_stream_flush_partial(*stream)
+    ok: s32 = reflow_stream_copy_main(*stream, cursor_row,
+    cursor_col, old_cursor_col, old_cursor_row,
+    new_cursor_col, new_cursor_row)
+    reflow_stream_close(*stream)
+    return ok
+}
+
+#scope_export
+#program_export
+terminal_allocate_screen :: (terminal: *Terminal,
+cols: s32, rows: s32) -> s32 {
+    if terminal == null { return 0 }
+    cols = terminal_clamp_int(cols, 8, MAX_COLS)
+    rows = terminal_clamp_int(rows, 4, MAX_ROWS)
+    old_main: *Cell = terminal.main_cells
+    old_alt: *Cell = terminal.alt_cells
+    old_scrollback: *Cell = terminal.scrollback
+    old_main_wrapped: *u8 = terminal.main_wrapped
+    old_alt_wrapped: *u8 = terminal.alt_wrapped
+    old_scrollback_wrapped: *u8 =
+    terminal.scrollback_wrapped
+    old_tabs: *u8 = terminal.tab_stops
+    old_cols: s32 = terminal.cols
+    old_rows: s32 = terminal.rows
+    old_scrollback_count: s32 = terminal.scrollback_count
+    old_scrollback_head: s32 = terminal.scrollback_head
+    old_scrollback_capacity: s32 = terminal.scrollback_capacity
+    main_reflowed: s32 = 0
+    replace_scrollback := old_cols != cols
+    reflow_cursor_col: s32 = (ifx terminal.alternate_screen != 0 then terminal.saved_col else terminal.cursor_col)
+    reflow_cursor_row: s32 = (ifx terminal.alternate_screen != 0 then terminal.saved_row else terminal.cursor_row)
+    scrollback_reflow_needed: s32 = (ifx old_cols > 0 &&
+    old_cols != cols && old_scrollback != null &&
+    old_scrollback_count > 0 && old_scrollback_capacity > 0 then 1 else 0)
+
+    terminal.main_cells = cast(*Cell)calloc(
+    cast(usize)(cols * rows), size_of(Cell))
+    terminal.alt_cells = cast(*Cell)calloc(
+    cast(usize)(cols * rows), size_of(Cell))
+    terminal.main_wrapped = cast(*u8)calloc(
+    cast(usize)rows, 1)
+    terminal.alt_wrapped = cast(*u8)calloc(
+    cast(usize)rows, 1)
+    terminal.tab_stops = cast(*u8)calloc(
+    cast(usize)cols, 1)
+    if terminal.main_cells == null || terminal.alt_cells == null ||
+    terminal.main_wrapped == null ||
+    terminal.alt_wrapped == null || terminal.tab_stops == null {
+        free(cast(*void)(terminal.main_cells))
+        free(cast(*void)(terminal.alt_cells))
+        free(cast(*void)(terminal.main_wrapped))
+        free(cast(*void)(terminal.alt_wrapped))
+        free(cast(*void)(terminal.tab_stops))
+        terminal.main_cells = old_main
+        terminal.alt_cells = old_alt
+        terminal.main_wrapped = old_main_wrapped
+        terminal.alt_wrapped = old_alt_wrapped
+        terminal.tab_stops = old_tabs
+        return 0
+    }
+
+    terminal.cols = cols
+    terminal.rows = rows
+    // A width change needs a fresh ring even when there are no stored rows.
+    // Failure leaves the entire previous screen and history usable.
+    if replace_scrollback {
+        terminal.scrollback = null
+        terminal.scrollback_wrapped = null
+        terminal.scrollback_count = 0
+        terminal.scrollback_head = 0
+        terminal.scrollback_capacity = 0
+    }
+    if terminal_allocate_scrollback(terminal) == 0 {
+        free(cast(*void)terminal.main_cells)
+        free(cast(*void)terminal.alt_cells)
+        free(cast(*void)terminal.main_wrapped)
+        free(cast(*void)terminal.alt_wrapped)
+        free(cast(*void)terminal.tab_stops)
+        terminal.main_cells = old_main
+        terminal.alt_cells = old_alt
+        terminal.main_wrapped = old_main_wrapped
+        terminal.alt_wrapped = old_alt_wrapped
+        terminal.tab_stops = old_tabs
+        terminal.scrollback = old_scrollback
+        terminal.scrollback_wrapped = old_scrollback_wrapped
+        terminal.scrollback_count = old_scrollback_count
+        terminal.scrollback_head = old_scrollback_head
+        terminal.scrollback_capacity = old_scrollback_capacity
+        terminal.cols = old_cols
+        terminal.rows = old_rows
+        return 0
+    }
+    terminal_clear_cell_block(terminal, terminal.main_cells)
+    terminal_clear_cell_block(terminal, terminal.alt_cells)
+
+    if scrollback_reflow_needed != 0 {
+        if reflow_scrollback_and_main(
+        terminal, old_scrollback, old_scrollback_wrapped,
+        old_cols, old_scrollback_count, old_scrollback_head,
+        old_scrollback_capacity, old_main, old_main_wrapped,
+        old_rows, reflow_cursor_col, reflow_cursor_row,
+        *reflow_cursor_col, *reflow_cursor_row) != 0 {
+            main_reflowed = 1
+            scrollback_reflow_needed = 0
+        }
+    }
+
+    copy_cols: s32 = (ifx old_cols < cols then old_cols else cols)
+    copy_rows: s32 = (ifx old_rows < rows then old_rows else rows)
+    if old_main != null && old_cols > 0 && old_rows > 0 &&
+    old_cols != cols && main_reflowed == 0 &&
+    reflow_main_screen(terminal, old_main, old_main_wrapped,
+    old_cols, old_rows, reflow_cursor_col, reflow_cursor_row,
+    *reflow_cursor_col, *reflow_cursor_row) != 0 {
+        main_reflowed = 1
+    }
+    row: s32 = 0
+    while row < copy_rows {
+        col: s32 = 0
+        while col < copy_cols {
+            if main_reflowed == 0 && old_main != null {
+                terminal.main_cells[row * cols + col] =
+                old_main[row * old_cols + col]
+            }
+            if old_alt != null {
+                terminal.alt_cells[row * cols + col] =
+                old_alt[row * old_cols + col]
+            }
+            col += 1
+        }
+        if main_reflowed == 0 && old_main_wrapped != null {
+            terminal.main_wrapped[row] = old_main_wrapped[row]
+        }
+        if old_alt_wrapped != null {
+            terminal.alt_wrapped[row] = old_alt_wrapped[row]
+        }
+        row += 1
+    }
+    free(cast(*void)(old_main))
+    free(cast(*void)(old_alt))
+    free(cast(*void)(old_main_wrapped))
+    free(cast(*void)(old_alt_wrapped))
+    free(cast(*void)(old_tabs))
+
+    terminal.scroll_top = 0
+    terminal.scroll_bottom = rows - 1
+    reflow_cursor_col = terminal_clamp_int(reflow_cursor_col, 0,
+    cols - 1)
+    reflow_cursor_row = terminal_clamp_int(reflow_cursor_row, 0,
+    rows - 1)
+    if main_reflowed != 0 && terminal.alternate_screen != 0 {
+        terminal.saved_col = reflow_cursor_col
+        terminal.saved_row = reflow_cursor_row
+    } else if main_reflowed != 0 {
+        terminal.cursor_col = reflow_cursor_col
+        terminal.cursor_row = reflow_cursor_row
+    }
+    terminal.cursor_col = terminal_clamp_int(
+    terminal.cursor_col, 0, cols - 1)
+    terminal.cursor_row = terminal_clamp_int(
+    terminal.cursor_row, 0, rows - 1)
+    terminal_reset_tab_stops(terminal)
+    if scrollback_reflow_needed != 0 {
+        reflow_scrollback(terminal, old_scrollback,
+        old_scrollback_wrapped, old_cols, old_scrollback_count,
+        old_scrollback_head, old_scrollback_capacity)
+    }
+    if replace_scrollback {
+        free(cast(*void)(old_scrollback))
+        free(cast(*void)(old_scrollback_wrapped))
+    }
+    return 1
+}
+
+#scope_export
+#program_export
+terminal_scroll_up :: (terminal: *Terminal, top: s32,
+bottom: s32, count: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+    wrapped: *u8 = terminal_screen_wrapped(terminal)
+
+    if terminal == null || cells == null { return }
+    top = terminal_clamp_int(top, 0, terminal.rows - 1)
+    bottom = terminal_clamp_int(bottom, 0, terminal.rows - 1)
+    if top > bottom { return }
+    rows: s32 = bottom - top + 1
+    count = terminal_clamp_int(count, 1, rows)
+    i: s32 = 0
+    while i < count {
+        terminal_push_scrollback(terminal,
+        *cells[(top + i) * terminal.cols],
+        (ifx wrapped != null then wrapped[top + i] else 0))
+        i += 1
+    }
+    terminal_sixel_shift(terminal, top, bottom, -count)
+    if rows > count {
+        memmove(cast(*void)(*cells[top * terminal.cols]), cast(*void)(*cells[(top + count) * terminal.cols]), cast(usize)(rows - count) * cast(usize)terminal.cols * size_of(Cell))
+        if wrapped != null {
+            memmove(cast(*void)(*wrapped[top]), cast(*void)(*wrapped[top + count]), cast(usize)(rows - count))
+        }
+    }
+    i = bottom - count + 1
+    while i <= bottom {
+        terminal_clear_row(terminal, i)
+        i += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_scroll_down :: (terminal: *Terminal, top: s32,
+bottom: s32, count: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+    wrapped: *u8 = terminal_screen_wrapped(terminal)
+
+    if terminal == null || cells == null { return }
+    top = terminal_clamp_int(top, 0, terminal.rows - 1)
+    bottom = terminal_clamp_int(bottom, 0, terminal.rows - 1)
+    if top > bottom { return }
+    rows: s32 = bottom - top + 1
+    count = terminal_clamp_int(count, 1, rows)
+    terminal_sixel_shift(terminal, top, bottom, count)
+    if rows > count {
+        memmove(cast(*void)(*cells[(top + count) * terminal.cols]), cast(*void)(*cells[top * terminal.cols]), cast(usize)(rows - count) * cast(usize)terminal.cols * size_of(Cell))
+        if wrapped != null {
+            memmove(cast(*void)(*wrapped[top + count]), cast(*void)(*wrapped[top]), cast(usize)(rows - count))
+        }
+    }
+    i: s32 = top
+    while i < top + count {
+        terminal_clear_row(terminal, i)
+        i += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_clamp_cursor :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal.cursor_col = terminal_clamp_int(
+    terminal.cursor_col, 0, terminal.cols - 1)
+    if terminal.origin_mode != 0 {
+        terminal.cursor_row = terminal_clamp_int(
+        terminal.cursor_row, terminal.scroll_top,
+        terminal.scroll_bottom)
+    } else {
+        terminal.cursor_row = terminal_clamp_int(
+        terminal.cursor_row, 0, terminal.rows - 1)
+    }
+}
+
+#scope_export
+#program_export
+terminal_erase_range :: (terminal: *Terminal, start: s32,
+end: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+
+    if terminal == null || cells == null { return }
+    limit: s32 = terminal.cols * terminal.rows
+    start = terminal_clamp_int(start, 0, limit)
+    end = terminal_clamp_int(end, 0, limit)
+    if start >= end { return }
+    terminal_sixel_clear_range(terminal, start, end)
+    blank: Cell = terminal_blank_cell(terminal)
+    i: s32 = start
+    while i < end {
+        cells[i] = blank
+        i += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_insert_blank_chars :: (terminal: *Terminal,
+count: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+
+    if terminal == null || cells == null { return }
+    available: s32 = terminal.cols - terminal.cursor_col
+    count = terminal_clamp_int(count, 1, available)
+    row_start: s32 = terminal.cursor_row * terminal.cols
+    if available > count {
+        memmove(cast(*void)(*cells[row_start + terminal.cursor_col + count]), cast(*void)(*cells[row_start + terminal.cursor_col]), cast(usize)(available - count) * size_of(Cell))
+    }
+    blank: Cell = terminal_blank_cell(terminal)
+    col: s32 = 0
+    while col < count {
+        cells[row_start + terminal.cursor_col + col] = blank
+        col += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_delete_chars :: (terminal: *Terminal,
+count: s32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+
+    if terminal == null || cells == null { return }
+    available: s32 = terminal.cols - terminal.cursor_col
+    count = terminal_clamp_int(count, 1, available)
+    row_start: s32 = terminal.cursor_row * terminal.cols
+    if available > count {
+        memmove(cast(*void)(*cells[row_start + terminal.cursor_col]), cast(*void)(*cells[row_start + terminal.cursor_col + count]), cast(usize)(available - count) * size_of(Cell))
+    }
+    blank: Cell = terminal_blank_cell(terminal)
+    col: s32 = terminal.cols - count
+    while col < terminal.cols {
+        cells[row_start + col] = blank
+        col += 1
+    }
+}
+
+#scope_export
+#program_export
+terminal_erase_chars :: (terminal: *Terminal,
+count: s32) {
+    if terminal == null { return }
+    available: s32 = terminal.cols - terminal.cursor_col
+    count = terminal_clamp_int(count, 1, available)
+    terminal_erase_range(terminal,
+    terminal.cursor_row * terminal.cols +
+    terminal.cursor_col,
+    terminal.cursor_row * terminal.cols +
+    terminal.cursor_col + count)
+}
+
+#scope_export
+#program_export
+terminal_next_tab_stop :: (
+terminal: *Terminal) -> s32 {
+    if terminal == null { return 0 }
+    col: s32 = terminal.cursor_col + 1
+    while col < terminal.cols {
+        if terminal.tab_stops != null &&
+        terminal.tab_stops[col] != 0 {
+            return col
+        }
+        col += 1
+    }
+    return terminal.cols - 1
+}

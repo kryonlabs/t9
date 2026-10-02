@@ -1,0 +1,434 @@
+// Exercise the real Terminal engine, using a native pipe for its responses.
+#import "terminal";
+ClipboardHost :: #import "terminal_clipboard_host";
+Clipboard :: #import "terminal_clipboard";
+PaneClipboard :: #import "terminal_pane_clipboard";
+Text :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+
+#scope_file
+libc :: #system_library "c";
+Pipe :: (descriptors: *s32) -> s32 #foreign libc "pipe";
+Read :: (descriptor: s32, bytes: *void, size: usize) -> isize #foreign libc "read";
+Close :: (descriptor: s32) -> s32 #foreign libc "close";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    Transport :: #import "terminal_pty_plan9";
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+} else {
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)milliseconds * 1000) }
+}
+
+Bytes :: (text: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*text)
+    return descriptor.data
+}
+
+Feed :: (terminal: *Terminal, text: string) {
+    terminal_feed(terminal, cast(*void)Bytes(text), cast(s32)text.count)
+}
+
+Line :: (terminal: *Terminal, row: s32, text: string) -> bool {
+    output: [2048]u8
+    terminal_line(terminal, row, *output[0], 2048)
+    return Text.TextFromCString(*output[0]) == text
+}
+
+VisibleLine :: (terminal: *Terminal, row: s32, text: string) -> bool {
+    output: [2048]u8
+    terminal_visible_line(terminal, row, *output[0], 2048)
+    return Text.TextFromCString(*output[0]) == text
+}
+
+Reset :: (terminal: *Terminal, cols: s32 = 12, rows: s32 = 4) {
+    terminal_close(terminal)
+    terminal_resize(terminal, cols, rows)
+}
+
+OpenSink :: (terminal: *Terminal) -> s32 {
+    #if #defined(PLAN9) {
+        // Use a supervised transport session: Plan 9 deliberately refuses
+        // writes and closes for arbitrary descriptors it does not own.
+        if terminal_spawn(terminal, Bytes("/"), Bytes("/bin/rc"),
+                          Bytes("exec cat"), terminal.cols, terminal.rows) == 0 { return -1 }
+        return terminal.fd
+    } else {
+        descriptors: [2]s32
+        if Pipe(*descriptors[0]) != 0 { return -1 }
+        terminal.fd = descriptors[1]
+        terminal.running = 1
+        return descriptors[0]
+    }
+}
+
+Capture :: (terminal: *Terminal, descriptor: s32, expected: string) -> bool {
+    output: [4096]u8
+    used: s32
+    #if #defined(PLAN9) {
+        for attempt: 0..199 {
+            got := Transport.TerminalPtyRead(descriptor, cast(*void)(*output[used]), 4095 - used)
+            if got > 0 { used += got }
+            if got < 0 || cast(s64)used >= expected.count { break }
+            Pause(10)
+        }
+        terminal_close(terminal)
+    } else {
+        terminal_close(terminal)
+        while used < 4095 {
+            got := Read(descriptor, cast(*void)(*output[used]), cast(usize)(4095 - used))
+            if got <= 0 { break }
+            used += cast(s32)got
+        }
+        Close(descriptor)
+    }
+    return TextView(output[0:used]) == expected
+}
+
+Responses :: (input: string, expected: string) -> bool {
+    terminal: Terminal
+    terminal_init(*terminal)
+    terminal_resize(*terminal, 24, 5)
+    descriptor := OpenSink(*terminal)
+    if descriptor < 0 { terminal_close(*terminal); return false }
+    Clipboard.SyncClipboardBufferFromHost(*terminal.clipboard)
+    Feed(*terminal, input)
+    return Capture(*terminal, descriptor, expected)
+}
+
+ParserAndScreen :: () -> s32 {
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    terminal_resize(*terminal, 12, 4)
+    Feed(*terminal, "你好é😀")
+    if !Line(*terminal, 0, "你好é😀") || terminal.cursor_col != 7 { return 1 }
+    cell := terminal_cell(*terminal, 0, 0)
+    if cell == null || cell.codepoint != 0x4f60 ||
+       (terminal_cell(*terminal, 1, 0).style & STYLE_WIDE_CONT) == 0 ||
+       terminal_cell(*terminal, 4, 0).combining != 0x301 { return 2 }
+    Reset(*terminal)
+    Feed(*terminal, "\x1b[1;3;4;7;9;38;2;17;34;51;48;5;200;58;5;22mA\x1b[0mB")
+    cell = terminal_cell(*terminal, 0, 0)
+    if cell.fg != (COLOR_TRUE_RGB | 0x112233) || cell.bg != 200 ||
+       cell.underline != 22 || cell.style != 31 ||
+       terminal_cell(*terminal, 1, 0).fg != COLOR_DEFAULT { return 3 }
+    Reset(*terminal)
+    Feed(*terminal, "A\x1b_hidden\x1b\\B\x1b^hidden\x1b\\C\x1bXhidden\x1b\\D\a")
+    if !Line(*terminal, 0, "ABCD") || terminal_consume_bell(*terminal) != 1 ||
+       terminal_consume_bell(*terminal) != 0 { return 4 }
+    Reset(*terminal)
+    Feed(*terminal, "\x1b[31\x18X\x1b]2;cancelled\x1aY\x1bPq~\x18Z")
+    if !Line(*terminal, 0, "XYZ") || terminal.title[0] != 0 ||
+       terminal.current_fg != COLOR_DEFAULT || terminal_sixel_count(*terminal) != 0 { return 5 }
+    Reset(*terminal)
+    raw: [16]u8 = .[0x9b, 49, 59, 51, 49, 109, 82, 0x9b, 48, 109, 78, 0x84, 88, 0x85, 89, 0x9c]
+    terminal_feed(*terminal, cast(*void)(*raw[0]), 16)
+    if terminal_cell(*terminal, 0, 0).fg != 1 || !Line(*terminal, 0, "RN") ||
+       !Line(*terminal, 1, "  X") || !Line(*terminal, 2, "Y") { return 6 }
+    Reset(*terminal)
+    Feed(*terminal, "\x1b(0lqk\x1b(B!\x1b)0\x0ex\x0f.")
+    if !Line(*terminal, 0, "┌─┐!│.") { return 7 }
+    Reset(*terminal, 8, 4)
+    Feed(*terminal, "abcdefghI")
+    if !Line(*terminal, 0, "abcdefgh") || !Line(*terminal, 1, "I") ||
+       terminal_visible_line_wrapped(*terminal, 0) != 1 { return 8 }
+    Reset(*terminal, 8, 4)
+    Feed(*terminal, "\x1b[?7labcdefghI")
+    if terminal.autowrap != 0 || !Line(*terminal, 0, "abcdefgI") ||
+       !Line(*terminal, 1, "") { return 9 }
+    Feed(*terminal, "\x1b[?7h\r\nabcdefghF")
+    if !Line(*terminal, 1, "abcdefgh") || !Line(*terminal, 2, "F") { return 10 }
+    Reset(*terminal)
+    Feed(*terminal, "abcd\r\x1b[3G\x1b[4hXY\x1b[4lZ")
+    if !Line(*terminal, 0, "abXYZd") || terminal.insert_mode != 0 { return 11 }
+    Feed(*terminal, "\r\x1b[2P")
+    if !Line(*terminal, 0, "XYZd") { return 12 }
+    Feed(*terminal, "\x1b[2G\x1b[2X")
+    if !Line(*terminal, 0, "X  d") { return 13 }
+    Feed(*terminal, "\x1b[2K\r\x1b[31mA\x1b[3b")
+    if !Line(*terminal, 0, "AAAA") || terminal_cell(*terminal, 3, 0).fg != 1 { return 14 }
+    Feed(*terminal, "\x1b[0m\r\x1b[2K\x1b[4`X\x1b[1;1H\x1b[3aY\x1b[2eZ")
+    if !Line(*terminal, 0, "   Y") || !Line(*terminal, 2, "    Z") { return 15 }
+    Feed(*terminal, "\x1b#8")
+    if !Line(*terminal, 0, "EEEEEEEEEEEE") || !Line(*terminal, 3, "EEEEEEEEEEEE") ||
+       terminal.cursor_row != 0 || terminal.cursor_col != 0 { return 16 }
+    Reset(*terminal, 20, 4)
+    Feed(*terminal, "a\tb\x1b[3g\rc\td")
+    if !Line(*terminal, 0, "c       b          d") { return 17 }
+    Reset(*terminal, 12, 5)
+    Feed(*terminal, "\x1b[2;4r\x1b[?6h\x1b[Htop\x1b[99;1Hbottom")
+    if !Line(*terminal, 1, "top") || !Line(*terminal, 3, "bottom") { return 18 }
+    Feed(*terminal, "\x1b[?6l\x1b[Hhome")
+    if !Line(*terminal, 0, "home") { return 19 }
+    Feed(*terminal, "\x1b[3;3H\x1b[31m\x1b7\x1b[H\x1b[0m\x1b8Q")
+    if terminal_cell(*terminal, 2, 2).fg != 1 || terminal.cursor_col != 3 { return 20 }
+    Feed(*terminal, "\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[4h\x1b[20h\x1b[6 q")
+    if terminal.application_cursor_keys != 1 || terminal.mouse_mode != 1000 ||
+       terminal.mouse_sgr != 1 || terminal.bracketed_paste != 1 ||
+       terminal.insert_mode != 1 || terminal.newline_mode != 1 ||
+       terminal.cursor_style != TERMINAL_CURSOR_BAR || terminal.cursor_blink != 0 { return 21 }
+    Feed(*terminal, "\x1b[!p")
+    if terminal.application_cursor_keys != 0 || terminal.mouse_mode != 0 ||
+       terminal.bracketed_paste != 0 || terminal.insert_mode != 0 ||
+       terminal.newline_mode != 0 || terminal.current_fg != COLOR_DEFAULT ||
+       !Line(*terminal, 0, "home") { return 22 }
+    terminal_set_ambiguous_width(*terminal, 1)
+    if terminal_codepoint_width_for(*terminal, 0xa1) != 2 ||
+       terminal_codepoint_width_for(*terminal, 0xfffd) != 2 ||
+       terminal_codepoint_width_for(*terminal, 0x1f600) != 2 ||
+       terminal_codepoint_width_for(*terminal, 0x301) != 0 { return 23 }
+    Feed(*terminal, "\x1bc")
+    if !Line(*terminal, 0, "") || terminal.cursor_col != 0 || terminal.autowrap != 1 { return 24 }
+    return 0
+}
+
+ResizeAndSearch :: () -> s32 {
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    terminal_resize(*terminal, 8, 5)
+    Feed(*terminal, "abcdefghijklmnopq")
+    terminal_resize(*terminal, 12, 5)
+    if !Line(*terminal, 0, "abcdefghijkl") || !Line(*terminal, 1, "mnopq") ||
+       terminal.cursor_row != 1 || terminal.cursor_col != 5 { return 31 }
+    Reset(*terminal, 100, 30)
+    Feed(*terminal, "$ ")
+    terminal_resize(*terminal, 80, 24)
+    if !Line(*terminal, 0, "$") || terminal.cursor_row != 0 || terminal.cursor_col != 2 { return 32 }
+    Reset(*terminal, 8, 4)
+    Feed(*terminal, "abcdefghijklmnopq\x1b[?1049hALT")
+    if terminal.alternate_screen != 1 || !Line(*terminal, 0, "ALT") { return 33 }
+    terminal_resize(*terminal, 12, 4)
+    Feed(*terminal, "\x1b[?1049l")
+    if terminal.alternate_screen != 0 || !Line(*terminal, 0, "abcdefghijkl") ||
+       !Line(*terminal, 1, "mnopq") || terminal.cursor_col != 5 || terminal.cursor_row != 1 { return 34 }
+    Reset(*terminal, 8, 4)
+    Feed(*terminal, "abcdefghijklmnopqrstuvwxyz\r\nnext")
+    if terminal_scrollback_rows(*terminal) != 1 || terminal_visible_line_wrapped(*terminal, 0) != 1 { return 35 }
+    terminal_resize(*terminal, 12, 4)
+    if terminal_scrollback_rows(*terminal) != 0 || !Line(*terminal, 0, "abcdefghijkl") ||
+       !Line(*terminal, 1, "mnopqrstuvwx") || !Line(*terminal, 2, "yz") ||
+       !Line(*terminal, 3, "next") { return 36 }
+    Reset(*terminal, 8, 4)
+    terminal_set_scrollback_limit(*terminal, 4)
+    Feed(*terminal, "abcdefghijkl\r\none\r\ntwo\r\nthree\r\nfour\r\nfive\r\n")
+    terminal_resize(*terminal, 12, 4)
+    if !VisibleLine(*terminal, 0, "abcdefghijkl") || !VisibleLine(*terminal, 1, "one") { return 37 }
+    match: SearchMatch
+    if terminal_find_visible(*terminal, Bytes("FIVE"), 0, 0, 1, 1, *match) != 0 ||
+       terminal_find_visible(*terminal, Bytes("THree"), 0, 0, 1, 1, *match) != 0 ||
+       terminal_find_visible(*terminal, Bytes("three"), 0, 0, 1, 1, *match) != 1 || match.length != 5 { return 38 }
+    row := match.row
+    if terminal_find_visible(*terminal, Bytes("one"), row, 0, -1, 1, *match) != 1 || match.row != 1 { return 39 }
+    Feed(*terminal, "\x1b[?1049hALT")
+    if terminal_find_visible(*terminal, Bytes("one"), 0, 0, 1, 1, *match) != 0 ||
+       terminal_visible_line_count(*terminal) != 4 { return 40 }
+    Feed(*terminal, "\x1b[?1049l\x1b[3J")
+    if terminal_scrollback_rows(*terminal) != 0 { return 41 }
+    return 0
+}
+
+Boundaries :: () -> s32 {
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    terminal_resize(*terminal, 8, 4)
+    terminal_set_scrollback_limit(*terminal, 3)
+    Feed(*terminal, "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven\r\neight\r\nnine")
+    terminal_set_scrollback_limit(*terminal, 5)
+    if terminal_scrollback_rows(*terminal) != 3 ||
+       !VisibleLine(*terminal, 0, "three") || !VisibleLine(*terminal, 2, "five") { return 71 }
+    Feed(*terminal, "\r\nten\r\neleven")
+    terminal_set_scrollback_limit(*terminal, 2)
+    if terminal_scrollback_rows(*terminal) != 2 ||
+       !VisibleLine(*terminal, 0, "six") || !VisibleLine(*terminal, 1, "seven") ||
+       !VisibleLine(*terminal, 2, "eight") { return 72 }
+    terminal_clear_scrollback(*terminal)
+    terminal_resize(*terminal, 240, 4)
+    Feed(*terminal, "\r\nA\r\nB\r\nC\r\nD\r\nE")
+    if terminal.cols != 240 || terminal_scrollback_rows(*terminal) != 2 ||
+       !VisibleLine(*terminal, 0, "eleven") || !VisibleLine(*terminal, 1, "A") { return 73 }
+
+    Reset(*terminal)
+    title := "\x1b]2;终端 😀\a"
+    title_bytes := Bytes(title)
+    for index: cast(s64)0..title.count - 1 {
+        terminal_feed(*terminal, cast(*void)(*title_bytes[index]), 1)
+    }
+    if Text.TextFromCString(*terminal.title[0]) != "终端 😀" { return 74 }
+    overflow: [9000]u8
+    overflow[0] = 50; overflow[1] = 59
+    for index: 2..8997 { overflow[index] = 120 }
+    overflow[8998] = 7
+    Feed(*terminal, "\x1b]")
+    terminal_feed(*terminal, cast(*void)(*overflow[0]), 5000)
+    terminal_feed(*terminal, cast(*void)(*overflow[5000]), 3999)
+    Feed(*terminal, "X")
+    if Text.TextFromCString(*terminal.title[0]) != "终端 😀" || !Line(*terminal, 0, "X") { return 75 }
+
+    clipboard: [900]u8
+    prefix := "52;c;"
+    for index: 0..4 { clipboard[index] = prefix[index] }
+    encoded := "YWFh"
+    for group: 0..199 {
+        for index: 0..3 { clipboard[5 + group * 4 + index] = encoded[index] }
+    }
+    clipboard[805] = 7
+    Feed(*terminal, "\x1b]")
+    terminal_feed(*terminal, cast(*void)(*clipboard[0]), 806)
+    if terminal.clipboard.length != 600 || !terminal.clipboard.pending_write { return 76 }
+    for index: 0..599 { if terminal.clipboard.bytes[index] != 97 { return 76 } }
+
+    for index: 1..MAX_HYPERLINKS {
+        digits: [32]u8
+        suffix := Number.FormatInteger(cast(s64)index, digits[:])
+        Feed(*terminal, "\x1b]8;;https://example.org/")
+        Feed(*terminal, suffix)
+        Feed(*terminal, "\x1b\\")
+        if terminal.current_hyperlink != index { return 77 }
+    }
+    Feed(*terminal, "\x1b]8;;https://example.org/extra\x1b\\")
+    if terminal.hyperlink_count != MAX_HYPERLINKS || terminal.current_hyperlink != 0 { return 78 }
+    Feed(*terminal, "\x1b]8;;https://example.org/2\x1b\\")
+    if terminal.current_hyperlink != 2 { return 78 }
+    Reset(*terminal)
+    Feed(*terminal, "\x1b[999999999999999999999GQ")
+    if terminal_cell(*terminal, 11, 0).codepoint != 81 { return 79 }
+    Reset(*terminal)
+    Feed(*terminal, "\x1b[31;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;31mA")
+    if !Line(*terminal, 0, "A") || terminal_cell(*terminal, 0, 0).fg != COLOR_DEFAULT { return 80 }
+    return 0
+}
+
+WaitForLine :: (terminal: *Terminal, expected: string) -> bool {
+    for attempt: 0..199 {
+        terminal_poll_bytes(terminal)
+        for row: 0..terminal.rows - 1 { if Line(terminal, row, expected) { return true } }
+        Pause(10)
+    }
+    return false
+}
+
+ChildProcess :: () -> s32 {
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    shell: *u8
+    command: string
+    #if #defined(PLAN9) {
+        shell = Bytes("/bin/rc")
+        command = "echo ENGINE_CHILD_OK; input=`{read}; echo GOT:$\"input"
+    } else {
+        shell = Environment(Bytes("T9_TEST_SHELL"))
+        if shell == null { return 81 }
+        command = "printf 'ENGINE_CHILD_OK\\r\\n'; read input; printf 'GOT:%s' \"$input\""
+    }
+    if terminal_spawn(*terminal, Bytes("/"), shell, Bytes(command), 40, 8) == 0 { return 82 }
+    #if #defined(PLAN9) {
+        // Native pipes have no tty ONLCR conversion. Exercise the engine's
+        // newline mode when the controlled rc child writes LF-only lines.
+        Feed(*terminal, "\x1b[20h")
+    }
+    if !WaitForLine(*terminal, "ENGINE_CHILD_OK") { return 83 }
+    terminal_resize(*terminal, 80, 20)
+    if terminal.cols != 80 || terminal.rows != 20 ||
+       terminal_write_text(*terminal, Bytes("hello\n")) != 6 { return 84 }
+    if !WaitForLine(*terminal, "GOT:hello") { return 85 }
+    for attempt: 0..199 {
+        if terminal_poll(*terminal) == 0 { return 0 }
+        Pause(10)
+    }
+    return 86
+}
+
+OSCAndGraphics :: () -> s32 {
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    terminal_resize(*terminal, 24, 6)
+    ClipboardHost.HostClipboardReset("original")
+    Feed(*terminal, "\x1b]0;Title\a\x1b]7;file://host/tmp/a%20b\a\x1b]10;#112233\a\x1b]4;1;#445566;2;#778899\a")
+    if Text.TextFromCString(*terminal.title[0]) != "Title" ||
+       Text.TextFromCString(*terminal.icon_title[0]) != "Title" ||
+       Text.TextFromCString(*terminal.current_directory[0]) != "/tmp/a b" ||
+       terminal.default_fg != (COLOR_TRUE_RGB | 0x112233) ||
+       terminal.palette_overrides[1] != (COLOR_TRUE_RGB | 0x445566) { return 51 }
+    Feed(*terminal, "\x1b[22;0t\x1b]0;New\a\x1b[23;0t\x1b]104;1\a\x1b]110\a")
+    if Text.TextFromCString(*terminal.title[0]) != "Title" ||
+       terminal.palette_overrides[1] != COLOR_DEFAULT ||
+       terminal.palette_overrides[2] != (COLOR_TRUE_RGB | 0x778899) ||
+       terminal.default_fg != COLOR_DEFAULT { return 52 }
+    Feed(*terminal, "\x1b]8;id=link;https://example.org\x1b\\A\x1b]8;;\x1b\\B")
+    if terminal_cell(*terminal, 0, 0).hyperlink != 1 || terminal_cell(*terminal, 1, 0).hyperlink != 0 ||
+       Text.TextFromCString(terminal_hyperlink(*terminal, 1)) != "https://example.org" ||
+       Text.TextFromCString(terminal_hyperlink_id(*terminal, 1)) != "link" { return 53 }
+    Feed(*terminal, "\x1b]52;c;Y2xpcA==\a\x1b]52;p;cHJpbWFyeQ==\a")
+    if Text.TextFromCString(Clipboard.GetClipboardBufferText(*terminal.clipboard)) != "clip" ||
+       Clipboard.ClipboardBufferHasPendingWrite(*terminal.clipboard) != 1 ||
+       Text.TextFromCString(Clipboard.GetPrimarySelectionTextValue()) != "primary" ||
+       Clipboard.FlushClipboardBufferToHost(*terminal.clipboard) != 1 ||
+       ClipboardHost.HostClipboardText() != "clip" { return 54 }
+    Feed(*terminal, "\x1b]52;c;Zh==\a")
+    if ClipboardHost.HostClipboardText() != "clip" ||
+       Text.TextFromCString(Clipboard.GetClipboardBufferText(*terminal.clipboard)) != "clip" ||
+       Clipboard.ClipboardBufferHasPendingWrite(*terminal.clipboard) != 0 { return 55 }
+    Feed(*terminal, "\r\x1bPq#1;2;100;0;0#1~\x1b\\")
+    image := terminal_sixel_image(*terminal, 0)
+    if terminal_sixel_count(*terminal) != 1 || image == null || image.width != 1 ||
+       image.height != 6 || image.pixels[0] != (COLOR_TRUE_RGB | 0xff0000) { return 56 }
+    Feed(*terminal, "\x1b[1;1H\x1b[2K")
+    if terminal_sixel_count(*terminal) != 0 { return 57 }
+    Feed(*terminal, "\x1b[?47h\x1bPq~\x1b\\\x1b[?47l")
+    if terminal_sixel_count(*terminal) != 1 || terminal_sixel_image(*terminal, 0).alternate_screen != 1 { return 58 }
+    Feed(*terminal, "\x1b[?1049h\x1b[?1049l")
+    if terminal_sixel_count(*terminal) != 0 { return 60 }
+    Feed(*terminal, "\x1bPq~\x1b\\\x1bc")
+    if terminal_sixel_count(*terminal) != 0 || terminal.sixel_total_pixels != 0 { return 59 }
+    return 0
+}
+
+ReportsAndInput :: () -> s32 {
+    if !Responses("\x1b[5n\x1b[2;3H\x1b[6n\x1b[?6n\x1b[c\x1b[>c",
+        "\x1b[0n\x1b[2;3R\x1b[?2;3R\x1b[?1;2c\x1b[>0;0;0c") { return 61 }
+    if !Responses("\x1b[?7$p\x1b[?7l\x1b[?7$p\x1b[4h\x1b[4$p",
+        "\x1b[?7;1$y\x1b[?7;2$y\x1b[4;1$y") { return 62 }
+    if !Responses("\x1b[18t\x1b[19t\x1b]0;Title\a\x1b[20t\x1b[21t",
+        "\x1b[8;5;24t\x1b[9;5;24t\x1b]LTitle\x1b\\\x1b]lTitle\x1b\\") { return 63 }
+    if !Responses("\x1bP$qm\x1b\\\x1bP$qr\x1b\\\x1bP$q q\x1b\\\x1bP$qbad\x1b\\",
+        "\x1bP1$r0m\x1b\\\x1bP1$r1;5r\x1b\\\x1bP1$r0 q\x1b\\\x1bP0$r\x1b\\") { return 64 }
+    if !Responses("\x1bP+q544e\x1b\\", "\x1bP1+r544e=787465726d2d323536636f6c6f72\x1b\\") { return 65 }
+    if !Responses("\x1b]10;#112233\a\x1b]10;?\a", "\x1b]10;rgb:1111/2222/3333\a") { return 66 }
+    if !Responses("\x1b]52;c;?\a", "\x1b]52;c;Y2xpcA==\a") { return 67 }
+    terminal: Terminal
+    terminal_init(*terminal)
+    terminal_resize(*terminal, 24, 5)
+    descriptor := OpenSink(*terminal)
+    if descriptor < 0 { terminal_close(*terminal); return 68 }
+    terminal_send_key(*terminal, KEY_UP_CODE, 0)
+    Feed(*terminal, "\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[?2004h")
+    terminal_send_key(*terminal, KEY_UP_CODE, 0)
+    terminal_send_key(*terminal, KEY_F5_CODE, MOD_CTRL)
+    terminal_send_codepoint(*terminal, 0x4f60, 0)
+    terminal_send_mouse(*terminal, TERMINAL_MOUSE_LEFT, 2, 3, 1, 0, 0)
+    terminal_send_focus(*terminal, 1)
+    PaneClipboard.TerminalPaneClipboardPasteText(terminal_clipboard(*terminal), Bytes("hello\x1b[31m"))
+    if !Capture(*terminal, descriptor,
+        "\x1b[A\x1bOA\x1b[15;5~你\x1b[<0;3;4M\x1b[I\x1b[200~hello\x1b[201~") { return 69 }
+    return 0
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    ClipboardHost.HostClipboardReset("")
+    result := ParserAndScreen()
+    if result == 0 { result = ResizeAndSearch() }
+    if result == 0 { result = Boundaries() }
+    if result == 0 { result = OSCAndGraphics() }
+    if result == 0 { result = ReportsAndInput() }
+    if result == 0 { result = ChildProcess() }
+    if result != 0 { print("Terminal engine failure %\n", result) }
+    else { print("Terminal engine behavior passed\n") }
+    return result
+}

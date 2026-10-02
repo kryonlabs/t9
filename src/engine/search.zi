@@ -1,0 +1,47 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+terminal_search_line_text :: (userdata: *void, row: s32,
+out: *u8, out_size: s32) -> s32 {
+    terminal: *Terminal = cast(*Terminal)userdata
+
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    if terminal == null || row < 0 { return 0 }
+    terminal_visible_line(terminal, row, out, out_size)
+    return 1
+}
+
+#scope_export
+#program_export
+terminal_find_visible :: (terminal: *Terminal,
+needle: *u8, start_row: s32, start_col: s32,
+direction: s32, wrap: s32,
+out: *SearchMatch) -> s32 {
+    if terminal == null { return 0 }
+    match: PaneSelection.TerminalPaneSearchMatch
+    found := PaneSelection.TerminalPaneSearchLines(terminal_search_line_text,
+    cast(*void)terminal, terminal_visible_line_count(terminal),
+    needle, start_row, start_col, direction, wrap,
+    *match)
+    if out != null {
+        out.row = match.row
+        out.col = match.col
+        out.length = match.length
+    }
+    return found
+}
+
+#scope_export
+#program_export
+terminal_search_controller :: (
+terminal: *Terminal,
+selection: *PaneSelection.TerminalPaneSelection, visible_rows: s32,
+first_visible_row: s32,
+scroll_offset: *s32) -> PaneSelection.TerminalPaneSearchController {
+    return PaneSelection.MakeTerminalPaneSearchController(
+    terminal_search_line_text, cast(*void)terminal, selection,
+    (ifx terminal != null then terminal_visible_line_count(terminal) else 0),
+    visible_rows, first_visible_row, scroll_offset)
+}

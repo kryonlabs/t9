@@ -1,0 +1,745 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+PARSER_TEXT :: 0
+PARSER_ESCAPE :: 1
+PARSER_CSI :: 2
+PARSER_OSC :: 3
+PARSER_OSC_ESCAPE :: 4
+PARSER_DCS :: 5
+PARSER_DCS_ESCAPE :: 6
+PARSER_CHARSET :: 7
+PARSER_HASH :: 8
+PARSER_IGNORE_STRING :: 9
+PARSER_IGNORE_ESCAPE :: 10
+
+#scope_module
+line_feed :: (terminal: *Terminal) {
+    if terminal.cursor_row == terminal.scroll_bottom {
+        terminal_scroll_up(terminal, terminal.scroll_top,
+        terminal.scroll_bottom, 1)
+    } else {
+        terminal.cursor_row += 1
+    }
+    terminal_clamp_cursor(terminal)
+}
+
+#scope_module
+newline_control :: (terminal: *Terminal) {
+    if terminal == null { return }
+    line_feed(terminal)
+    if terminal.newline_mode != 0 {
+        terminal.cursor_col = 0
+    }
+}
+
+#scope_module
+put_codepoint :: (terminal: *Terminal, codepoint: u32) {
+    cells: *Cell = terminal_screen_cells(terminal)
+
+    if terminal == null || cells == null { return }
+    codepoint = terminal_translate_charset(terminal, codepoint)
+    width: s32 = terminal_codepoint_width_for(terminal, codepoint)
+    if width <= 0 {
+        if codepoint < 0x300 { return }
+        target_col: s32 = terminal.cursor_col - 1
+        target_row: s32 = terminal.cursor_row
+        if target_col < 0 {
+            target_row -= 1
+            target_col = terminal.cols - 1
+        }
+        if target_row < 0 || target_col < 0 { return }
+        cell: Cell = cells[target_row * terminal.cols + target_col]
+        if (cell.style & STYLE_WIDE_CONT) != 0 && target_col > 0 {
+            target_col -= 1
+        }
+        if cells[target_row * terminal.cols + target_col].codepoint != 0 &&
+        (cells[target_row * terminal.cols + target_col].style &
+        STYLE_WIDE_CONT) == 0 {
+            cells[target_row * terminal.cols + target_col].combining =
+            codepoint
+        }
+        return
+    }
+    if terminal.cursor_col >= terminal.cols ||
+    terminal.cursor_col + width > terminal.cols {
+        wrapped: *u8 = terminal_screen_wrapped(terminal)
+
+        if terminal.autowrap != 0 {
+            if wrapped != null && terminal.cursor_row >= 0 &&
+            terminal.cursor_row < terminal.rows {
+                wrapped[terminal.cursor_row] = 1
+            }
+            terminal.cursor_col = 0
+            line_feed(terminal)
+        } else {
+            terminal.cursor_col = terminal.cols - width
+            if terminal.cursor_col < 0 {
+                terminal.cursor_col = 0
+            }
+        }
+    }
+    terminal_clamp_cursor(terminal)
+    if terminal.insert_mode != 0 {
+        terminal_insert_blank_chars(terminal, width)
+    }
+    cell: Cell
+    cell.codepoint = (ifx codepoint >= 32 then codepoint else #char"?")
+    cell.combining = 0
+    cell.fg = terminal.current_fg
+    cell.bg = terminal.current_bg
+    cell.underline = terminal.current_underline
+    cell.hyperlink = terminal.current_hyperlink
+    cell.style = cast(u16)terminal.current_style
+    cells[terminal.cursor_row * terminal.cols +
+    terminal.cursor_col] = cell
+    if width == 2 && terminal.cursor_col + 1 < terminal.cols {
+        cont: Cell = terminal_blank_cell(terminal)
+
+        cont.codepoint = 0
+        cont.style = cast(u16)(cont.style | STYLE_WIDE_CONT)
+        cells[terminal.cursor_row * terminal.cols +
+        terminal.cursor_col + 1] = cont
+    }
+    terminal.cursor_col += width
+}
+
+#scope_module
+repeat_previous_graphic :: (terminal: *Terminal, count: s32) {
+    if terminal == null || count <= 0 { return }
+    cells: *Cell = terminal_screen_cells(terminal)
+    if cells == null || terminal.cols <= 0 || terminal.rows <= 0 {
+        return
+    }
+    source_row: s32 = terminal.cursor_row
+    source_col: s32 = terminal.cursor_col - 1
+    if source_col >= terminal.cols {
+        source_col = terminal.cols - 1
+    }
+    if source_col < 0 || source_row < 0 ||
+    source_row >= terminal.rows {
+        return
+    }
+    if (cells[source_row * terminal.cols + source_col].style &
+    STYLE_WIDE_CONT) != 0 && source_col > 0 {
+        source_col -= 1
+    }
+    source: Cell = cells[source_row * terminal.cols + source_col]
+    if source.codepoint == 0 ||
+    (source.style & STYLE_WIDE_CONT) != 0 {
+        return
+    }
+
+    old_fg: s32 = terminal.current_fg
+    old_bg: s32 = terminal.current_bg
+    old_underline: s32 = terminal.current_underline
+    old_style: s32 = terminal.current_style
+    old_hyperlink: s32 = terminal.current_hyperlink
+    terminal.current_fg = source.fg
+    terminal.current_bg = source.bg
+    terminal.current_underline = source.underline
+    terminal.current_style = source.style & ~STYLE_WIDE_CONT
+    terminal.current_hyperlink = source.hyperlink
+    i: s32 = 0
+    while i < count {
+        col: s32 = terminal.cursor_col
+        row: s32 = terminal.cursor_row
+
+        put_codepoint(terminal, source.codepoint)
+        if source.combining != 0 && row >= 0 &&
+        row < terminal.rows && col >= 0 &&
+        col < terminal.cols {
+            cells[row * terminal.cols + col].combining =
+            source.combining
+        }
+        i += 1
+    }
+    terminal.current_fg = old_fg
+    terminal.current_bg = old_bg
+    terminal.current_underline = old_underline
+    terminal.current_style = old_style
+    terminal.current_hyperlink = old_hyperlink
+}
+
+#scope_module
+apply_csi :: (terminal: *Terminal, final: s32) {
+    n: s32 = terminal_csi_arg(terminal, 0, 1)
+
+    if final == #char"A" {
+        terminal.cursor_row -= n
+    } else if final == #char"B" {
+        terminal.cursor_row += n
+    } else if final == #char"C" {
+        terminal.cursor_col += n
+    } else if final == #char"D" {
+        terminal.cursor_col -= n
+    } else if final == #char"E" {
+        terminal.cursor_row += n
+        terminal.cursor_col = 0
+    } else if final == #char"F" {
+        terminal.cursor_row -= n
+        terminal.cursor_col = 0
+    } else if final == #char"G" || final == #char"`" {
+        terminal.cursor_col = n - 1
+    } else if final == #char"d" {
+        terminal.cursor_row = terminal_csi_cursor_row_from_arg(
+        terminal, 0, 1)
+    } else if final == #char"H" || final == #char"f" {
+        terminal.cursor_row = terminal_csi_cursor_row_from_arg(
+        terminal, 0, 1)
+        terminal.cursor_col = terminal_csi_arg(terminal, 1, 1) - 1
+    } else if final == #char"@" {
+        terminal_insert_blank_chars(terminal, n)
+    } else if final == #char"J" {
+        mode: s32 = terminal_csi_arg(terminal, 0, 0)
+
+        at: s32 = terminal.cursor_row * terminal.cols +
+        terminal.cursor_col
+        if mode == 2 {
+            terminal_clear_screen(terminal)
+        } else if mode == 3 {
+            terminal_clear_scrollback(terminal)
+        } else if mode == 0 {
+            terminal_erase_range(terminal, at,
+            terminal.cols * terminal.rows)
+        } else if mode == 1 {
+            terminal_erase_range(terminal, 0, at + 1)
+        }
+    } else if final == #char"K" {
+        mode: s32 = terminal_csi_arg(terminal, 0, 0)
+        start: s32 = terminal.cursor_row * terminal.cols +
+        terminal.cursor_col
+        end: s32 = (terminal.cursor_row + 1) * terminal.cols
+
+        if mode == 1 {
+            start = terminal.cursor_row * terminal.cols
+            end = terminal.cursor_row * terminal.cols +
+            terminal.cursor_col + 1
+        } else if mode == 2 {
+            start = terminal.cursor_row * terminal.cols
+        }
+        terminal_erase_range(terminal, start, end)
+    } else if final == #char"L" {
+        terminal_scroll_down(terminal, terminal.cursor_row,
+        terminal.scroll_bottom, n)
+    } else if final == #char"M" {
+        terminal_scroll_up(terminal, terminal.cursor_row,
+        terminal.scroll_bottom, n)
+    } else if final == #char"P" {
+        terminal_delete_chars(terminal, n)
+    } else if final == #char"X" {
+        terminal_erase_chars(terminal, n)
+    } else if final == #char"a" {
+        terminal.cursor_col += n
+    } else if final == #char"e" {
+        terminal.cursor_row += n
+    } else if final == #char"b" {
+        repeat_previous_graphic(terminal, n)
+    } else if final == #char"I" {
+        i: s32 = 0
+        while i < n {
+            terminal.cursor_col = terminal_next_tab_stop(terminal)
+            i += 1
+        }
+    } else if final == #char"Z" {
+        moved: s32 = 0
+        col: s32 = terminal.cursor_col - 1
+
+        while col >= 0 && moved < n {
+            if terminal.tab_stops != null &&
+            terminal.tab_stops[col] != 0 {
+                terminal.cursor_col = col
+                moved += 1
+            }
+            col -= 1
+        }
+        if moved < n { terminal.cursor_col = 0 }
+    } else if final == #char"m" && terminal.csi_private == #char">" {
+        terminal_csi_set_modifier_key_mode(terminal)
+    } else if final == #char"m" {
+        terminal_sgr_apply(terminal)
+    } else if final == #char"r" {
+        top: s32 = terminal_csi_arg(terminal, 0, 1) - 1
+        bottom: s32 = terminal_csi_arg(terminal, 1,
+        terminal.rows) - 1
+
+        if top < bottom {
+            terminal.scroll_top = terminal_clamp_int(top, 0,
+            terminal.rows - 1)
+            terminal.scroll_bottom = terminal_clamp_int(bottom, 0,
+            terminal.rows - 1)
+            terminal.cursor_col = 0
+            terminal.cursor_row = (ifx terminal.origin_mode != 0 then terminal.scroll_top else 0)
+        }
+    } else if final == #char"S" {
+        terminal_scroll_up(terminal, terminal.scroll_top,
+        terminal.scroll_bottom, n)
+    } else if final == #char"T" {
+        terminal_scroll_down(terminal, terminal.scroll_top,
+        terminal.scroll_bottom, n)
+    } else if final == #char"s" {
+        terminal_save_cursor_state(terminal)
+    } else if final == #char"u" {
+        terminal_restore_cursor_state(terminal)
+    } else if final == #char"g" {
+        mode: s32 = terminal_csi_arg(terminal, 0, 0)
+
+        if mode == 0 && terminal.tab_stops != null {
+            terminal.tab_stops[terminal.cursor_col] = 0
+        } else if mode == 3 {
+            terminal_clear_tab_stops(terminal)
+        }
+    } else if final == #char"q" && terminal.csi_intermediate == #char" " {
+        terminal_csi_apply_cursor_style(terminal)
+    } else if (final == #char"h" || final == #char"l") &&
+    terminal.csi_private == #char"?" {
+        i: s32 = 0
+        while i < terminal.csi_count {
+            terminal_set_private_mode(terminal,
+            terminal.csi_args[i], (ifx final == #char"h" then 1 else 0))
+            i += 1
+        }
+    } else if final == #char"h" || final == #char"l" {
+        i: s32 = 0
+        while i < terminal.csi_count {
+            terminal_csi_set_mode(terminal, terminal.csi_args[i],
+            (ifx final == #char"h" then 1 else 0))
+            i += 1
+        }
+    } else if final == #char"p" && terminal.csi_intermediate == #char"!" {
+        terminal_soft_reset(terminal)
+    } else if final == #char"p" && terminal.csi_private == #char"?" &&
+    terminal.csi_intermediate == #char"$" {
+        terminal_csi_send_private_mode_report(terminal, n)
+    } else if final == #char"p" && terminal.csi_intermediate == #char"$" {
+        terminal_csi_send_mode_report(terminal, n)
+    } else if final == #char"c" {
+        if terminal.csi_private == #char">" {
+            terminal_write_text(terminal, RawBytes("\x1b[>0;0;0c"))
+        } else {
+            terminal_write_text(terminal, RawBytes("\x1b[?1;2c"))
+        }
+    } else if final == #char"n" {
+        if terminal.csi_private == #char">" {
+            terminal_csi_disable_modifier_key_mode(terminal)
+        } else {
+            terminal_csi_send_device_status_report(terminal)
+        }
+    } else if final == #char"t" {
+        if n == 18 || n == 19 {
+            report: Report
+            ReportText(*report, "\x1b[")
+            ReportInteger(*report, ifx n == 19 then 9 else 8)
+            ReportText(*report, ";")
+            ReportInteger(*report, terminal.rows)
+            ReportText(*report, ";")
+            ReportInteger(*report, terminal.cols)
+            ReportText(*report, "t")
+            WriteReport(terminal, *report)
+        } else if n == 20 {
+            terminal_send_title_report(terminal, 1)
+        } else if n == 21 {
+            terminal_send_title_report(terminal, 0)
+        } else if n == 22 {
+            terminal_push_title_targets(terminal,
+            terminal_csi_arg(terminal, 1, 0))
+        } else if n == 23 {
+            terminal_pop_title_targets(terminal,
+            terminal_csi_arg(terminal, 1, 0))
+        }
+    }
+    terminal_clamp_cursor(terminal)
+}
+
+#scope_module
+start_csi :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal.parser_state = PARSER_CSI
+    terminal.csi_private = 0
+    terminal.csi_intermediate = 0
+    terminal.csi_count = 0
+    terminal.csi_overflow = false
+    i: s32 = 0
+    while i < MAX_CSI_ARGS {
+        terminal.csi_args[i] = 0
+        i += 1
+    }
+}
+
+#scope_module
+start_osc :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal.parser_state = PARSER_OSC
+    terminal.osc_len = 0
+    terminal.osc_overflow = false
+    terminal.osc[0] = 0
+}
+
+#scope_module
+start_dcs :: (terminal: *Terminal) {
+    if terminal == null { return }
+    terminal.parser_state = PARSER_DCS
+    terminal_dcs_begin(terminal)
+}
+
+#scope_module
+finish_dcs :: (terminal: *Terminal) {
+    if terminal == null { return }
+    rows_used: s32 = terminal_dcs_finish(terminal)
+    if rows_used <= 0 { return }
+    terminal.cursor_col = 0
+    while rows_used > 0 {
+        rows_used -= 1
+        line_feed(terminal)
+    }
+    terminal_clamp_cursor(terminal)
+}
+
+#scope_module
+feed_codepoint :: (terminal: *Terminal, codepoint: u32) {
+    if terminal.parser_state == PARSER_ESCAPE {
+        if codepoint == #char"[" {
+            start_csi(terminal)
+            return
+        }
+        if codepoint == #char"]" {
+            start_osc(terminal)
+            return
+        }
+        if codepoint == #char"P" {
+            start_dcs(terminal)
+            return
+        }
+        if codepoint == #char"#" {
+            terminal.parser_state = PARSER_HASH
+            return
+        }
+        if codepoint == #char"(" || codepoint == #char")" ||
+        codepoint == #char"*" || codepoint == #char"+" {
+            terminal.pending_charset = (ifx codepoint == #char")" then 1 else 0)
+            terminal.parser_state = PARSER_CHARSET
+            return
+        }
+        if codepoint == #char"X" || codepoint == #char"^" ||
+        codepoint == #char"_" {
+            terminal.parser_state = PARSER_IGNORE_STRING
+            return
+        }
+        if codepoint == #char"7" {
+            terminal_save_cursor_state(terminal)
+        } else if codepoint == #char"8" {
+            terminal_restore_cursor_state(terminal)
+        } else if codepoint == #char"D" {
+            line_feed(terminal)
+        } else if codepoint == #char"E" {
+            terminal.cursor_col = 0
+            line_feed(terminal)
+        } else if codepoint == #char"H" {
+            if terminal.tab_stops != null {
+                terminal.tab_stops[terminal.cursor_col] = 1
+            }
+        } else if codepoint == #char"M" {
+            if terminal.cursor_row == terminal.scroll_top {
+                terminal_scroll_down(terminal,
+                terminal.scroll_top, terminal.scroll_bottom, 1)
+            } else {
+                terminal.cursor_row -= 1
+            }
+        } else if codepoint == #char"Z" {
+            terminal_write_text(terminal, RawBytes("\x1b[?1;2c"))
+        } else if codepoint == #char"c" {
+            terminal_reset_device(terminal)
+        } else if codepoint == #char"=" {
+            terminal.application_keypad = 1
+        } else if codepoint == #char">" {
+            terminal.application_keypad = 0
+        }
+        terminal.parser_state = PARSER_TEXT
+        terminal_clamp_cursor(terminal)
+        return
+    }
+    if terminal.parser_state == PARSER_CHARSET {
+        if terminal.pending_charset == 1 {
+            terminal.g1_charset =
+            terminal_charset_from_designator(codepoint)
+        } else {
+            terminal.g0_charset =
+            terminal_charset_from_designator(codepoint)
+        }
+        terminal.parser_state = PARSER_TEXT
+        return
+    }
+    if terminal.parser_state == PARSER_HASH {
+        if codepoint == #char"8" {
+            terminal_screen_alignment_test(terminal)
+        }
+        terminal.parser_state = PARSER_TEXT
+        return
+    }
+    if terminal.parser_state == PARSER_CSI {
+        if codepoint == #char"?" || codepoint == #char">" {
+            terminal.csi_private = cast(s32)codepoint
+            return
+        }
+        if codepoint >= 0x20 && codepoint <= 0x2f {
+            terminal.csi_intermediate = cast(s32)codepoint
+            return
+        }
+        if codepoint >= #char"0" && codepoint <= #char"9" {
+            if terminal.csi_overflow { return }
+            if terminal.csi_count == 0 {
+                terminal.csi_count = 1
+            }
+            value := terminal.csi_args[terminal.csi_count - 1]
+            digit := cast(s32)(codepoint - #char"0")
+            terminal.csi_args[terminal.csi_count - 1] = ifx value > 6553 || (value == 6553 && digit > 5) then 65535 else value * 10 + digit
+            return
+        }
+        if codepoint == #char";" || codepoint == #char":" {
+            if terminal.csi_count < MAX_CSI_ARGS {
+                if terminal.csi_count == 0 {
+                    terminal.csi_count = 1
+                }
+                terminal.csi_args[terminal.csi_count] = 0
+                terminal.csi_count += 1
+            } else { terminal.csi_overflow = true }
+            return
+        }
+        terminal.parser_state = PARSER_TEXT
+        if !terminal.csi_overflow && codepoint >= #char"@" && codepoint <= #char"~" {
+            apply_csi(terminal, cast(s32)codepoint)
+        }
+        return
+    }
+    if terminal.parser_state == PARSER_OSC {
+        if codepoint == 7 || codepoint == 0x9c {
+            terminal_finish_osc(terminal)
+            terminal.parser_state = PARSER_TEXT
+            return
+        }
+        if codepoint == 0x1b {
+            terminal.parser_state = PARSER_OSC_ESCAPE
+            return
+        }
+        if !terminal.osc_overflow {
+            if !PaneText.AppendTerminalPaneUTF8Codepoint(*terminal.osc[0],
+                cast(s32)size_of(type_of(terminal.osc)), *terminal.osc_len, codepoint) {
+                terminal.osc_overflow = true
+            }
+        }
+        return
+    }
+    if terminal.parser_state == PARSER_OSC_ESCAPE {
+        if codepoint == #char"\\" {
+            terminal_finish_osc(terminal)
+        }
+        terminal.parser_state = PARSER_TEXT
+        return
+    }
+    if terminal.parser_state == PARSER_DCS {
+        if codepoint == 0x9c || codepoint == 7 {
+            finish_dcs(terminal)
+            terminal.parser_state = PARSER_TEXT
+            return
+        }
+        if codepoint == 0x1b {
+            terminal.parser_state = PARSER_DCS_ESCAPE
+            return
+        }
+        terminal_dcs_append(terminal, codepoint)
+        return
+    }
+    if terminal.parser_state == PARSER_DCS_ESCAPE {
+        if codepoint == #char"\\" {
+            finish_dcs(terminal)
+            terminal.parser_state = PARSER_TEXT
+            return
+        }
+        terminal_dcs_append(terminal, 0x1b)
+        terminal_dcs_append(terminal, codepoint)
+        terminal.parser_state = PARSER_DCS
+        return
+    }
+    if terminal.parser_state == PARSER_IGNORE_STRING {
+        if codepoint == 0x9c || codepoint == 7 {
+            terminal.parser_state = PARSER_TEXT
+            return
+        }
+        if codepoint == 0x1b {
+            terminal.parser_state = PARSER_IGNORE_ESCAPE
+        }
+        return
+    }
+    if terminal.parser_state == PARSER_IGNORE_ESCAPE {
+        terminal.parser_state = (ifx codepoint == #char"\\" then PARSER_TEXT else PARSER_IGNORE_STRING)
+        return
+    }
+
+    if codepoint == 0x1b {
+        terminal.parser_state = PARSER_ESCAPE
+        return
+    }
+    if codepoint == #char"\r" {
+        terminal.cursor_col = 0
+        return
+    }
+    if codepoint == #char"\n" {
+        newline_control(terminal)
+        return
+    }
+    if codepoint == 11 || codepoint == 12 {
+        newline_control(terminal)
+        return
+    }
+    if codepoint == 8 {
+        if terminal.cursor_col > 0 {
+            terminal.cursor_col -= 1
+        }
+        return
+    }
+    if codepoint == #char"\t" {
+        terminal.cursor_col = terminal_next_tab_stop(terminal)
+        terminal_clamp_cursor(terminal)
+        return
+    }
+    if codepoint == 0x0e {
+        terminal.active_charset = 1
+        return
+    }
+    if codepoint == 0x0f {
+        terminal.active_charset = 0
+        return
+    }
+    if codepoint == 7 {
+        terminal.bell_pending = 1
+        return
+    }
+    if codepoint >= 32 {
+        put_codepoint(terminal, codepoint)
+    }
+}
+
+#scope_module
+feed_byte :: (terminal: *Terminal, byte: u8) {
+    if byte == 0x18 || byte == 0x1a {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        terminal.parser_state = PARSER_TEXT
+        terminal.osc_len = 0
+        PaneDCS.ResetTerminalPaneDCSBuffer(*terminal.dcs)
+        return
+    }
+    if terminal.utf8_remaining > 0 {
+        if (byte & 0xc0) == 0x80 {
+            terminal.utf8_codepoint =
+            (terminal.utf8_codepoint << 6) | (byte & 0x3f)
+            terminal.utf8_remaining -= 1
+            if terminal.utf8_remaining == 0 {
+                feed_codepoint(terminal,
+                cast(u32)terminal.utf8_codepoint)
+                terminal.utf8_codepoint = 0
+            }
+            return
+        }
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        feed_codepoint(terminal, #char"?")
+    }
+    if byte == 0x84 {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        newline_control(terminal)
+        return
+    }
+    if byte == 0x85 {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        terminal.cursor_col = 0
+        line_feed(terminal)
+        return
+    }
+    if byte == 0x88 {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        if terminal.tab_stops != null {
+            terminal.tab_stops[terminal.cursor_col] = 1
+        }
+        return
+    }
+    if byte == 0x8d {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        if terminal.cursor_row == terminal.scroll_top {
+            terminal_scroll_down(terminal, terminal.scroll_top,
+            terminal.scroll_bottom, 1)
+        } else {
+            terminal.cursor_row -= 1
+        }
+        terminal_clamp_cursor(terminal)
+        return
+    }
+    if byte == 0x9b {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        start_csi(terminal)
+        return
+    }
+    if byte == 0x9d {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        start_osc(terminal)
+        return
+    }
+    if byte == 0x98 || byte == 0x9e || byte == 0x9f {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        terminal.parser_state = PARSER_IGNORE_STRING
+        return
+    }
+    if byte == 0x90 {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        start_dcs(terminal)
+        return
+    }
+    if byte == 0x9c {
+        terminal.utf8_remaining = 0
+        terminal.utf8_codepoint = 0
+        if terminal.parser_state == PARSER_DCS ||
+        terminal.parser_state == PARSER_DCS_ESCAPE {
+            finish_dcs(terminal)
+        } else if terminal.parser_state == PARSER_OSC ||
+        terminal.parser_state == PARSER_OSC_ESCAPE {
+            terminal_finish_osc(terminal)
+        }
+        terminal.parser_state = PARSER_TEXT
+        return
+    }
+    if byte < 0x80 {
+        feed_codepoint(terminal, byte)
+    } else if (byte & 0xe0) == 0xc0 {
+        terminal.utf8_codepoint = byte & 0x1f
+        terminal.utf8_remaining = 1
+    } else if (byte & 0xf0) == 0xe0 {
+        terminal.utf8_codepoint = byte & 0x0f
+        terminal.utf8_remaining = 2
+    } else if (byte & 0xf8) == 0xf0 {
+        terminal.utf8_codepoint = byte & 0x07
+        terminal.utf8_remaining = 3
+    } else {
+        feed_codepoint(terminal, #char"?")
+    }
+}
+
+#scope_export
+#program_export
+terminal_feed :: (terminal: *Terminal, data: *void,
+size: s32) {
+    bytes: *u8 = cast(*u8)data
+
+    if terminal == null || bytes == null || size <= 0 { return }
+    i: s32 = 0
+    while i < size {
+        feed_byte(terminal, bytes[i])
+        i += 1
+    }
+}

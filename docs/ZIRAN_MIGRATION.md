@@ -5,9 +5,10 @@ migration input only: each one is removed after its behavior has a current
 Ziran implementation and focused hosted/Plan 9 checks. No compatibility
 compiler path, dual product module, or `.kry` restore is part of the target.
 
-Current status: 21 pane modules, clipboard storage/protocol handling, and both
-platform process transports are Ziran sources; 35 legacy `.kry` inputs and
-two handwritten C implementations remain across the pane, engine, and app
+Current status: 42 maintained Ziran sources include 21 pane modules,
+clipboard storage/protocol handling, both platform process transports, and
+the full terminal engine and its typed state. There are 19 legacy `.kry`
+inputs and two handwritten C implementations remaining at the pane and app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
 expressed as Ziran types and explicit foreign/host bindings, then linked to the
@@ -21,8 +22,8 @@ The canonical repository is `taijiosnet/t9`. Its history includes Kapsule's
 original terminal sources and local compatibility fixes; those older C
 implementations are not restored alongside the maintained ports.
 
-`make pane-ziran-test` runs clipboard, selection, keyboard, OSC, pane sizing,
-and Linux PTY suites without the legacy engine. Keyboard protocol and current
+`make pane-ziran-test` runs the engine, clipboard, selection, keyboard, OSC,
+pane sizing, and Linux PTY suites without the legacy application. Keyboard protocol and current
 Kryon session input are
 checked as native C/C++ and from saved IR. `make keys-plan9-test` with
 `TAIJI_DIR` set to the canonical Taiji checkout compiles and executes the
@@ -35,9 +36,9 @@ clipboard port keeps primary-selection preference, soft-wrap copying,
 host sync/flush, paste callback routing, and scroll reset behavior.
 
 Full application, Rill host, and whole-application Plan 9 builds still use
-legacy k2c and Kryon C headers. Current Kryon no longer exposes that API,
+legacy application/widget sources and Kryon C headers. Current Kryon no longer exposes that API,
 so these builds are not established by the independent pane checks. Keep
-the existing pipeline until the remaining app/engine/runtime modules move
+the existing application pipeline until the remaining app/runtime modules move
 to Ziran and current Kryon bindings.
 
 `terminal_clipboard.zi` owns clipboard bytes, OSC52 queries and writes, and
@@ -61,7 +62,7 @@ The remaining legacy application must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`be96f1f7`) and compiler (`33f98116`) master commits. These current
+Kryon (`be96f1f7`) and compiler (`4164aff7`) master commits. These current
 commits are local; their publication remains necessary for fresh locked builds.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -108,10 +109,35 @@ a 120-second limit, with desktop displays scrubbed and desktop boot disabled.
 pty-plan9-c` emits the corresponding Plan 9 library output. These focused
 checks do not certify the remaining legacy application or Rill integration.
 
-The next source boundary is the terminal engine's C-defined state, screen,
-parser, and clipboard contracts. Port those contracts and their consumers to
-Ziran together, keeping OSC52 and paste behavior in t9 and using current
-Kryon's system clipboard transport. Then migrate the terminal widget and app
+## Terminal engine
+
+`src/terminal.zi` owns `Terminal`, `Cell`, graphics, and search records and loads
+the 16 migrated engine modules plus native storage/report helpers. The old
+engine `.kry` implementations are removed. Native headers are generated from
+these Ziran declarations; old handwritten headers are migration inputs for
+the remaining application consumers and must be removed with those consumers.
+
+`make terminal-test` executes the actual parser, screen, scrollback, resize,
+search, graphics, title/color/clipboard protocols, terminal reports, keyboard,
+mouse, focus, paste, and real child-process driver in C and C++ from source
+and saved IR. `make terminal-plan9-test` executes the same fixture under actual
+Plan 9 8c/8l from both forms. Its report/input sink uses an owned child transport
+session; native pipes need explicit newline mode for LF-only rc output.
+Clipboard host I/O is simulated, while product clipboard policy remains real.
+
+Boundary checks cover chunked Unicode titles, atomic oversized OSC rejection,
+clipboard payloads larger than 512 bytes, saturated CSI parameters, full
+hyperlink tables, and preserving newest rows while changing a wrapped history
+ring's limit. Screen/history allocation replaces buffers only after success;
+width changes allocate a fresh history ring even when the previous ring is empty.
+
+`make terminal-native` builds `libt9_terminal.a` with all generated native
+dependencies. `make terminal-plan9-c` emits the corresponding Plan 9 library
+sources. These library gates do not establish a working complete application.
+
+The next source boundary is the terminal widget and application state. Migrate
+their consumers to `Terminal` and the current pane/clipboard contracts, then
+migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
 release gates. Independent module checks remain separate evidence until
@@ -143,6 +169,7 @@ those whole-application gates pass.
 - `src/terminal_clipboard.zi`
 - `src/terminal_pty_linux.zi`
 - `src/terminal_pty_plan9.zi`
+- `src/terminal.zi` and its loaded `src/engine/*.zi` modules
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

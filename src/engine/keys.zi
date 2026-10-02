@@ -1,0 +1,67 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_module
+terminal_key_mode :: (
+terminal: *Terminal) -> PaneKeys.TerminalPaneKeyMode {
+    mode: PaneKeys.TerminalPaneKeyMode = PaneKeys.TerminalPaneKeyMode.{}
+
+    if terminal == null { return mode }
+    mode.application_cursor_keys = terminal.application_cursor_keys
+    mode.application_keypad = terminal.application_keypad
+    mode.modify_other_keys = terminal.modify_other_keys
+    return mode
+}
+
+#scope_module
+terminal_write_encoded :: (terminal: *Terminal,
+seq: *u8, len: s32) -> s32 {
+    if terminal == null || seq == null || len <= 0 { return 0 }
+    return terminal_write(terminal, cast(*void)(*seq[0]), len)
+}
+
+#scope_export
+#program_export
+terminal_send_codepoint :: (terminal: *Terminal,
+codepoint: u32, mods: s32) -> s32 {
+    seq: [64]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneKeys.EncodeTerminalPaneCodepoint( *seq[0], cast(s32)size_of(type_of(seq)),
+    codepoint, mods, terminal_key_mode(terminal))
+    return terminal_write_encoded(terminal, *seq[0], len)
+}
+
+#scope_export
+#program_export
+terminal_send_key :: (terminal: *Terminal, key: s32,
+mods: s32) -> s32 {
+    seq: [64]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneKeys.EncodeTerminalPaneKey( *seq[0], cast(s32)size_of(type_of(seq)), key,
+    mods, terminal_key_mode(terminal))
+    return terminal_write_encoded(terminal, *seq[0], len)
+}
+
+#scope_export
+#program_export
+terminal_send_function_key :: (terminal: *Terminal,
+function_index: s32, mods: s32) -> s32 {
+    if terminal == null { return 0 }
+    mapped: PaneKeys.TerminalPaneMappedKey =
+    PaneKeys.MapTerminalPaneFunctionKey(function_index, mods)
+    if mapped.key == 0 { return 0 }
+    return terminal_send_key(terminal, mapped.key, mapped.mods)
+}
+
+#scope_export
+#program_export
+terminal_send_keypad :: (terminal: *Terminal,
+key: u8) -> s32 {
+    seq: [16]u8
+
+    if terminal == null { return 0 }
+    len: s32 = PaneKeys.EncodeTerminalPaneKeypad( *seq[0], cast(s32)size_of(type_of(seq)), key,
+    terminal_key_mode(terminal))
+    return terminal_write_encoded(terminal, *seq[0], len)
+}

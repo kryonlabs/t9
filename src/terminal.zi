@@ -1,0 +1,248 @@
+// Terminal emulator state and behavior, shared by all native hosts.
+#scope_module
+PaneText :: #import "terminal_pane_text";
+PaneReflow :: #import "terminal_pane_reflow";
+PaneKeys :: #import "terminal_pane_keys";
+PaneMouse :: #import "terminal_pane_mouse";
+PaneSGR :: #import "terminal_pane_sgr";
+PaneCSI :: #import "terminal_pane_csi";
+PaneDCS :: #import "terminal_pane_dcs";
+PaneSixel :: #import "terminal_pane_sixel";
+PaneModes :: #import "terminal_pane_modes";
+PaneOSC :: #import "terminal_pane_osc";
+PaneProfile :: #import "terminal_pane_profile";
+PaneSelection :: #import "terminal_pane_selection";
+PaneClipboard :: #import "terminal_pane_clipboard";
+PaneTypes :: #import "terminal_pane_profile_types";
+Clipboard :: #import "terminal_clipboard";
+Text :: #import "std/byte_text_linux";
+
+#if #defined(PLAN9) {
+    Transport :: #import "terminal_pty_plan9";
+} else {
+    Transport :: #import "terminal_pty_linux";
+}
+
+#scope_export
+MAX_COLS :: 240;
+MAX_ROWS :: 120;
+MAX_CSI_ARGS :: 16;
+MAX_HYPERLINKS :: 128;
+HYPERLINK_SIZE :: 512;
+HYPERLINK_ID_SIZE :: 128;
+TITLE_STACK_DEPTH :: 16;
+SCROLLBACK_LIMIT :: 2000;
+MAX_SIXEL_IMAGES :: 128;
+MAX_SIXEL_IMAGE_PIXELS :: 4194304;
+MAX_SIXEL_TOTAL_PIXELS :: 8388608;
+COLOR_DEFAULT :: -1;
+COLOR_TRUE_RGB :: 0x01000000;
+STYLE_BOLD :: 1;
+STYLE_ITALIC :: 2;
+STYLE_UNDERLINE :: 4;
+STYLE_INVERSE :: 8;
+STYLE_STRIKE :: 16;
+STYLE_WIDE_CONT :: 32;
+STYLE_FAINT :: 64;
+STYLE_CONCEAL :: 128;
+STYLE_BLINK :: 256;
+STYLE_OVERLINE :: 512;
+MOD_SHIFT :: 1;
+MOD_ALT :: 2;
+MOD_CTRL :: 4;
+TERMINAL_MOUSE_LEFT :: 0;
+TERMINAL_MOUSE_MIDDLE :: 1;
+TERMINAL_MOUSE_RIGHT :: 2;
+TERMINAL_MOUSE_RELEASE :: 3;
+TERMINAL_MOUSE_WHEEL_UP :: 64;
+TERMINAL_MOUSE_WHEEL_DOWN :: 65;
+TERMINAL_CURSOR_DEFAULT :: 0;
+TERMINAL_CURSOR_BLOCK :: 1;
+TERMINAL_CURSOR_UNDERLINE :: 2;
+TERMINAL_CURSOR_BAR :: 3;
+KEY_ENTER_CODE :: 1;
+KEY_BACKSPACE_CODE :: 2;
+KEY_TAB_CODE :: 3;
+KEY_ESCAPE_CODE :: 4;
+KEY_UP_CODE :: 5;
+KEY_DOWN_CODE :: 6;
+KEY_RIGHT_CODE :: 7;
+KEY_LEFT_CODE :: 8;
+KEY_HOME_CODE :: 9;
+KEY_END_CODE :: 10;
+KEY_PAGE_UP_CODE :: 11;
+KEY_PAGE_DOWN_CODE :: 12;
+KEY_DELETE_CODE :: 13;
+KEY_INSERT_CODE :: 14;
+KEY_F1_CODE :: 15;
+KEY_F2_CODE :: 16;
+KEY_F3_CODE :: 17;
+KEY_F4_CODE :: 18;
+KEY_F5_CODE :: 19;
+KEY_F6_CODE :: 20;
+KEY_F7_CODE :: 21;
+KEY_F8_CODE :: 22;
+KEY_F9_CODE :: 23;
+KEY_F10_CODE :: 24;
+KEY_F11_CODE :: 25;
+KEY_F12_CODE :: 26;
+KEY_F13_CODE :: 27;
+KEY_F14_CODE :: 28;
+KEY_F15_CODE :: 29;
+KEY_F16_CODE :: 30;
+KEY_F17_CODE :: 31;
+KEY_F18_CODE :: 32;
+KEY_F19_CODE :: 33;
+KEY_F20_CODE :: 34;
+KEY_F21_CODE :: 35;
+KEY_F22_CODE :: 36;
+KEY_F23_CODE :: 37;
+KEY_F24_CODE :: 38;
+TERMINAL_CHARSET_US_ASCII :: 0;
+TERMINAL_CHARSET_DEC_SPECIAL :: 1;
+
+Cell :: struct {
+    codepoint: u32
+    combining: u32
+    fg: s32
+    bg: s32
+    underline: s32
+    hyperlink: s32
+    style: u16
+}
+
+SixelImage :: struct {
+    col: s32
+    row: s32
+    alternate_screen: s32
+    width: s32
+    height: s32
+    pixel_aspect_num: s32
+    pixel_aspect_den: s32
+    pixels: *s32
+}
+
+Terminal :: struct {
+    pid: s32
+    fd: s32
+    running: s32
+    cols: s32
+    rows: s32
+    cursor_col: s32
+    cursor_row: s32
+    saved_col: s32
+    saved_row: s32
+    saved_fg: s32
+    saved_bg: s32
+    saved_underline: s32
+    saved_style: s32
+    saved_hyperlink: s32
+    saved_g0_charset: s32
+    saved_g1_charset: s32
+    saved_active_charset: s32
+    saved_origin_mode: s32
+    saved_autowrap: s32
+    saved_insert_mode: s32
+    scroll_top: s32
+    scroll_bottom: s32
+    cursor_visible: s32
+    cursor_blink: s32
+    alternate_screen: s32
+    origin_mode: s32
+    autowrap: s32
+    application_cursor_keys: s32
+    application_keypad: s32
+    bracketed_paste: s32
+    modify_other_keys: s32
+    insert_mode: s32
+    newline_mode: s32
+    mouse_mode: s32
+    mouse_utf8: s32
+    mouse_sgr: s32
+    mouse_urxvt: s32
+    mouse_pixels: s32
+    alternate_scroll: s32
+    focus_reporting: s32
+    g0_charset: s32
+    g1_charset: s32
+    active_charset: s32
+    pending_charset: s32
+    parser_state: s32
+    csi_private: s32
+    csi_intermediate: s32
+    csi_args: [MAX_CSI_ARGS]s32
+    csi_count: s32
+    csi_overflow: bool
+    current_fg: s32
+    current_bg: s32
+    current_underline: s32
+    current_style: s32
+    current_hyperlink: s32
+    utf8_codepoint: s32
+    utf8_remaining: s32
+    main_cells: *Cell
+    alt_cells: *Cell
+    scrollback: *Cell
+    main_wrapped: *u8
+    alt_wrapped: *u8
+    scrollback_wrapped: *u8
+    tab_stops: *u8
+    scrollback_count: s32
+    scrollback_head: s32
+    scrollback_capacity: s32
+    scrollback_limit: s32
+    ambiguous_width_wide: s32
+    default_fg: s32
+    default_bg: s32
+    cursor_color: s32
+    mouse_fg: s32
+    mouse_bg: s32
+    selection_fg: s32
+    selection_bg: s32
+    base_fg: s32
+    base_bg: s32
+    base_cursor_color: s32
+    base_selection_fg: s32
+    base_selection_bg: s32
+    palette_overrides: [256]s32
+    cursor_style: s32
+    hyperlinks: [MAX_HYPERLINKS][HYPERLINK_SIZE]u8
+    hyperlink_ids: [MAX_HYPERLINKS][HYPERLINK_ID_SIZE]u8
+    hyperlink_count: s32
+    title: [256]u8
+    icon_title: [256]u8
+    title_stack: [TITLE_STACK_DEPTH][256]u8
+    icon_title_stack: [TITLE_STACK_DEPTH][256]u8
+    title_stack_count: s32
+    icon_title_stack_count: s32
+    current_directory: [1024]u8
+    clipboard: Clipboard.ClipboardBuffer
+    bell_pending: s32
+    osc: [8192]u8
+    osc_len: s32
+    osc_overflow: bool
+    dcs: PaneDCS.TerminalPaneDCSBuffer
+    sixel_images: *SixelImage
+    sixel_count: s32
+    sixel_capacity: s32
+    sixel_total_pixels: s32
+}
+SearchMatch :: struct { row: s32; col: s32; length: s32; }
+
+#load "engine/native.zi";
+#load "engine/csi.zi";
+#load "engine/dcs.zi";
+#load "engine/keys.zi";
+#load "engine/modes.zi";
+#load "engine/mouse.zi";
+#load "engine/osc.zi";
+#load "engine/parser.zi";
+#load "engine/paste.zi";
+#load "engine/process.zi";
+#load "engine/screen.zi";
+#load "engine/search.zi";
+#load "engine/sgr.zi";
+#load "engine/sixel.zi";
+#load "engine/terminal_state.zi";
+#load "engine/text.zi";
+#load "engine/view.zi";

@@ -1,0 +1,159 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+terminal_spawn :: (terminal: *Terminal, cwd: *u8,
+shell: *u8, command: *u8, cols: s32,
+rows: s32) -> s32 {
+    if terminal == null { return 0 }
+    terminal_close(terminal)
+    terminal_init(terminal)
+    if terminal_allocate_screen(terminal, cols, rows) == 0 {
+        return 0
+    }
+    pid: s32 = -1
+    master: s32 = Transport.TerminalPtyOpen(cwd, shell, command,
+    terminal.cols, terminal.rows, *pid)
+    if master < 0 { return 0 }
+    terminal.pid = pid
+    terminal.fd = master
+    terminal.running = 1
+    return 1
+}
+
+#scope_export
+#program_export
+terminal_open :: (terminal: *Terminal, cwd: *u8,
+cols: s32, rows: s32) -> s32 {
+    return terminal_spawn(terminal, cwd, null, null, cols, rows)
+}
+
+#scope_export
+#program_export
+terminal_write :: (terminal: *Terminal, data: *void,
+size: s32) -> s32 {
+    if terminal == null || terminal.running == 0 ||
+    terminal.fd < 0 || data == null || size <= 0 {
+        return 0
+    }
+    return Transport.TerminalPtyWrite(terminal.fd, data, size)
+}
+
+#scope_export
+#program_export
+terminal_write_text :: (terminal: *Terminal,
+text: *u8) -> s32 {
+    if text == null { return 0 }
+    return terminal_write(terminal, cast(*void)text, cast(s32)strlen(text))
+}
+
+#scope_export
+#program_export
+terminal_poll_bytes :: (terminal: *Terminal) -> s32 {
+    closed: s32 = 0
+    bytes: s32 = 0
+
+    if terminal == null || terminal.fd < 0 { return 0 }
+    while true {
+        buffer: [4096]u8
+        got: s32 = Transport.TerminalPtyRead(terminal.fd, cast(*void)(*buffer[0]),
+        cast(s32)size_of(type_of(buffer)))
+
+        if got > 0 {
+            terminal_feed(terminal, cast(*void)(*buffer[0]), got)
+            bytes += got
+            continue
+        }
+        if got < 0 { closed = 1 }
+        break
+    }
+    if terminal.running != 0 && terminal.pid > 0 {
+        if Transport.TerminalPtyChildExited(terminal.pid) != 0 {
+            terminal.running = 0
+        }
+    }
+    if closed != 0 && terminal.fd >= 0 {
+        Transport.TerminalPtyClose(terminal.fd)
+        terminal.fd = -1
+        terminal.running = 0
+    }
+    return bytes
+}
+
+#scope_export
+#program_export
+terminal_poll :: (terminal: *Terminal) -> s32 {
+    if terminal == null { return 0 }
+    terminal_poll_bytes(terminal)
+    return terminal.running
+}
+
+#scope_export
+#program_export
+terminal_resize :: (terminal: *Terminal, cols: s32,
+rows: s32) {
+    if terminal == null { return }
+    cols = terminal_clamp_int(cols, 8, MAX_COLS)
+    rows = terminal_clamp_int(rows, 4, MAX_ROWS)
+    if cols == terminal.cols && rows == terminal.rows {
+        return
+    }
+    if terminal_allocate_screen(terminal, cols, rows) == 0 {
+        return
+    }
+    if terminal.fd >= 0 {
+        Transport.TerminalPtyResize(terminal.fd, terminal.cols,
+        terminal.rows)
+    }
+}
+
+#scope_export
+#program_export
+terminal_set_scrollback_limit :: (terminal: *Terminal,
+rows: s32) {
+    if terminal == null { return }
+    if rows < 0 { rows = 0 }
+    if rows > 1000000 { rows = 1000000 }
+    if rows == 0 { rows = SCROLLBACK_LIMIT }
+    terminal.scrollback_limit = rows
+    if terminal.cols > 0 {
+        terminal_allocate_scrollback(terminal)
+    }
+}
+
+#scope_export
+#program_export
+terminal_set_ambiguous_width :: (terminal: *Terminal,
+wide: s32) {
+    if terminal == null { return }
+    terminal.ambiguous_width_wide = (ifx wide != 0 then 1 else 0)
+}
+
+#scope_export
+#program_export
+terminal_close :: (terminal: *Terminal) {
+    if terminal == null { return }
+    if terminal.fd >= 0 {
+        Transport.TerminalPtyClose(terminal.fd)
+        terminal.fd = -1
+    }
+    if terminal.running != 0 && terminal.pid > 0 {
+        Transport.TerminalPtySignal(terminal.pid, 1)
+        Transport.TerminalPtySignal(terminal.pid, 15)
+        if Transport.TerminalPtyWaitExit(terminal.pid, 200) == 0 {
+            Transport.TerminalPtySignal(terminal.pid, 9)
+            Transport.TerminalPtyWaitExit(terminal.pid, 500)
+        }
+    }
+    free(cast(*void)(terminal.main_cells))
+    free(cast(*void)(terminal.alt_cells))
+    free(cast(*void)(terminal.scrollback))
+    free(cast(*void)(terminal.main_wrapped))
+    free(cast(*void)(terminal.alt_wrapped))
+    free(cast(*void)(terminal.scrollback_wrapped))
+    free(cast(*void)(terminal.tab_stops))
+    terminal_sixel_clear_images(terminal, -1)
+    free(cast(*void)(terminal.sixel_images))
+    PaneDCS.FreeTerminalPaneDCSBuffer(*terminal.dcs)
+    terminal_init(terminal)
+}

@@ -8,6 +8,7 @@ case "$suite" in
     keys|osc|metrics|clipboard|selection) module=terminal_pane_${suite}_test ;;
     protocol) module=terminal_clipboard_test ;;
     pty) module=terminal_pty_plan9_test ;;
+    engine) module=terminal_engine_test ;;
     *) echo "Unknown Terminal suite: $suite" >&2; exit 2 ;;
 esac
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY
@@ -33,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 entry=$module:main
-"$ziran" ir --project $lock_flags --entry "$entry" -o "$work/ir" \
+"$ziran" ir --project $lock_flags --define PLAN9 --entry "$entry" -o "$work/ir" \
     "tests/$module.zi"
 "$ziran" build --project $lock_flags --target=plan9-c --entry "$entry" \
     -o "$stage/source" "tests/$module.zi"
@@ -44,6 +45,7 @@ failed=0
 for(suite in source saved) {
     if(~ \$failed 0) {
         cd $guest_stage/\$suite
+        echo t9-$suite-plan9-compile \$suite
         for(source in *.c) {
             if(! 8c -FTVw \$source) {
                 echo t9-$suite-plan9-compile-failed
@@ -52,6 +54,7 @@ for(suite in source saved) {
         }
         if(~ \$failed 0) {
             if(8l -o run *.8) {
+                echo t9-$suite-plan9-running \$suite
                 if(./run) echo t9-$suite-plan9-suite-ok \$suite
                 if not {
                     echo t9-$suite-plan9-run-failed \$status

@@ -1,0 +1,22 @@
+// Loaded by terminal.zi; engine declarations share one typed state.
+#scope_module
+#scope_export
+#program_export
+write_paste_chunk :: (userdata: *void, text: *u8,
+size: s32) -> s32 {
+    terminal: *Terminal = cast(*Terminal)userdata
+
+    if terminal == null || text == null || size <= 0 { return 0 }
+    return terminal_write(terminal, cast(*void)text, size)
+}
+
+#scope_export
+#program_export
+terminal_clipboard :: (
+terminal: *Terminal) -> PaneClipboard.TerminalPaneClipboard {
+    clipboard: PaneClipboard.TerminalPaneClipboard = PaneClipboard.TerminalPaneClipboard.{}
+
+    if terminal == null { return clipboard }
+    return PaneClipboard.MakeTerminalPaneClipboard(*terminal.clipboard,
+    terminal.bracketed_paste, write_paste_chunk, cast(*void)terminal)
+}
