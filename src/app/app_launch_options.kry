@@ -1,0 +1,625 @@
+#module "app_launch_options"
+#inspect off
+#import "launch_options.h"
+#import "stdio.h"
+#import "stdlib.h"
+#import "string.h"
+
+set_error :: (error: *char, error_size: i32, message: const char*,
+arg: const char*) {
+    if error == nil || error_size <= 0 { return }
+    if message == nil { message = "invalid option" }
+    if arg == nil {
+        snprintf(error, (size_t)error_size, "%s", message)
+    } else {
+        snprintf(error, (size_t)error_size, "%s: %s", message,
+        arg)
+    }
+}
+
+option_value :: (arg: const char*,
+long_name: const char*) -> const char* {
+    if arg == nil || long_name == nil { return nil }
+    len: size_t = strlen(long_name)
+    if strncmp(arg, long_name, len) == 0 && arg[len] == '=' {
+        return arg + len + 1
+    }
+    return nil
+}
+
+parse_geometry :: (options: *LaunchOptions,
+value: const char*) -> i32 {
+    if options == nil || value == nil || value[0] == '\0' {
+        return 0
+    }
+    end: *char
+    cols: long = strtol(value, &end, 10)
+    if end == value || (*end != 'x' && *end != 'X') { return 0 }
+    rows: long = strtol(end + 1, &end, 10)
+    if cols < 8 || cols > 1000 || rows < 4 || rows > 1000 {
+        return 0
+    }
+    options->geometry_cols = (int)cols
+    options->geometry_rows = (int)rows
+    return 1
+}
+
+tab_has_launch_options :: (tab: *const LaunchTabSpec) -> i32 {
+    if tab == nil { return 0 }
+    return (tab->title[0] != '\0' ||
+    tab->working_directory[0] != '\0' ||
+    tab->command[0] != '\0') ? 1 : 0
+}
+
+copy_text :: (dst: *char, dst_size: i32, src: const char*) {
+    if dst == nil || dst_size <= 0 { return }
+    if src == nil { src = "" }
+    snprintf(dst, (size_t)dst_size, "%s", src)
+}
+
+seed_tab_from_config :: (tab: *LaunchTabSpec,
+config: *const Config, title: const char*) {
+    if tab == nil { return }
+    memset(tab, 0, sizeof(LaunchTabSpec))
+    if config != nil {
+        copy_text(tab->working_directory,
+        (int)sizeof(tab->working_directory),
+        config->working_directory)
+        copy_text(tab->command, (int)sizeof(tab->command),
+        config->command)
+    }
+    copy_text(tab->title, (int)sizeof(tab->title), title)
+}
+
+append_launch_tab :: (options: *LaunchOptions,
+config: *const Config, title: const char*, error: *char,
+error_size: i32) -> i32 {
+    if options == nil { return -1 }
+    if options->tab_count >= LAUNCH_MAX_TABS {
+        set_error(error, error_size, "too many tabs", nil)
+        return -1
+    }
+    seed_tab_from_config(&options->tabs[options->tab_count],
+    config, title)
+    index: i32 = options->tab_count
+    options->tab_count += 1
+    return index
+}
+
+begin_launch_tab :: (options: *LaunchOptions,
+config: *const Config, base_config: *const Config,
+active_tab: *i32, implicit_tab_has_options: *i32,
+error: *char, error_size: i32) -> i32 {
+    if options == nil || active_tab == nil ||
+    implicit_tab_has_options == nil {
+        return 0
+    }
+    if options->tab_count == 0 && *active_tab < 0 &&
+    *implicit_tab_has_options != 0 {
+        if append_launch_tab(options, config,
+        options->initial_title, error, error_size) < 0 {
+            return 0
+        }
+        options->initial_title[0] = '\0'
+    }
+    index: i32 = append_launch_tab(options, base_config, nil,
+    error, error_size)
+    if index < 0 { return 0 }
+    *active_tab = index
+    *implicit_tab_has_options = 0
+    return 1
+}
+
+append_shell_quoted :: (out: *char, out_size: i32,
+arg: const char*) -> i32 {
+    if out == nil || out_size <= 0 || arg == nil { return 0 }
+    used: i32 = (int)strlen(out)
+    if used + 3 >= out_size { return 0 }
+    out[used] = '\''
+    used += 1
+    out[used] = '\0'
+    p: *const char = arg
+    while *p != '\0' {
+        if *p == '\'' {
+            if used + 4 >= out_size { return 0 }
+            memcpy(out + used, "'\\''", 4)
+            used += 4
+        } else {
+            if used + 1 >= out_size { return 0 }
+            out[used] = *p
+            used += 1
+        }
+        out[used] = '\0'
+        p += 1
+    }
+    if used + 2 >= out_size { return 0 }
+    out[used] = '\''
+    used += 1
+    out[used] = '\0'
+    return 1
+}
+
+join_execute_command :: (out: *char, out_size: i32, start: i32,
+argc: i32, argv: **char) -> i32 {
+    if out == nil || out_size <= 0 || start >= argc { return 0 }
+    out[0] = '\0'
+    i: i32 = start
+    while i < argc {
+        len: size_t = strlen(out)
+
+        if i > start {
+            if len + 2 >= (size_t)out_size { return 0 }
+            out[len] = ' '
+            len += 1
+            out[len] = '\0'
+        }
+        if append_shell_quoted(out, out_size, argv[i]) == 0 {
+            return 0
+        }
+        i += 1
+    }
+    return out[0] != '\0' ? 1 : 0
+}
+
+apply_config_value_arg :: (config: *Config,
+arg: const char*) -> i32 {
+    # k2c drops fixed-array initializers on module globals;
+    # the table must stay a local.
+    names: [25]*const char = {
+        "--font-size",
+        "--shell",
+        "--scrollback",
+        "--cursor-style",
+        "--terminal-font",
+        "--terminal-foreground",
+        "--terminal-background",
+        "--terminal-cursor",
+        "--terminal-selection-foreground",
+        "--terminal-selection-background",
+        "--dynamic-title-mode",
+        "--backspace-binding",
+        "--delete-binding",
+        "--ambiguous-width",
+        "--allow-bold",
+        "--unlimited-scrollback",
+        "--auto-hide-mouse",
+        "--middle-click-closes-tab",
+        "--always-show-tabs",
+        "--disable-menu-mnemonics",
+        "--disable-menu-shortcut",
+        "--disable-help-shortcut",
+        "--background-opacity",
+        "--background-image",
+        nil
+    }
+
+    if config == nil || arg == nil { return 0 }
+    i: i32 = 0
+    while names[i] != nil {
+        value: const char* = option_value(arg, names[i])
+
+        if value != nil {
+            config_apply_arg(config, names[i] + 2, value)
+            return 1
+        }
+        i += 1
+    }
+    return 0
+}
+
+arg_takes_value :: (arg: const char*) -> i32 {
+    # k2c drops fixed-array initializers on module globals and
+    # truncates very long conditions; the table stays a local.
+    names: [37]*const char = {
+        "--font-size",
+        "--working-directory",
+        "--default-working-directory",
+        "--shell",
+        "--command",
+        "-e",
+        "--scrollback",
+        "--cursor-style",
+        "--terminal-font",
+        "--terminal-foreground",
+        "--terminal-background",
+        "--terminal-cursor",
+        "--terminal-selection-foreground",
+        "--terminal-selection-background",
+        "--dynamic-title-mode",
+        "--backspace-binding",
+        "--delete-binding",
+        "--ambiguous-width",
+        "--allow-bold",
+        "--unlimited-scrollback",
+        "--auto-hide-mouse",
+        "--middle-click-closes-tab",
+        "--always-show-tabs",
+        "--disable-menu-mnemonics",
+        "--disable-menu-shortcut",
+        "--disable-help-shortcut",
+        "--background-opacity",
+        "--background-image",
+        "--default-display",
+        "--display",
+        "--role",
+        "--startup-id",
+        "--icon",
+        "-I",
+        "--title",
+        "-T",
+        "--geometry"
+    }
+
+    if arg == nil { return 0 }
+    i: i32 = 0
+    while i < 37 {
+        if strcmp(arg, names[i]) == 0 { return 1 }
+        i += 1
+    }
+    return 0
+}
+
+arg_is_ignorable_value :: (arg: const char*) -> i32 {
+    if strcmp(arg, "--default-display") == 0 ||
+    strcmp(arg, "--display") == 0 ||
+    strcmp(arg, "--role") == 0 ||
+    strcmp(arg, "--startup-id") == 0 ||
+    strcmp(arg, "--icon") == 0 || strcmp(arg, "-I") == 0 {
+        return 1
+    }
+    return 0
+}
+
+launch_options_defaults :: (options: *LaunchOptions) #export {
+    if options == nil { return }
+    memset(options, 0, sizeof(LaunchOptions))
+    options->show_menubar = 1
+    options->show_toolbar = 1
+    options->show_borders = 1
+}
+
+launch_options_parse :: (options: *LaunchOptions,
+config: *Config, argc: i32, argv: **char, error: *char,
+error_size: i32) -> LaunchParseResult #export {
+    active_tab: i32 = -1
+    implicit_tab_has_options: i32 = 0
+
+    if error != nil && error_size > 0 { error[0] = '\0' }
+    if options == nil || config == nil {
+        return LAUNCH_PARSE_ERROR
+    }
+    base_config: Config = *config
+    i: i32 = 1
+    while i < argc {
+        arg: *const char = argv[i]
+        value: *const char
+
+        if arg == nil {
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0 {
+            return LAUNCH_PARSE_HELP
+        }
+        if strcmp(arg, "--version") == 0 ||
+        strcmp(arg, "-V") == 0 {
+            return LAUNCH_PARSE_VERSION
+        }
+        if strcmp(arg, "--color-table") == 0 {
+            return LAUNCH_PARSE_COLOR_TABLE
+        }
+        if strcmp(arg, "--disable-server") == 0 {
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--unlimited-scrollback") == 0 ||
+        strcmp(arg, "--auto-hide-mouse") == 0 ||
+        strcmp(arg, "--middle-click-closes-tab") == 0 ||
+        strcmp(arg, "--always-show-tabs") == 0 ||
+        strcmp(arg, "--disable-menu-mnemonics") == 0 ||
+        strcmp(arg, "--disable-menu-shortcut") == 0 ||
+        strcmp(arg, "--disable-help-shortcut") == 0 {
+            config_apply_arg(config, arg + 2, "true")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--no-unlimited-scrollback") == 0 {
+            config_apply_arg(config, "unlimited-scrollback",
+            "false")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--no-auto-hide-mouse") == 0 {
+            config_apply_arg(config, "auto-hide-mouse", "false")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--no-middle-click-closes-tab") == 0 {
+            config_apply_arg(config, "middle-click-closes-tab",
+            "false")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--no-always-show-tabs") == 0 {
+            config_apply_arg(config, "always-show-tabs", "false")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--enable-bold") == 0 {
+            config_apply_arg(config, "allow-bold", "true")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--disable-bold") == 0 {
+            config_apply_arg(config, "allow-bold", "false")
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--drop-down") == 0 {
+            options->drop_down = 1
+            options->show_borders = 0
+            options->show_menubar = 0
+            options->show_toolbar = 0
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--tab") == 0 || strcmp(arg, "--window") == 0 {
+            if begin_launch_tab(options, config, &base_config,
+            &active_tab, &implicit_tab_has_options, error,
+            error_size) == 0 {
+                return LAUNCH_PARSE_ERROR
+            }
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--fullscreen") == 0 {
+            options->fullscreen = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--maximize") == 0 {
+            options->maximize = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--show-menubar") == 0 {
+            options->show_menubar = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--hide-menubar") == 0 {
+            options->show_menubar = 0
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--show-toolbar") == 0 {
+            options->show_toolbar = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--hide-toolbar") == 0 {
+            options->show_toolbar = 0
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--show-borders") == 0 {
+            options->show_borders = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--hide-borders") == 0 {
+            options->show_borders = 0
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--hold") == 0 || strcmp(arg, "-H") == 0 {
+            options->hold = 1
+            i += 1
+            continue
+        }
+        if strcmp(arg, "--execute") == 0 || strcmp(arg, "-x") == 0 {
+            command: [1024]char
+
+            if join_execute_command(command,
+            (int)sizeof(command), i + 1, argc, argv) == 0 {
+                set_error(error, error_size,
+                "execute option requires a command", arg)
+                return LAUNCH_PARSE_ERROR
+            }
+            if active_tab >= 0 {
+                copy_text(options->tabs[active_tab].command,
+                (int)sizeof(options->tabs[active_tab].command),
+                command)
+            } else {
+                config_apply_arg(config, "command", command)
+                implicit_tab_has_options = 1
+            }
+            break
+        }
+        value = option_value(arg, "--command")
+        if value != nil {
+            if active_tab >= 0 {
+                copy_text(options->tabs[active_tab].command,
+                (int)sizeof(options->tabs[active_tab].command),
+                value)
+            } else {
+                config_apply_arg(config, "command", value)
+                implicit_tab_has_options = 1
+            }
+            i += 1
+            continue
+        }
+        value = option_value(arg, "--working-directory")
+        if value != nil {
+            if active_tab >= 0 {
+                copy_text(options->tabs[active_tab].
+                working_directory,
+                (int)sizeof(options->tabs[active_tab].
+                working_directory), value)
+            } else {
+                config_apply_arg(config, "working-directory",
+                value)
+                implicit_tab_has_options = 1
+            }
+            i += 1
+            continue
+        }
+        value = option_value(arg, "--default-working-directory")
+        if value != nil {
+            if active_tab >= 0 {
+                copy_text(options->tabs[active_tab].
+                working_directory,
+                (int)sizeof(options->tabs[active_tab].
+                working_directory), value)
+            } else {
+                config_apply_arg(config, "working-directory",
+                value)
+                implicit_tab_has_options = 1
+            }
+            i += 1
+            continue
+        }
+        value = option_value(arg, "--title")
+        if value != nil {
+            if active_tab >= 0 {
+                copy_text(options->tabs[active_tab].title,
+                (int)sizeof(options->tabs[active_tab].title),
+                value)
+            } else {
+                copy_text(options->initial_title,
+                (int)sizeof(options->initial_title), value)
+                implicit_tab_has_options = 1
+            }
+            i += 1
+            continue
+        }
+        value = option_value(arg, "--geometry")
+        if value != nil {
+            if parse_geometry(options, value) == 0 {
+                set_error(error, error_size, "invalid geometry",
+                value)
+                return LAUNCH_PARSE_ERROR
+            }
+            i += 1
+            continue
+        }
+        if apply_config_value_arg(config, arg) != 0 {
+            i += 1
+            continue
+        }
+        if arg_takes_value(arg) != 0 && i + 1 < argc {
+            i += 1
+            value = argv[i]
+            if strcmp(arg, "--working-directory") == 0 ||
+            strcmp(arg, "--default-working-directory") == 0 {
+                if active_tab >= 0 {
+                    copy_text(options->tabs[active_tab].
+                    working_directory,
+                    (int)sizeof(options->tabs[active_tab].
+                    working_directory), value)
+                } else {
+                    config_apply_arg(config,
+                    "working-directory", value)
+                    implicit_tab_has_options = 1
+                }
+            } else if strcmp(arg, "--command") == 0 ||
+            strcmp(arg, "-e") == 0 {
+                if active_tab >= 0 {
+                    copy_text(options->tabs[active_tab].command,
+                    (int)sizeof(options->tabs[active_tab].
+                    command), value)
+                } else {
+                    config_apply_arg(config, "command", value)
+                    implicit_tab_has_options = 1
+                }
+            } else if strcmp(arg, "--title") == 0 ||
+            strcmp(arg, "-T") == 0 {
+                if active_tab >= 0 {
+                    copy_text(options->tabs[active_tab].title,
+                    (int)sizeof(options->tabs[active_tab].title),
+                    value)
+                } else {
+                    copy_text(options->initial_title,
+                    (int)sizeof(options->initial_title), value)
+                    implicit_tab_has_options = 1
+                }
+            } else if strcmp(arg, "--geometry") == 0 {
+                if parse_geometry(options, value) == 0 {
+                    set_error(error, error_size,
+                    "invalid geometry", value)
+                    return LAUNCH_PARSE_ERROR
+                }
+            } else if arg_is_ignorable_value(arg) != 0 {
+                i += 1
+                continue
+            } else {
+                config_apply_arg(config, arg + 2, value)
+            }
+            i += 1
+            continue
+        }
+        value = option_value(arg, "--display")
+        if value != nil { i += 1; continue }
+        value = option_value(arg, "--default-display")
+        if value != nil { i += 1; continue }
+        value = option_value(arg, "--role")
+        if value != nil { i += 1; continue }
+        value = option_value(arg, "--startup-id")
+        if value != nil { i += 1; continue }
+        value = option_value(arg, "--icon")
+        if value != nil { i += 1; continue }
+        i += 1
+    }
+    if options->tab_count == 1 &&
+    tab_has_launch_options(&options->tabs[0]) == 0 &&
+    implicit_tab_has_options == 0 {
+        options->tab_count = 0
+    }
+    return LAUNCH_PARSE_OK
+}
+
+launch_options_print_usage :: () #export {
+    printf("usage: t9 [options]\n"
+    "  --working-directory PATH, --default-working-directory PATH\n"
+    "  --shell PATH\n"
+    "  --command CMD, --command=CMD, -e CMD\n"
+    "  -x, --execute CMD [ARG...]\n"
+    "  --tab, --window, --drop-down\n"
+    "  --title TITLE, -T TITLE\n"
+    "  --hold, -H\n"
+    "  --geometry COLSxROWS, --fullscreen, --maximize\n"
+    "  --show-menubar, --hide-menubar, --show-toolbar, --hide-toolbar\n"
+    "  --show-borders, --hide-borders, --disable-server\n"
+    "  --font-size N, --scrollback N, --cursor-style block|underline|bar\n"
+    "  --terminal-font PATH\n"
+    "  --terminal-foreground #rrggbb|default\n"
+    "  --terminal-background #rrggbb|default\n"
+    "  --terminal-cursor #rrggbb|default\n"
+    "  --terminal-selection-foreground #rrggbb|default\n"
+    "  --terminal-selection-background #rrggbb|default\n"
+    "  --dynamic-title-mode replace|prepend|append|ignore\n"
+    "  --backspace-binding ascii-delete|control-h\n"
+    "  --delete-binding escape-sequence|ascii-delete\n"
+    "  --ambiguous-width narrow|wide\n"
+    "  --allow-bold true|false, --enable-bold, --disable-bold\n"
+    "  --unlimited-scrollback, --auto-hide-mouse\n"
+    "  --middle-click-closes-tab, --always-show-tabs\n"
+    "  --background-opacity 0..100, --background-image PATH\n")
+}
+
+launch_options_print_version :: () #export {
+    printf("t9 0.1\n")
+}
+
+launch_options_print_color_table :: () #export {
+    i: i32 = 0
+    while i < 16 {
+        printf("\033[48;5;%dm  \033[0m %02d", i, i)
+        if i % 8 == 7 {
+            printf("\n")
+        } else {
+            printf("  ")
+        }
+        i += 1
+    }
+}

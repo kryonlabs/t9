@@ -10,3 +10,10 @@ ktrem is a standalone terminal application built on Kryon.
 - Use direct names for ktrem APIs and types: `Terminal`, `Cell`, `Session`,
   `Palette`. Do not add artificial `Kry*` prefixes.
 
+## Bend
+
+When using Bend:
+- run `bend guide` to learn it
+- use `LAWS.bend` to keep important rules
+- run `bend PROOF.bend` before committing
+- parallelize the code whenever possible

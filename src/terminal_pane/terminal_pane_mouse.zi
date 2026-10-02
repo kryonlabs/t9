@@ -1,0 +1,172 @@
+TERMINAL_PANE_MOUSE_LEFT :: 0;
+TERMINAL_PANE_MOUSE_MIDDLE :: 1;
+TERMINAL_PANE_MOUSE_RIGHT :: 2;
+TERMINAL_PANE_MOUSE_RELEASE :: 3;
+TERMINAL_PANE_MOUSE_WHEEL_UP :: 64;
+TERMINAL_PANE_MOUSE_WHEEL_DOWN :: 65;
+TERMINAL_PANE_MOD_SHIFT :: 1;
+TERMINAL_PANE_MOD_ALT :: 2;
+TERMINAL_PANE_MOD_CTRL :: 4;
+
+TerminalPaneMouseMode :: struct {
+    mode: s32
+    utf8: s32
+    sgr: s32
+    urxvt: s32
+    pixels: s32
+}
+
+AppendByte :: (output: *u8, output_size: s32, used: *s32, value: u8) -> bool {
+    if output == null || used == null || used.* < 0 ||
+       used.* + 1 >= output_size { return false }
+    output[used.*] = value
+    used.* += 1
+    output[used.*] = 0
+    return true
+}
+
+AppendNumber :: (output: *u8, output_size: s32, used: *s32, value: s32) -> bool {
+    digits: [16]u8
+    next: s32 = 15
+    remaining: u32 = cast(u32)value
+    digits[next] = 0
+    next -= 1
+    while true {
+        digits[next] = cast(u8)(48 + remaining % 10)
+        remaining /= 10
+        if remaining == 0 { break }
+        next -= 1
+    }
+    while next < 15 {
+        if !AppendByte(output, output_size, used, digits[next]) { return false }
+        next += 1
+    }
+    return true
+}
+
+AppendUtf8 :: (output: *u8, output_size: s32, used: *s32,
+    codepoint: u32) -> bool {
+    if output == null || used == null || output_size <= 0 { return false }
+    if codepoint < 0x80 {
+        if used.* + 1 >= output_size { return false }
+        output[used.*] = cast(u8)codepoint
+        used.* += 1
+    } else if codepoint < 0x800 {
+        if used.* + 2 >= output_size { return false }
+        output[used.*] = cast(u8)(0xc0 | (codepoint >> 6))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | (codepoint & 0x3f))
+        used.* += 1
+    } else if codepoint < 0x10000 {
+        if used.* + 3 >= output_size { return false }
+        output[used.*] = cast(u8)(0xe0 | (codepoint >> 12))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | (codepoint & 0x3f))
+        used.* += 1
+    } else if codepoint <= 0x10ffff {
+        if used.* + 4 >= output_size { return false }
+        output[used.*] = cast(u8)(0xf0 | (codepoint >> 18))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3f))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))
+        used.* += 1
+        output[used.*] = cast(u8)(0x80 | (codepoint & 0x3f))
+        used.* += 1
+    } else {
+        return false
+    }
+    return true
+}
+
+#program_export
+EncodeTerminalPaneMouse :: (output: *u8, output_size: s32,
+    button: s32, col: s32, row: s32, pixel_x: s32, pixel_y: s32,
+    pressed: s32, motion: s32, mods: s32,
+    mode: TerminalPaneMouseMode) -> s32 {
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    if mode.mode == 0 || col < 0 || row < 0 { return 0 }
+    if pixel_x < 0 { pixel_x = col }
+    if pixel_y < 0 { pixel_y = row }
+    if mode.mode == 9 && (motion != 0 || pressed == 0 ||
+            button >= TERMINAL_PANE_MOUSE_WHEEL_UP) {
+        return 0
+    }
+    if motion != 0 && (mode.mode == 9 || mode.mode == 1000) { return 0 }
+    if motion != 0 && mode.mode == 1002 &&
+            button == TERMINAL_PANE_MOUSE_RELEASE { return 0 }
+
+    cb: s32 = button
+    if cb < TERMINAL_PANE_MOUSE_LEFT { cb = TERMINAL_PANE_MOUSE_LEFT }
+    if cb > TERMINAL_PANE_MOUSE_WHEEL_DOWN { cb = TERMINAL_PANE_MOUSE_RELEASE }
+    if pressed == 0 && motion == 0 && mode.sgr == 0 {
+        cb = TERMINAL_PANE_MOUSE_RELEASE
+    }
+    if motion != 0 { cb += 32 }
+    if (mods & TERMINAL_PANE_MOD_SHIFT) != 0 { cb += 4 }
+    if (mods & TERMINAL_PANE_MOD_ALT) != 0 { cb += 8 }
+    if (mods & TERMINAL_PANE_MOD_CTRL) != 0 { cb += 16 }
+
+    used: s32 = 0
+    if mode.sgr != 0 || mode.pixels != 0 {
+        x: s32 = ifx mode.pixels != 0 then pixel_x else col
+        y: s32 = ifx mode.pixels != 0 then pixel_y else row
+        suffix: u8 = 109
+        if pressed != 0 || motion != 0 { suffix = 77 }
+        if !AppendByte(output, output_size, *used, 27) ||
+           !AppendByte(output, output_size, *used, 91) ||
+           !AppendByte(output, output_size, *used, 60) ||
+           !AppendNumber(output, output_size, *used, cb) ||
+           !AppendByte(output, output_size, *used, 59) ||
+           !AppendNumber(output, output_size, *used, x + 1) ||
+           !AppendByte(output, output_size, *used, 59) ||
+           !AppendNumber(output, output_size, *used, y + 1) ||
+           !AppendByte(output, output_size, *used, suffix) {
+            output[0] = 0
+            return 0
+        }
+        return used
+    }
+    if mode.urxvt != 0 {
+        if !AppendByte(output, output_size, *used, 27) ||
+           !AppendByte(output, output_size, *used, 91) ||
+           !AppendNumber(output, output_size, *used, 32 + cb) ||
+           !AppendByte(output, output_size, *used, 59) ||
+           !AppendNumber(output, output_size, *used, col + 1) ||
+           !AppendByte(output, output_size, *used, 59) ||
+           !AppendNumber(output, output_size, *used, row + 1) ||
+           !AppendByte(output, output_size, *used, 77) {
+            output[0] = 0
+            return 0
+        }
+        return used
+    }
+    if mode.utf8 != 0 {
+        used = 3
+        if output_size <= used { return 0 }
+        output[0] = 27
+        output[1] = 91
+        output[2] = 77
+        if !AppendUtf8(output, output_size, *used, cast(u32)(32 + cb)) ||
+           !AppendUtf8(output, output_size, *used, cast(u32)(33 + col)) ||
+           !AppendUtf8(output, output_size, *used, cast(u32)(33 + row)) {
+            output[0] = 0
+            return 0
+        }
+        if used >= output_size { return 0 }
+        output[used] = 0
+        return used
+    }
+    if col > 222 || row > 222 || output_size <= 6 { return 0 }
+    output[0] = 27
+    output[1] = 91
+    output[2] = 77
+    output[3] = cast(u8)(32 + cb)
+    output[4] = cast(u8)(33 + col)
+    output[5] = cast(u8)(33 + row)
+    output[6] = 0
+    return 6
+}

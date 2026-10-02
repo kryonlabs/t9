@@ -1,0 +1,183 @@
+TERMINAL_PANE_COLOR_DEFAULT :: -1;
+TERMINAL_PANE_COLOR_TRUE_RGB :: 0x01000000;
+TERMINAL_PANE_SGR_BOLD :: 1;
+TERMINAL_PANE_SGR_ITALIC :: 2;
+TERMINAL_PANE_SGR_UNDERLINE :: 4;
+TERMINAL_PANE_SGR_INVERSE :: 8;
+TERMINAL_PANE_SGR_STRIKE :: 16;
+TERMINAL_PANE_SGR_FAINT :: 64;
+TERMINAL_PANE_SGR_CONCEAL :: 128;
+TERMINAL_PANE_SGR_BLINK :: 256;
+TERMINAL_PANE_SGR_OVERLINE :: 512;
+
+TerminalPaneSGRStatus :: struct {
+    styles: s32
+    foreground: s32
+    background: s32
+    underline: s32
+}
+
+TerminalPaneAppendText :: (buffer: *u8, buffer_size: s32, used: *s32,
+    value: *u8) -> bool {
+    if buffer == null || used == null || value == null || buffer_size <= 0 {
+        return false
+    }
+    length: s32 = 0
+    while value[length] != 0 { length += 1 }
+    if used.* < 0 || used.* + length >= buffer_size { return false }
+    index: s32 = 0
+    while index < length {
+        buffer[used.* + index] = value[index]
+        index += 1
+    }
+    used.* += length
+    buffer[used.*] = 0
+    return true
+}
+
+TerminalPaneAppendByte :: (buffer: *u8, buffer_size: s32, used: *s32,
+    value: u8) -> bool {
+    if buffer == null || used == null || used.* < 0 ||
+       used.* + 1 >= buffer_size { return false }
+    buffer[used.*] = value
+    used.* += 1
+    buffer[used.*] = 0
+    return true
+}
+
+TerminalPaneAppendNumber :: (buffer: *u8, buffer_size: s32, used: *s32,
+    first: *s32, value: s32) -> bool {
+    if first.* == 0 &&
+       !TerminalPaneAppendByte(buffer, buffer_size, used, 59) {
+        return false
+    }
+    digits: [16]u8
+    next: s32 = 15
+    remaining: u32 = cast(u32)value
+    digits[next] = 0
+    next -= 1
+    while true {
+        digits[next] = cast(u8)(48 + remaining % 10)
+        remaining /= 10
+        if remaining == 0 { break }
+        next -= 1
+    }
+    while next < 15 {
+        if !TerminalPaneAppendByte(buffer, buffer_size, used, digits[next]) {
+            return false
+        }
+        next += 1
+    }
+    first.* = 0
+    return true
+}
+
+TerminalPaneAppendColor :: (buffer: *u8, buffer_size: s32, used: *s32,
+    first: *s32, prefix: s32, value: s32) -> bool {
+    if value == TERMINAL_PANE_COLOR_DEFAULT { return true }
+    if !TerminalPaneAppendNumber(buffer, buffer_size, used, first, prefix) {
+        return false
+    }
+    if !TerminalPaneAppendByte(buffer, buffer_size, used, 59) { return false }
+    if (value & TERMINAL_PANE_COLOR_TRUE_RGB) != 0 {
+        rgb: s32 = value & 0xffffff
+        if !TerminalPaneAppendByte(buffer, buffer_size, used, 50) {
+            return false
+        }
+        channels: [3]s32
+        channels[0] = (rgb >> 16) & 255
+        channels[1] = (rgb >> 8) & 255
+        channels[2] = rgb & 255
+        index: s32 = 0
+        while index < 3 {
+            if !TerminalPaneAppendByte(buffer, buffer_size, used, 59) {
+                return false
+            }
+            first.* = 1
+            if !TerminalPaneAppendNumber(buffer, buffer_size, used, first,
+                    channels[index]) {
+                return false
+            }
+            index += 1
+        }
+    } else {
+        if !TerminalPaneAppendByte(buffer, buffer_size, used, 53) {
+            return false
+        }
+        if !TerminalPaneAppendByte(buffer, buffer_size, used, 59) {
+            return false
+        }
+        first.* = 1
+        if !TerminalPaneAppendNumber(buffer, buffer_size, used, first,
+                value & 255) {
+            return false
+        }
+    }
+    return true
+}
+
+TerminalPaneClearStatus :: (output: *u8) -> s32 {
+    if output != null { output[0] = 0 }
+    return 0
+}
+
+#program_export
+FormatTerminalPaneSGRStatus :: (output: *u8, output_size: s32,
+    status: TerminalPaneSGRStatus) -> s32 {
+    if output == null || output_size <= 0 { return 0 }
+    output[0] = 0
+    used: s32 = 0
+    first: s32 = 1
+    if (status.styles & TERMINAL_PANE_SGR_BOLD) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 1) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_FAINT) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 2) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_ITALIC) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 3) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_UNDERLINE) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 4) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_BLINK) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 5) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_INVERSE) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 7) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_CONCEAL) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 8) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_STRIKE) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 9) {
+        return TerminalPaneClearStatus(output)
+    }
+    if (status.styles & TERMINAL_PANE_SGR_OVERLINE) != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 53) {
+        return TerminalPaneClearStatus(output)
+    }
+    if !TerminalPaneAppendColor(output, output_size, *used, *first, 38,
+            status.foreground) ||
+       !TerminalPaneAppendColor(output, output_size, *used, *first, 48,
+            status.background) ||
+       !TerminalPaneAppendColor(output, output_size, *used, *first, 58,
+            status.underline) {
+        return TerminalPaneClearStatus(output)
+    }
+    if first != 0 &&
+       !TerminalPaneAppendNumber(output, output_size, *used, *first, 0) {
+        return TerminalPaneClearStatus(output)
+    }
+    if !TerminalPaneAppendByte(output, output_size, *used, 109) {
+        return TerminalPaneClearStatus(output)
+    }
+    return used
+}

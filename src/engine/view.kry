@@ -1,0 +1,197 @@
+#module "view"
+#inspect off
+#import "terminal.h"
+
+terminal_screen_cells_const :: (
+terminal: *const TerminalState) -> *const Cell {
+    return terminal != nil &&
+    terminal->alternate_screen != 0
+    ? terminal->alt_cells : terminal->main_cells
+}
+
+terminal_cell :: (terminal: *const TerminalState, col: i32,
+row: i32) -> *const Cell #export {
+    cells: *const Cell = terminal_screen_cells_const(terminal)
+
+    if terminal == nil || cells == nil || col < 0 || row < 0 ||
+    col >= terminal->cols || row >= terminal->rows {
+        return nil
+    }
+    return cells + row * terminal->cols + col
+}
+
+terminal_visible_cell :: (terminal: *const TerminalState,
+col: i32, visible_row: i32) -> *const Cell #export {
+    if terminal == nil || col < 0 || visible_row < 0 ||
+    col >= terminal->cols {
+        return nil
+    }
+    scrollback_count: i32 = terminal->alternate_screen != 0
+    ? 0 : terminal->scrollback_count
+    if visible_row < scrollback_count {
+        if terminal->scrollback == nil ||
+        terminal->scrollback_capacity <= 0 {
+            return nil
+        }
+        physical: i32 = (terminal->scrollback_head -
+        scrollback_count + visible_row +
+        terminal->scrollback_capacity) %
+        terminal->scrollback_capacity
+        return terminal->scrollback + physical * terminal->cols +
+        col
+    }
+    return terminal_cell(terminal, col,
+    visible_row - scrollback_count)
+}
+
+terminal_hyperlink :: (terminal: *const TerminalState,
+hyperlink: i32) -> const char* #export {
+    if terminal == nil || hyperlink <= 0 ||
+    hyperlink > terminal->hyperlink_count {
+        return nil
+    }
+    return terminal->hyperlinks[hyperlink - 1]
+}
+
+terminal_hyperlink_id :: (terminal: *const TerminalState,
+hyperlink: i32) -> const char* #export {
+    if terminal == nil || hyperlink <= 0 ||
+    hyperlink > terminal->hyperlink_count {
+        return nil
+    }
+    return terminal->hyperlink_ids[hyperlink - 1]
+}
+
+copy_terminal_line :: (cells: *const Cell, cols: i32, row: i32,
+out: *char, out_size: i32) {
+    used: i32 = 0
+
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if cells == nil || row < 0 { return }
+    end: i32 = cols
+    while end > 0 &&
+    cells[row * cols + end - 1].codepoint == ' ' {
+        end -= 1
+    }
+    col: i32 = 0
+    while col < end {
+        cp: u32 = cells[row * cols + col].codepoint
+
+        if (cells[row * cols + col].style & STYLE_WIDE_CONT) != 0 {
+            col += 1
+            continue
+        }
+        if cp == 0 { cp = ' ' }
+        if AppendTerminalPaneUTF8Codepoint(out, out_size, &used,
+        cp) == 0 {
+            break
+        }
+        if cells[row * cols + col].combining != 0 &&
+        AppendTerminalPaneUTF8Codepoint(out, out_size, &used,
+        cells[row * cols + col].combining) == 0 {
+            break
+        }
+        col += 1
+    }
+    out[used] = '\0'
+}
+
+terminal_line :: (terminal: *const TerminalState, row: i32,
+out: *char, out_size: i32) #export {
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if terminal == nil || row < 0 || row >= terminal->rows {
+        return
+    }
+    copy_terminal_line(terminal_screen_cells_const(terminal),
+    terminal->cols, row, out, out_size)
+}
+
+terminal_scrollback_line :: (terminal: *const TerminalState,
+row: i32, out: *char, out_size: i32) #export {
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if terminal == nil || terminal->scrollback == nil ||
+    row < 0 || row >= terminal->scrollback_count {
+        return
+    }
+    physical: i32 = terminal->scrollback_head -
+    terminal->scrollback_count + row
+    while physical < 0 {
+        physical += terminal->scrollback_capacity
+    }
+    physical %= terminal->scrollback_capacity
+    copy_terminal_line(terminal->scrollback, terminal->cols,
+    physical, out, out_size)
+}
+
+terminal_visible_line_count :: (
+terminal: *const TerminalState) -> i32 #export {
+    if terminal == nil { return 0 }
+    if terminal->alternate_screen != 0 { return terminal->rows }
+    return terminal->scrollback_count + terminal->rows
+}
+
+terminal_scrollback_rows :: (
+terminal: *const TerminalState) -> i32 #export {
+    return terminal != nil ? terminal->scrollback_count : 0
+}
+
+terminal_visible_line :: (terminal: *const TerminalState,
+visible_row: i32, out: *char, out_size: i32) #export {
+    if out == nil || out_size <= 0 { return }
+    out[0] = '\0'
+    if terminal == nil || visible_row < 0 { return }
+    scrollback_count: i32 = terminal->alternate_screen != 0
+    ? 0 : terminal->scrollback_count
+    if visible_row < scrollback_count {
+        terminal_scrollback_line(terminal, visible_row, out,
+        out_size)
+        return
+    }
+    terminal_line(terminal, visible_row - scrollback_count, out,
+    out_size)
+}
+
+terminal_visible_line_wrapped :: (
+terminal: *const TerminalState, visible_row: i32) -> i32 #export {
+    if terminal == nil || visible_row < 0 { return 0 }
+    scrollback_count: i32 = terminal->alternate_screen != 0
+    ? 0 : terminal->scrollback_count
+    if visible_row < scrollback_count {
+        if terminal->scrollback_wrapped == nil ||
+        terminal->scrollback_capacity <= 0 {
+            return 0
+        }
+        physical: i32 = terminal->scrollback_head -
+        scrollback_count + visible_row
+        while physical < 0 {
+            physical += terminal->scrollback_capacity
+        }
+        physical %= terminal->scrollback_capacity
+        return terminal->scrollback_wrapped[physical] != 0 ? 1 : 0
+    }
+    row: i32 = visible_row - scrollback_count
+    if row < 0 || row >= terminal->rows { return 0 }
+    if terminal->alternate_screen != 0 {
+        return terminal->alt_wrapped != nil &&
+        terminal->alt_wrapped[row] != 0 ? 1 : 0
+    }
+    return terminal->main_wrapped != nil &&
+    terminal->main_wrapped[row] != 0 ? 1 : 0
+}
+
+terminal_sixel_count :: (
+terminal: *const TerminalState) -> i32 #export {
+    return terminal != nil ? terminal->sixel_count : 0
+}
+
+terminal_sixel_image :: (terminal: *const TerminalState,
+index: i32) -> *const SixelImage #export {
+    if terminal == nil || index < 0 ||
+    index >= terminal->sixel_count {
+        return nil
+    }
+    return terminal->sixel_images + index
+}

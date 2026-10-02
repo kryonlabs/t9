@@ -1,0 +1,248 @@
+#module "app_profile"
+#inspect off
+# k2c's generated header app/app_profile.h would shadow src/app_profile.h
+# (quoted includes search the generated dir first, turning the import into
+# a self-include), so the app_profile.h API below relies on the underlying
+# headers instead: app_state.h, app_sessions.h, config.h. The
+# PROFILE_PROMPT_* kinds from app_profile.h are aliases of the
+# TERMINAL_PANE_PROFILE_PROMPT_* constants used here.
+#import "profile.h"
+#import "terminal_pane.h"
+#import "app_state.h"
+#import "app_sessions.h"
+#import "config.h"
+#import "kryon.h"
+#import "stdio.h"
+#import "string.h"
+
+profile_color_to_terminal_rgb :: (color: Color) -> i32 #export {
+    return TerminalPaneColorToRGB(color)
+}
+
+terminal_profile_theme :: (
+palette: *const Palette) -> TerminalPaneColors {
+    if palette == nil {
+        return ResolveTerminalPaneThemeColors(
+        GetTerminalPaneThemeColors())
+    }
+    colors: TerminalPaneColors = (TerminalPaneColors){
+        palette->terminal_background,
+        palette->foreground,
+        palette->muted,
+        palette->selection,
+        palette->selection_text,
+        palette->cursor,
+        palette->link,
+        palette->chrome_border,
+        palette->scroll_indicator,
+        palette->scroll_indicator_text,
+        palette->bell_overlay,
+        palette->bell_border
+    }
+    return ResolveTerminalPaneThemeColors(colors)
+}
+
+terminal_profile_configured :: (
+config: *const Config) -> TerminalPaneProfileColors {
+    colors: TerminalPaneProfileColors =
+    (TerminalPaneProfileColors){
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT
+    }
+    if config == nil { return colors }
+    colors.foreground = config->terminal_foreground
+    colors.background = config->terminal_background
+    colors.cursor = config->terminal_cursor
+    colors.selection_foreground =
+    config->terminal_selection_foreground
+    colors.selection_background =
+    config->terminal_selection_background
+    return colors
+}
+
+terminal_profile_state :: (
+terminal: *const TerminalState) -> TerminalPaneProfileState {
+    profile: TerminalPaneProfileState = (TerminalPaneProfileState){
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT,
+        COLOR_DEFAULT
+    }
+    if terminal == nil { return profile }
+    profile.base_foreground = terminal->base_fg
+    profile.base_background = terminal->base_bg
+    profile.base_cursor = terminal->base_cursor_color
+    profile.base_selection_foreground = terminal->base_selection_fg
+    profile.base_selection_background = terminal->base_selection_bg
+    profile.foreground = terminal->default_fg
+    profile.background = terminal->default_bg
+    profile.cursor = terminal->cursor_color
+    profile.selection_foreground = terminal->selection_fg
+    profile.selection_background = terminal->selection_bg
+    return profile
+}
+
+terminal_apply_profile_state :: (terminal: *TerminalState,
+state: TerminalPaneProfileState) {
+    if terminal == nil { return }
+    terminal->base_fg = state.base_foreground
+    terminal->base_bg = state.base_background
+    terminal->base_cursor_color = state.base_cursor
+    terminal->base_selection_fg = state.base_selection_foreground
+    terminal->base_selection_bg = state.base_selection_background
+    terminal->default_fg = state.foreground
+    terminal->default_bg = state.background
+    terminal->cursor_color = state.cursor
+    terminal->selection_fg = state.selection_foreground
+    terminal->selection_bg = state.selection_background
+}
+
+terminal_profile_colors :: (config: *const Config,
+palette: *const Palette) -> TerminalProfileColors #export {
+    return ResolveTerminalPaneProfileColors(
+    terminal_profile_configured(config),
+    terminal_profile_theme(palette))
+}
+
+terminal_profile_apply_new :: (config: *const Config,
+palette: *const Palette, terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    profile: TerminalPaneProfileState = terminal_profile_state(
+    terminal)
+    TerminalPaneProfileStateApplyNew(&profile,
+    terminal_profile_colors(config, palette))
+    terminal_apply_profile_state(terminal, profile)
+}
+
+terminal_profile_seed_missing :: (config: *const Config,
+palette: *const Palette, terminal: *TerminalState) #export {
+    if terminal == nil { return }
+    profile: TerminalPaneProfileState = terminal_profile_state(
+    terminal)
+    TerminalPaneProfileStateSeedMissing(&profile,
+    terminal_profile_colors(config, palette))
+    terminal_apply_profile_state(terminal, profile)
+}
+
+terminal_profile_sync_changed :: (terminal: *TerminalState,
+old_colors: TerminalProfileColors,
+new_colors: TerminalProfileColors) #export {
+    if terminal == nil { return }
+    profile: TerminalPaneProfileState = terminal_profile_state(
+    terminal)
+    TerminalPaneProfileStateSyncChanged(&profile, old_colors,
+    new_colors)
+    terminal_apply_profile_state(terminal, profile)
+}
+
+sync_terminal_theme_defaults :: (app: *State,
+old_colors: TerminalProfileColors) #export {
+    i: i32
+    new_colors: TerminalProfileColors
+
+    if app == nil { return }
+    new_colors = terminal_profile_colors(&app->config, &app->palette)
+    i = 0
+    while i < app->session_count {
+        terminal_profile_sync_changed(&app->sessions[i].terminal,
+        old_colors, new_colors)
+        i += 1
+    }
+}
+
+open_profile_prompt :: (app: *State, kind: i32) #export {
+    # active_session() inlined: app_sessions.c is not linked into the
+    # engine test, and this bounds check is its entire body.
+    session: *Session = nil
+    formatted: i32
+
+    if app == nil { return }
+    if app->active >= 0 && app->active < app->session_count {
+        session = &app->sessions[app->active]
+    }
+    app->profile_prompt = kind
+    app->profile_focused = 1
+    app->profile_text[0] = '\0'
+    formatted = FormatTerminalPaneProfilePromptValue(
+    app->profile_text, (int)sizeof(app->profile_text), &app->config,
+    kind)
+    if kind == TERMINAL_PANE_PROFILE_PROMPT_SHELL &&
+    app->profile_text[0] == '\0' && session != nil {
+        snprintf(app->profile_text, sizeof(app->profile_text), "%s",
+        session->shell)
+    } else if kind == TERMINAL_PANE_PROFILE_PROMPT_WORKING_DIRECTORY {
+        cwd: [1024]char
+
+        cwd[0] = '\0'
+        if session != nil {
+            session_current_cwd(session, cwd, (int)sizeof(cwd))
+        }
+        if cwd[0] != '\0' {
+            snprintf(app->profile_text, sizeof(app->profile_text),
+            "%s", cwd)
+        } else if formatted == 0 {
+            FormatTerminalPaneProfilePromptValue(
+            app->profile_text, (int)sizeof(app->profile_text),
+            &app->config, kind)
+        }
+    }
+    app->profile_cursor = (int)strlen(app->profile_text)
+}
+
+profile_prompt_title :: (kind: i32) -> const char* #export {
+    return TerminalPaneProfilePromptTitle(kind)
+}
+
+apply_profile_prompt :: (app: *State) #export {
+    i: i32
+    affects_colors: i32
+    old_colors: TerminalProfileColors
+
+    if app == nil { return }
+    affects_colors =
+    TerminalPaneProfilePromptAffectsColors(app->profile_prompt)
+    old_colors = terminal_profile_colors(&app->config, &app->palette)
+    if ApplyTerminalPaneProfilePromptValue(&app->config,
+    config_profile_limits(), app->profile_prompt,
+    app->profile_text) == 0 {
+        return
+    }
+    if TerminalPaneProfilePromptAffectsFont(app->profile_prompt) != 0 &&
+    app->config.terminal_font[0] != '\0' {
+        RegisterTextFontFileSource("t9-terminal",
+        app->config.terminal_font, nil, 0)
+    }
+    if TerminalPaneProfilePromptAffectsScrollback(
+    app->profile_prompt) != 0 {
+        i = 0
+        while i < app->session_count {
+            terminal_set_scrollback_limit(
+            &app->sessions[i].terminal,
+            config_effective_scrollback_limit(&app->config))
+            i += 1
+        }
+    }
+    if app->profile_prompt ==
+    TERMINAL_PANE_PROFILE_PROMPT_AMBIGUOUS_WIDTH {
+        i = 0
+        while i < app->session_count {
+            terminal_set_ambiguous_width(
+            &app->sessions[i].terminal,
+            app->config.ambiguous_width_wide)
+            i += 1
+        }
+    }
+    if affects_colors != 0 {
+        sync_terminal_theme_defaults(app, old_colors)
+    }
+    config_save(&app->config)
+}

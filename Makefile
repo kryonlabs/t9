@@ -1,5 +1,7 @@
 CC ?= cc
 ENGINE_DIR ?= ../kryon
+ZIRAN_DIR ?= ../ziran
+ZIRAN ?= $(ZIRAN_DIR)/build/bin/ziran
 BUILD_ROOT ?= build
 KRYON_BACKEND ?= raylib
 PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
@@ -30,21 +32,29 @@ BUILD_DIR ?= $(BUILD_ROOT)/$(PLATFORM)-$(ARCH)
 ENGINE_BUILD_ROOT ?= $(ENGINE_DIR)/build
 ENGINE_BUILD_DIR ?= $(ENGINE_BUILD_ROOT)/$(PLATFORM)-$(ARCH)
 ENGINE_LIB = $(ENGINE_BUILD_DIR)/libkryon.a
-ENGINE_CLIPBOARD_OBJ = $(ENGINE_BUILD_DIR)/ui/ui_clipboard.o
-ENGINE_TERMINAL_PANE_CLIPBOARD_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_clipboard.o
-ENGINE_TERMINAL_PANE_CSI_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_csi.o
-ENGINE_TERMINAL_PANE_DCS_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_dcs.o
-ENGINE_TERMINAL_PANE_KEYS_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_keys.o
-ENGINE_TERMINAL_PANE_MODES_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_modes.o
-ENGINE_TERMINAL_PANE_MOUSE_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_mouse.o
-ENGINE_TERMINAL_PANE_OSC_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_osc.o
-ENGINE_TERMINAL_PANE_PROFILE_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_profile.o
-ENGINE_TERMINAL_PANE_REFLOW_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_reflow.o
-ENGINE_TERMINAL_PANE_SELECTION_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_selection.o
-ENGINE_TERMINAL_PANE_SESSION_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_session.o
-ENGINE_TERMINAL_PANE_SGR_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_sgr.o
-ENGINE_TERMINAL_PANE_SIXEL_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_sixel.o
-ENGINE_TERMINAL_PANE_TEXT_OBJ = $(ENGINE_BUILD_DIR)/ui/terminal_pane_text.o
+ENGINE_K2C = $(ENGINE_BUILD_DIR)/bin/k2c
+PANE_C_FILES := $(sort $(wildcard src/terminal_pane/*.c))
+PANE_C_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PANE_C_FILES))
+PANE_KRY := $(sort $(wildcard src/terminal_pane/*.kry))
+PANE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(PANE_KRY))
+PANE_KRY_H := $(PANE_KRY_C:.c=.h)
+PANE_KRY_OBJS := $(PANE_KRY_C:.c=.o)
+PANE_ZI := $(sort $(wildcard src/terminal_pane/*.zi))
+PANE_ZI_C := $(patsubst src/%.zi,$(BUILD_DIR)/generated/src/%.c,$(PANE_ZI))
+PANE_ZI_H := $(PANE_ZI_C:.c=.h)
+PANE_ZI_OBJS := $(PANE_ZI_C:.c=.o)
+PANE_RUNTIME_C = $(BUILD_DIR)/generated/src/runtime/terminal_pane.c
+PANE_RUNTIME_H = $(PANE_RUNTIME_C:.c=.h)
+PANE_RUNTIME_OBJ = $(PANE_RUNTIME_C:.c=.o)
+PANE_OBJS = $(PANE_C_OBJS) $(PANE_KRY_OBJS) $(PANE_ZI_OBJS) $(PANE_RUNTIME_OBJ)
+ENGINE_KRY := $(sort $(wildcard src/engine/*.kry))
+ENGINE_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(ENGINE_KRY))
+ENGINE_KRY_H := $(ENGINE_KRY_C:.c=.h)
+ENGINE_KRY_OBJS := $(ENGINE_KRY_C:.c=.o)
+APP_KRY := $(sort $(wildcard src/app/*.kry))
+APP_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(APP_KRY))
+APP_KRY_H := $(APP_KRY_C:.c=.h)
+APP_KRY_OBJS := $(APP_KRY_C:.c=.o)
 RAYLIB_A = $(ENGINE_BUILD_DIR)/raylib/libraylib.a
 LIBOQS_A = $(ENGINE_BUILD_DIR)/vendor/liboqs/lib/liboqs.a
 CURL_A = $(ENGINE_BUILD_DIR)/vendor/curl/lib/libcurl.a
@@ -56,40 +66,70 @@ APP = $(BUILD_DIR)/bin/t9
 HOST_LIB = $(BUILD_DIR)/lib/libt9_host.a
 HOST_SO = $(BUILD_DIR)/lib/t9-host.so
 TEST = $(BUILD_DIR)/tests/terminal_test
+SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
+PANE_POLICY_TEST = $(BUILD_DIR)/tests/terminal_pane_policy_test
+PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
+PANE_TEXT_TEST = $(BUILD_DIR)/tests/terminal_pane_text_test
+PANE_TEXT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_text
+PANE_TEXT_TEST_C = $(PANE_TEXT_TEST_GEN)/terminal_pane_text.c \
+	$(PANE_TEXT_TEST_GEN)/terminal_pane_text_test.c
+PANE_SGR_TEST = $(BUILD_DIR)/tests/terminal_pane_sgr_test
+PANE_SGR_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_sgr
+PANE_SGR_TEST_C = $(PANE_SGR_TEST_GEN)/terminal_pane_sgr.c \
+	$(PANE_SGR_TEST_GEN)/terminal_pane_sgr_test.c
+PANE_CSI_TEST = $(BUILD_DIR)/tests/terminal_pane_csi_test
+PANE_CSI_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_csi
+PANE_CSI_TEST_C = $(PANE_CSI_TEST_GEN)/terminal_pane_csi.c \
+	$(PANE_CSI_TEST_GEN)/terminal_pane_csi_test.c
+PANE_MODES_TEST = $(BUILD_DIR)/tests/terminal_pane_modes_test
+PANE_MODES_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_modes
+PANE_MODES_TEST_C = $(PANE_MODES_TEST_GEN)/terminal_pane_modes.c \
+	$(PANE_MODES_TEST_GEN)/terminal_pane_modes_test.c
+PANE_MOUSE_TEST = $(BUILD_DIR)/tests/terminal_pane_mouse_test
+PANE_MOUSE_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_mouse
+PANE_MOUSE_TEST_C = $(PANE_MOUSE_TEST_GEN)/terminal_pane_mouse.c \
+	$(PANE_MOUSE_TEST_GEN)/terminal_pane_mouse_test.c
+PROCESS_TEST = $(BUILD_DIR)/tests/process_test
 PARSER_BENCH = $(BUILD_DIR)/benchmarks/parser_replay
 SRC_FILES := $(filter-out src/terminal_pty_plan9.c,$(wildcard src/*.c))
-OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES))
+OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
 HOST_SRC_FILES := $(filter-out src/main.c,$(SRC_FILES))
-HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES))
-TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(BUILD_DIR)/src/config.o \
-	$(BUILD_DIR)/src/launch_options.o \
-	$(BUILD_DIR)/src/terminal.o \
-	$(BUILD_DIR)/src/terminal_csi.o \
-	$(BUILD_DIR)/src/terminal_modes.o \
-	$(BUILD_DIR)/src/terminal_keys.o $(BUILD_DIR)/src/terminal_paste.o \
-	$(BUILD_DIR)/src/terminal_mouse.o $(BUILD_DIR)/src/terminal_search.o \
-	$(BUILD_DIR)/src/terminal_view.o $(BUILD_DIR)/src/terminal_osc.o \
-	$(BUILD_DIR)/src/terminal_sixel.o $(BUILD_DIR)/src/terminal_dcs.o \
-	$(BUILD_DIR)/src/terminal_sgr.o $(BUILD_DIR)/src/terminal_screen.o \
-	$(BUILD_DIR)/src/terminal_text.o \
-	$(BUILD_DIR)/src/terminal_parser.o \
+HOST_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(HOST_SRC_FILES)) $(PANE_OBJS) $(ENGINE_KRY_OBJS) $(APP_KRY_OBJS)
+# Pick a module's object from its .kry port when present, else its C file.
+mod_obj = $(if $(wildcard src/engine/$(1).kry),$(BUILD_DIR)/generated/src/engine/$(1).o,$(if $(wildcard src/app/$(1).kry),$(BUILD_DIR)/generated/src/app/$(1).o,$(BUILD_DIR)/src/$(1).o))
+TEST_OBJS = $(BUILD_DIR)/tests/terminal_test.o $(call mod_obj,app_config) \
+	$(call mod_obj,app_launch_options) \
+	$(call mod_obj,terminal_state) \
+	$(call mod_obj,csi) \
+	$(call mod_obj,modes) \
+	$(call mod_obj,keys) $(call mod_obj,paste) \
+	$(call mod_obj,mouse) $(call mod_obj,search) \
+	$(call mod_obj,view) $(call mod_obj,osc) \
+	$(call mod_obj,sixel) $(call mod_obj,dcs) \
+	$(call mod_obj,sgr) $(call mod_obj,screen) \
+	$(call mod_obj,text) \
+	$(call mod_obj,parser) \
 	$(BUILD_DIR)/src/terminal_pty.o \
-	$(BUILD_DIR)/src/session.o \
-	$(BUILD_DIR)/src/input.o $(BUILD_DIR)/src/selection.o \
-	$(BUILD_DIR)/src/session_store.o $(BUILD_DIR)/src/profile.o \
-	$(BUILD_DIR)/src/palette.o
+	$(call mod_obj,process) \
+	$(call mod_obj,app_session) \
+	$(call mod_obj,app_input) $(call mod_obj,app_selection) \
+	$(call mod_obj,app_session_store) $(call mod_obj,app_profile) \
+	$(call mod_obj,app_palette) $(call mod_obj,app_sessions) \
+	$(call mod_obj,app_chrome) $(call mod_obj,app_commands) \
+	$(call mod_obj,app_clipboard) $(call mod_obj,app_search)
 PARSER_BENCH_OBJS = $(BUILD_DIR)/benchmarks/parser_replay.o \
-	$(BUILD_DIR)/src/terminal.o \
-	$(BUILD_DIR)/src/terminal_csi.o \
-	$(BUILD_DIR)/src/terminal_modes.o \
-	$(BUILD_DIR)/src/terminal_keys.o $(BUILD_DIR)/src/terminal_paste.o \
-	$(BUILD_DIR)/src/terminal_mouse.o $(BUILD_DIR)/src/terminal_search.o \
-	$(BUILD_DIR)/src/terminal_view.o $(BUILD_DIR)/src/terminal_osc.o \
-	$(BUILD_DIR)/src/terminal_sixel.o $(BUILD_DIR)/src/terminal_dcs.o \
-	$(BUILD_DIR)/src/terminal_sgr.o $(BUILD_DIR)/src/terminal_screen.o \
-	$(BUILD_DIR)/src/terminal_text.o \
-	$(BUILD_DIR)/src/terminal_parser.o \
-	$(BUILD_DIR)/src/terminal_pty.o
+	$(call mod_obj,terminal_state) \
+	$(call mod_obj,csi) \
+	$(call mod_obj,modes) \
+	$(call mod_obj,keys) $(call mod_obj,paste) \
+	$(call mod_obj,mouse) $(call mod_obj,search) \
+	$(call mod_obj,view) $(call mod_obj,osc) \
+	$(call mod_obj,sixel) $(call mod_obj,dcs) \
+	$(call mod_obj,sgr) $(call mod_obj,screen) \
+	$(call mod_obj,text) \
+	$(call mod_obj,parser) \
+	$(BUILD_DIR)/src/terminal_pty.o \
+	$(call mod_obj,process)
 
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -124,8 +164,11 @@ CFLAGS ?= -Wall -Wextra -O2
 ifeq ($(PLATFORM),linux)
   CFLAGS += -fPIC
 endif
-CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include \
-	-I$(ENGINE_BUILD_DIR)/generated/src -I$(ENGINE_BUILD_DIR)/generated/include \
+CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include -I$(ENGINE_DIR)/src/ui \
+	-I$(ENGINE_DIR)/vendor/utf8proc \
+	-I$(BUILD_DIR)/generated/src -I$(ENGINE_BUILD_DIR)/generated/src \
+	-I$(ENGINE_BUILD_DIR)/generated/src/runtime \
+	-I$(ENGINE_BUILD_DIR)/generated/include \
 	$(BACKEND_CFLAGS) $(SYSTEM_THEME_CFLAGS) \
 	-DKTREM_KRYON_FONT_PATH=\"$(abspath $(ENGINE_DIR))/fonts/noto/NotoSans-Regular.ttf\" \
 	-DHAS_LIBOQS=1 -I$(ENGINE_BUILD_DIR)/vendor/liboqs/include \
@@ -143,7 +186,73 @@ all: $(APP) $(HOST_LIB) $(HOST_SO)
 
 engine:
 	$(MAKE) -C $(ENGINE_DIR) KRYON_BACKEND=$(KRYON_BACKEND) \
-		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB)
+		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB) $(ENGINE_K2C)
+
+$(PANE_RUNTIME_C) $(PANE_RUNTIME_H) &: runtime/terminal_pane.kry | engine
+	$(ENGINE_K2C) --strict --no-main --root . -o $(BUILD_DIR)/generated/src $<
+
+$(PANE_KRY_C) $(PANE_KRY_H) $(ENGINE_KRY_C) $(ENGINE_KRY_H) $(APP_KRY_C) $(APP_KRY_H) &: $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY) $(PANE_RUNTIME_H) | engine
+	$(ENGINE_K2C) --no-main --root src -o $(BUILD_DIR)/generated/src $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
+
+$(PANE_ZI_C) $(PANE_ZI_H) &: $(PANE_ZI)
+	@mkdir -p $(BUILD_DIR)/generated/src
+	$(ZIRAN) build --target=c --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/generated/src $(PANE_ZI)
+
+$(BUILD_DIR)/generated/src/%.o: $(BUILD_DIR)/generated/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -c $< -o $@
+
+$(PANE_TEXT_TEST_C) &: tests/terminal_pane_text_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_TEXT_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_TEXT_TEST_GEN) tests/terminal_pane_text_test.zi
+
+$(PANE_TEXT_TEST): $(PANE_TEXT_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_TEXT_TEST_GEN) $(PANE_TEXT_TEST_C) -o $@
+
+$(PANE_SGR_TEST_C) &: tests/terminal_pane_sgr_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_SGR_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_SGR_TEST_GEN) tests/terminal_pane_sgr_test.zi
+
+$(PANE_SGR_TEST): $(PANE_SGR_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_SGR_TEST_GEN) $(PANE_SGR_TEST_C) -o $@
+
+$(PANE_CSI_TEST_C) &: tests/terminal_pane_csi_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_CSI_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_CSI_TEST_GEN) tests/terminal_pane_csi_test.zi
+
+$(PANE_CSI_TEST): $(PANE_CSI_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_CSI_TEST_GEN) $(PANE_CSI_TEST_C) -o $@
+
+$(PANE_MODES_TEST_C) &: tests/terminal_pane_modes_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_MODES_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_MODES_TEST_GEN) tests/terminal_pane_modes_test.zi
+
+$(PANE_MODES_TEST): $(PANE_MODES_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_MODES_TEST_GEN) $(PANE_MODES_TEST_C) -o $@
+
+$(PANE_MOUSE_TEST_C) &: tests/terminal_pane_mouse_test.zi $(PANE_ZI)
+	@mkdir -p $(PANE_MOUSE_TEST_GEN)
+	$(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_MOUSE_TEST_GEN) tests/terminal_pane_mouse_test.zi
+
+$(PANE_MOUSE_TEST): $(PANE_MOUSE_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_MOUSE_TEST_GEN) $(PANE_MOUSE_TEST_C) -o $@
 
 $(APP): engine $(OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(OBJS) \
@@ -156,18 +265,55 @@ $(HOST_LIB): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
 $(HOST_SO): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
 	$(CC) $(CFLAGS) -shared -o $@ $(HOST_OBJS)
 
-# The terminal pane engine objects are t9-local now; the test links the
-# sources from $(BUILD_DIR)/src plus the kryon engine library.
-$(TEST): engine $(BUILD_DIR)/tests/terminal_test.o $(HOST_OBJS) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(BUILD_DIR)/tests/terminal_test.o $(HOST_OBJS) \
-		$(ENGINE_LIB) $(LDLIBS)
+# The engine test stubs the pane widget's theme entry points so it runs
+# headless; keep the real widget object out of that link. Other pane objects
+# pull libkryon members that also define the clipboard/input/theme functions
+# the test stubs; link order keeps the test's stubs authoritative.
+PANE_TEST_OBJS = $(filter-out %/terminal_pane_widget.o,$(PANE_OBJS))
 
-$(PARSER_BENCH): engine $(PARSER_BENCH_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/benchmarks
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(PARSER_BENCH_OBJS) \
+$(TEST): engine $(TEST_OBJS) $(PANE_TEST_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Wl,--allow-multiple-definition -o $@ \
+		$(TEST_OBJS) \
+		$(PANE_TEST_OBJS) $(ENGINE_LIB) $(LDLIBS)
+
+$(SIMPLE_TEST): engine $(BUILD_DIR)/tests/simple_terminal_test.o \
+	$(BUILD_DIR)/src/terminal_pane/simple_terminal.o | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(BUILD_DIR)/tests/simple_terminal_test.o \
+		$(BUILD_DIR)/src/terminal_pane/simple_terminal.o
+
+$(PANE_POLICY_TEST): engine $(BUILD_DIR)/tests/terminal_pane_policy_test.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/terminal_pane_policy_test.o \
+		$(PANE_OBJS) -Wl,--whole-archive $(ENGINE_LIB) \
+		-Wl,--no-whole-archive $(LDLIBS)
+
+$(PROCESS_TEST): engine $(BUILD_DIR)/tests/process_test.o \
+	$(ENGINE_CLIPBOARD_OBJ) \
+	$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
+	$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/process_test.o $(ENGINE_CLIPBOARD_OBJ) \
+		$(call mod_obj,app_config) $(call mod_obj,app_launch_options) \
+		$(ENGINE_KRY_OBJS) $(BUILD_DIR)/src/terminal_pty.o \
+		$(PANE_OBJS) $(ENGINE_LIB) $(LDLIBS)
+
+$(PANE_SELECTION_TEST): engine $(BUILD_DIR)/tests/terminal_pane_selection_test.o \
+	$(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ \
+		$(BUILD_DIR)/tests/terminal_pane_selection_test.o \
+		$(PANE_OBJS) \
+		-Wl,--whole-archive $(ENGINE_LIB) \
+		-Wl,--no-whole-archive $(LDLIBS)
+
+$(PARSER_BENCH): engine $(PARSER_BENCH_OBJS) $(PANE_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/benchmarks
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(PARSER_BENCH_OBJS) $(PANE_OBJS) \
 		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
 		$(LDLIBS)
 
 $(BUILD_DIR)/src/%.o: src/%.c src/*.h | $(BUILD_DIR)/src
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tests/%.o: tests/%.c src/terminal.h | $(BUILD_DIR)/tests
@@ -182,8 +328,26 @@ $(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests $(BUILD_DI
 run: $(APP)
 	$(APP)
 
-test: $(TEST)
+ZIRAN_MIGRATION_TEST = tests/ziran_migration_test.sh
+
+.PHONY: ziran-migration-check
+ziran-migration-check:
+	$(ZIRAN_MIGRATION_TEST)
+
+test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
+	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
+	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) $(PROCESS_TEST) \
+	ziran-migration-check
 	$(TEST)
+	$(SIMPLE_TEST)
+	$(PANE_POLICY_TEST)
+	$(PANE_SELECTION_TEST)
+	$(PANE_TEXT_TEST)
+	$(PANE_SGR_TEST)
+	$(PANE_CSI_TEST)
+	$(PANE_MODES_TEST)
+	$(PANE_MOUSE_TEST)
+	$(PROCESS_TEST)
 
 benchmark-parser: $(PARSER_BENCH)
 	$(PARSER_BENCH)
@@ -208,3 +372,26 @@ install: $(APP) $(HOST_SO)
 
 clean:
 	rm -rf $(BUILD_ROOT)
+
+# Native Plan 9 preparation. The guest compiler cannot run k2c or Ziran,
+# so the .kry and .zi app modules are emitted ahead of time as 8c-safe C into
+# build/plan9/generated with the file list the mkfile consumes. Run on
+# the host whenever any .kry changes before a native build (and prepare
+# the Kryon library's own build/plan9 with `make kry-c-plan9` there).
+PLAN9_PREP_DIR = build/plan9
+PLAN9_GENERATED = $(PLAN9_PREP_DIR)/generated
+PLAN9_FILE_LIST = $(PLAN9_PREP_DIR)/generated-c-files.txt
+
+.PHONY: kry-c-plan9
+kry-c-plan9: engine
+	rm -rf $(PLAN9_GENERATED)
+	mkdir -p $(PLAN9_PREP_DIR)
+	$(ENGINE_K2C) --plan9 --strict --no-main --root $(abspath .) \
+		-o $(PLAN9_GENERATED) runtime/terminal_pane.kry
+	$(ENGINE_K2C) --plan9 --no-main --root $(abspath src) \
+		-o $(PLAN9_GENERATED) $(PANE_KRY) $(ENGINE_KRY) $(APP_KRY)
+	$(ZIRAN) build --target=plan9-c --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PLAN9_GENERATED) $(PANE_ZI)
+	(cd $(PLAN9_GENERATED) && find . -type f -name '*.c' | \
+	sed -e 's@^\./@@') | LC_ALL=C sort > $(PLAN9_FILE_LIST)

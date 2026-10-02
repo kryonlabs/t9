@@ -1,0 +1,299 @@
+#module "app_sessions"
+#inspect off
+#import "app_sessions.h"
+#import "app_chrome.h"
+#import "config.h"
+#import "profile.h"
+#import "session_store.h"
+#import "kryon.h"
+#import "stdio.h"
+
+PLAN9_BUILD :: #defined(KRYON_NATIVE_PLAN9)
+
+max_int :: (a: i32, b: i32) -> i32 {
+    return a > b ? a : b
+}
+
+clamp_int :: (value: i32, low: i32, high: i32) -> i32 {
+    if value < low { return low }
+    if value > high { return high }
+    return value
+}
+
+active_session :: (app: *State) -> *Session #export {
+    if app == nil || app->active < 0 || app->active >= app->session_count {
+        return nil
+    }
+    return &app->sessions[app->active]
+}
+
+set_active_session :: (app: *State, index: i32) #export {
+    old: i32
+
+    if app == nil || index < 0 || index >= app->session_count { return }
+    old = app->active
+    if old == index {
+        app->selection.active = 0
+        return
+    }
+    if app->window_focused != 0 && old >= 0 && old < app->session_count {
+        terminal_send_focus(&app->sessions[old].terminal, 0)
+    }
+    app->active = index
+    if app->window_focused != 0 {
+        terminal_send_focus(&app->sessions[index].terminal, 1)
+    }
+    app->selection.active = 0
+}
+
+initial_cwd :: (config: *const Config) -> const char* {
+    if config != nil && config->working_directory[0] != '\0' {
+        return config->working_directory
+    }
+    return GetWorkingDirectory()
+}
+
+estimate_terminal_grid :: (app: *State, cols: *int, rows: *int) {
+    chrome_h: i32 = app_chrome_height(app)
+    metrics: TerminalPaneMetrics
+
+    if cols == nil || rows == nil { return }
+    *cols = 100
+    *rows = 30
+    if app == nil { return }
+    if app->launch.geometry_cols > 0 && app->launch.geometry_rows > 0 {
+        *cols = clamp_int(app->launch.geometry_cols, 8, MAX_COLS)
+        *rows = clamp_int(app->launch.geometry_rows, 4, MAX_ROWS)
+        return
+    }
+    UseTextFont("t9-terminal")
+    metrics = MeasureTerminalPaneContent(TerminalPaneContentBounds(
+    (Rectangle){0, 0, (float)GetScreenWidth(), (float)GetScreenHeight()},
+    chrome_h, 0), app->config.font_size)
+    UseTextFont("t9-ui")
+    *cols = clamp_int(metrics.cols, 8, MAX_COLS)
+    *rows = clamp_int(metrics.rows, 4, MAX_ROWS)
+}
+
+apply_profile_defaults_to_terminal :: (app: *State,
+terminal: *TerminalState) {
+    if app == nil || terminal == nil { return }
+    terminal_set_ambiguous_width(terminal, app->config.ambiguous_width_wide)
+    terminal_profile_apply_new(&app->config, &app->palette, terminal)
+}
+
+seed_theme_defaults_to_terminal :: (app: *State,
+terminal: *TerminalState) #export {
+    if app == nil || terminal == nil { return }
+    terminal_profile_seed_missing(&app->config, &app->palette, terminal)
+}
+
+open_session_with_launch :: (app: *State, cwd: const char*,
+command: const char*, title: const char*) {
+    session: *Session
+    cols: i32 = 100
+    rows: i32 = 30
+    new_index: i32
+
+    if app == nil || app->session_count >= MAX_SESSIONS { return }
+    new_index = app->session_count
+    estimate_terminal_grid(app, &cols, &rows)
+    session = &app->sessions[new_index]
+    session_init(session)
+    session_open(session,
+    cwd != nil && cwd[0] != '\0' ? cwd : initial_cwd(&app->config),
+    app->config.shell,
+    command != nil ? command : app->config.command, cols, rows,
+    config_effective_scrollback_limit(&app->config))
+    if title != nil && title[0] != '\0' {
+        session_set_title(session, title)
+    }
+    apply_profile_defaults_to_terminal(app, &session->terminal)
+    app->session_count += 1
+    set_active_session(app, new_index)
+    app->rename_index = -1
+}
+
+open_session :: (app: *State, command: const char*) #export {
+    title: const char* = nil
+
+    if app != nil && app->session_count == 0 &&
+    app->launch.initial_title[0] != '\0' {
+        title = app->launch.initial_title
+    }
+    open_session_with_launch(app, nil, command, title)
+}
+
+open_launch_sessions :: (app: *State) -> i32 #export {
+    i: i32
+    opened: i32 = 0
+
+    if app == nil || app->launch.tab_count <= 0 { return 0 }
+    i = 0
+    while i < app->launch.tab_count && app->session_count < MAX_SESSIONS {
+        tab: *LaunchTabSpec = &app->launch.tabs[i]
+
+        open_session_with_launch(app, tab->working_directory, tab->command,
+        tab->title)
+        opened += 1
+        i += 1
+    }
+    return opened
+}
+
+moved_index :: (index: i32, from_index: i32, to_index: i32) -> i32 {
+    if index < 0 { return index }
+    if index == from_index { return to_index }
+    if from_index < to_index && index > from_index && index <= to_index {
+        return index - 1
+    }
+    if from_index > to_index && index >= to_index && index < from_index {
+        return index + 1
+    }
+    return index
+}
+
+rebind_session_terminals :: (app: *State) {
+#if PLAN9_BUILD {
+    i: i32
+
+    i = 0
+    while i < app->session_count {
+        terminal_rebind(&app->sessions[i].terminal)
+        i += 1
+    }
+}
+}
+
+move_session :: (app: *State, from_index: i32, to_index: i32) #export {
+    moved: Session
+    i: i32
+
+    if app == nil || from_index < 0 || from_index >= app->session_count ||
+    to_index < 0 || to_index >= app->session_count ||
+    from_index == to_index {
+        return
+    }
+
+    moved = app->sessions[from_index]
+    if from_index < to_index {
+        i = from_index
+        while i < to_index {
+            app->sessions[i] = app->sessions[i + 1]
+            i += 1
+        }
+    } else {
+        i = from_index
+        while i > to_index {
+            app->sessions[i] = app->sessions[i - 1]
+            i -= 1
+        }
+    }
+    app->sessions[to_index] = moved
+    rebind_session_terminals(app)
+    app->active = moved_index(app->active, from_index, to_index)
+    app->rename_index = moved_index(app->rename_index, from_index, to_index)
+    app->selection.active = 0
+}
+
+close_session_internal :: (app: *State, index: i32,
+replace_last: i32) {
+    i: i32
+    closing_active: i32
+
+    if app == nil || index < 0 || index >= app->session_count { return }
+    closing_active = index == app->active
+    if closing_active != 0 && app->window_focused != 0 {
+        terminal_send_focus(&app->sessions[index].terminal, 0)
+    }
+    session_close(&app->sessions[index])
+    i = index
+    while i < app->session_count - 1 {
+        app->sessions[i] = app->sessions[i + 1]
+        i += 1
+    }
+    app->session_count -= 1
+    rebind_session_terminals(app)
+    if app->session_count <= 0 {
+        app->active = -1
+        if replace_last != 0 {
+            open_session(app, nil)
+        } else {
+            app->quit_requested = 1
+        }
+        return
+    }
+    if closing_active == 0 && index < app->active {
+        app->active -= 1
+    }
+    if app->active >= app->session_count {
+        app->active = app->session_count - 1
+    }
+    if app->active < 0 {
+        app->active = 0
+    }
+    if closing_active != 0 && app->window_focused != 0 {
+        terminal_send_focus(&app->sessions[app->active].terminal, 1)
+    }
+    app->selection.active = 0
+    app->rename_index = -1
+}
+
+close_session :: (app: *State, index: i32) #export {
+    close_session_internal(app, index, 1)
+}
+
+close_exited_session :: (app: *State, index: i32) #export {
+    close_session_internal(app, index, 0)
+}
+
+save_sessions :: (app: *State) #export {
+    if app == nil { return }
+    session_store_save(app->sessions, app->session_count, app->active)
+}
+
+restore_sessions :: (app: *State) -> i32 #export {
+    records: [MAX_SESSIONS]SessionRecord
+    restored: i32 = 0
+    active: i32 = 0
+    i: i32
+    cols: i32 = 100
+    rows: i32 = 30
+
+    if app == nil || app->session_count > 0 ||
+    app->config.command[0] != '\0' {
+        return 0
+    }
+    restored = session_store_load(records, MAX_SESSIONS, &active)
+    if restored <= 0 { return 0 }
+    estimate_terminal_grid(app, &cols, &rows)
+    i = 0
+    while i < restored {
+        record: *SessionRecord = &records[i]
+
+        if record->cwd[0] == '\0' {
+            snprintf(record->cwd, sizeof(record->cwd), "%s",
+            initial_cwd(&app->config))
+        }
+        if record->shell[0] == '\0' {
+            snprintf(record->shell, sizeof(record->shell), "%s",
+            app->config.shell)
+        }
+        session_init(&app->sessions[i])
+        session_open(&app->sessions[i], record->cwd, record->shell,
+        record->command, cols, rows,
+        config_effective_scrollback_limit(&app->config))
+        app->sessions[i].scroll_offset = max_int(0, record->scroll_offset)
+        apply_profile_defaults_to_terminal(app, &app->sessions[i].terminal)
+        if record->title[0] != '\0' {
+            session_restore_title(&app->sessions[i], record->title,
+            record->title_override)
+        }
+        i += 1
+    }
+    app->session_count = restored
+    app->active = clamp_int(active, 0, restored - 1)
+    app->selection.active = 0
+    app->rename_index = -1
+    return 1
+}

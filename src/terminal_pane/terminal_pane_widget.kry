@@ -1,0 +1,320 @@
+#module "terminal_pane_widget"
+#import "terminal_pane.h"
+#import "ui_internal.h"
+#import "ui_style_internal.h"
+#import "runtime/terminal_pane.h"
+#import "runtime/style.h"
+#import "stdio.h"
+
+TerminalPaneScale :: () -> float {
+    return (float)Scale(1000) / 1000.0
+}
+
+PaneColor :: (configured: Color, fallback: Color) -> Color {
+    if configured.r == 0 && configured.g == 0 &&
+    configured.b == 0 && configured.a == 0 { return fallback }
+    return configured
+}
+
+GetTerminalPaneThemeColors :: () -> TerminalPaneColors #export {
+    base: ControlStyle = (ControlStyle){0}
+    base.normal.opacity = 1
+    app: Style = ui_unpack_style(ResolveActiveStyle(
+    ui_pack_style_states(base).normal,
+    StyleDefaultFacts(StyleKindApp()), ButtonStateNormal))
+    surface_style: Style = ui_surface_style()
+    text_style: Style = ui_resolve_button_style_kind(
+    (ButtonProps){0}, ButtonStateNormal, StyleKindText())
+    link_style: Style = ui_resolve_button_style_kind(
+    (ButtonProps){0}, ButtonStateNormal, StyleKindLink())
+    bg: Color = app.background.a != 0
+    ? app.background : surface_style.background
+    value: Color = text_style.foreground
+    surface: Color = surface_style.background
+    link: Color = link_style.foreground
+    border_base: Color = surface
+    if surface.r == bg.r && surface.g == bg.g &&
+    surface.b == bg.b { border_base = value }
+    colors: TerminalPaneColors = (TerminalPaneColors){0}
+    colors.background = bg
+    colors.text = value
+    colors.muted_text = Fade(value, 0.70)
+    colors.selection = Fade(link, 0.28)
+    colors.selection_text = bg
+    colors.cursor = value
+    colors.link = link
+    colors.border = Fade(border_base, 0.72)
+    colors.scroll_indicator = Fade(bg, 0.82)
+    colors.scroll_indicator_text = Fade(value, 0.78)
+    colors.bell_overlay = Fade(link, 0.16)
+    colors.bell_border = Fade(link, 0.85)
+    return colors
+}
+
+ResolveTerminalPaneThemeColors :: (
+colors: TerminalPaneColors) -> TerminalPaneColors #export {
+    fallback: TerminalPaneColors = GetTerminalPaneThemeColors()
+    if colors.background.a == 0 {
+        colors.background = fallback.background
+    }
+    if colors.text.a == 0 {
+        colors.text = fallback.text
+    }
+    if colors.muted_text.a == 0 {
+        colors.muted_text = fallback.muted_text
+    }
+    if colors.selection.a == 0 {
+        colors.selection = fallback.selection
+    }
+    if colors.selection_text.a == 0 {
+        colors.selection_text = fallback.selection_text
+    }
+    if colors.cursor.a == 0 {
+        colors.cursor = fallback.cursor
+    }
+    if colors.link.a == 0 {
+        colors.link = fallback.link
+    }
+    if colors.border.a == 0 {
+        colors.border = fallback.border
+    }
+    if colors.scroll_indicator.a == 0 {
+        colors.scroll_indicator = fallback.scroll_indicator
+    }
+    if colors.scroll_indicator_text.a == 0 {
+        colors.scroll_indicator_text = fallback.scroll_indicator_text
+    }
+    if colors.bell_overlay.a == 0 {
+        colors.bell_overlay = fallback.bell_overlay
+    }
+    if colors.bell_border.a == 0 {
+        colors.bell_border = fallback.bell_border
+    }
+    return colors
+}
+
+MeasureTerminalPaneContent :: (content: Rectangle,
+font_size: i32) -> TerminalPaneMetrics #export {
+    metrics: TerminalPaneMetrics = (TerminalPaneMetrics){0}
+    policy: TerminalPaneMetricsPolicy =
+    TerminalPaneMetricsPolicyFor(TerminalPaneScale())
+    font: i32 = TerminalPaneFontSizeFor(font_size, policy)
+    metrics.cell_width = TextWidth("M", font)
+    if metrics.cell_width < 6 {
+        metrics.cell_width = font * 6 / 10
+    }
+    metrics.line_height = TerminalPaneLineHeightFor(
+    TextLineHeight(font), font, policy)
+    metrics.content = content
+    if metrics.content.width < 0 {
+        metrics.content.width = 0
+    }
+    if metrics.content.height < 0 {
+        metrics.content.height = 0
+    }
+    metrics.cols = metrics.cell_width > 0
+    ? (int)(metrics.content.width / metrics.cell_width) : 0
+    metrics.rows = metrics.line_height > 0
+    ? (int)(metrics.content.height / metrics.line_height) : 0
+    metrics.cols = TerminalPaneClampCols(metrics.cols,
+    TERMINAL_MAX_COLS, policy)
+    metrics.rows = TerminalPaneClampRows(metrics.rows,
+    TERMINAL_MAX_ROWS, policy)
+    return metrics
+}
+
+TerminalPaneContentBounds :: (bounds: Rectangle,
+top_inset: i32, padding: i32) -> Rectangle #export {
+    policy: TerminalPaneMetricsPolicy =
+    TerminalPaneMetricsPolicyFor(TerminalPaneScale())
+    return TerminalPaneContentBoundsFor(bounds, top_inset,
+    TerminalPanePaddingFor(padding, policy))
+}
+
+MeasureTerminalPane :: (bounds: Rectangle, font_size: i32,
+padding: i32) -> TerminalPaneMetrics #export {
+    return MeasureTerminalPaneContent(
+    TerminalPaneContentBounds(bounds, 0, padding), font_size)
+}
+
+FormatTerminalPaneScrollIndicatorLabel :: (out: *char,
+out_size: i32, scroll_offset: i32) -> i32 #export {
+    if out == nil || out_size <= 0 {
+        return 0
+    }
+    out[0] = '\0'
+    if scroll_offset <= 0 {
+        return 0
+    }
+    return snprintf(out, (size_t)out_size,
+    "%d lines", scroll_offset)
+}
+
+MeasureTerminalPaneScrollIndicator :: (
+indicator: TerminalPaneScrollIndicator) -> Rectangle #export {
+    badge: Rectangle = (Rectangle){0}
+    label: [64]char
+    if indicator.viewport.width <= 0 ||
+    indicator.viewport.height <= 0 ||
+    FormatTerminalPaneScrollIndicatorLabel(label,
+    (int)sizeof(label), indicator.scroll_offset) <= 0 {
+        return badge
+    }
+    metrics: TerminalPaneScrollIndicatorMetrics =
+    TerminalPaneScrollIndicatorMetricsFor(TerminalPaneScale())
+    font: i32 = indicator.font_size > 0
+    ? indicator.font_size : metrics.font_size
+    label_w: i32 = TextWidth(label, font)
+    return TerminalPaneScrollIndicatorBoundsFor(
+    indicator.viewport, label_w, metrics)
+}
+
+DrawTerminalPaneScrollIndicator :: (
+indicator: TerminalPaneScrollIndicator) -> Rectangle #export {
+    badge: Rectangle = MeasureTerminalPaneScrollIndicator(indicator)
+    label: [64]char
+    if badge.width <= 0 || badge.height <= 0 ||
+    FormatTerminalPaneScrollIndicatorLabel(label,
+    (int)sizeof(label), indicator.scroll_offset) <= 0 {
+        return badge
+    }
+    colors: TerminalPaneColors =
+    ResolveTerminalPaneThemeColors(indicator.colors)
+    metrics: TerminalPaneScrollIndicatorMetrics =
+    TerminalPaneScrollIndicatorMetricsFor(TerminalPaneScale())
+    font: i32 = indicator.font_size > 0
+    ? indicator.font_size : metrics.font_size
+    DrawRectangleRec(badge, colors.scroll_indicator)
+    DrawRectangleLines((int)badge.x, (int)badge.y,
+    (int)badge.width, (int)badge.height, colors.border)
+    RenderText(label, (int)badge.x + metrics.text_x,
+    (int)badge.y + metrics.text_y, font,
+    colors.scroll_indicator_text)
+    return badge
+}
+
+TerminalPaneHandleInput :: (terminal: *Terminal) -> i32 #export {
+    if terminal == nil || !terminal->running {
+        return 0
+    }
+    wrote: i32 = 0
+    control: i32 = IsKeyDown(KEY_LEFT_CONTROL) ||
+    IsKeyDown(KEY_RIGHT_CONTROL)
+    shift: i32 = IsKeyDown(KEY_LEFT_SHIFT) ||
+    IsKeyDown(KEY_RIGHT_SHIFT)
+    if control && !shift {
+        if IsKeyPressed(KEY_C) {
+            wrote += TerminalWrite(terminal, "\x03", 1)
+        }
+        if IsKeyPressed(KEY_D) {
+            wrote += TerminalWrite(terminal, "\x04", 1)
+        }
+        if IsKeyPressed(KEY_L) {
+            wrote += TerminalWrite(terminal, "\x0c", 1)
+        }
+        if wrote > 0 {
+            return wrote
+        }
+    }
+    if IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) {
+        wrote += TerminalWrite(terminal, "\r", 1)
+    }
+    if IsKeyPressed(KEY_BACKSPACE) {
+        wrote += TerminalWrite(terminal, "\x7f", 1)
+    }
+    if IsKeyPressed(KEY_TAB) {
+        wrote += TerminalWrite(terminal, "\t", 1)
+    }
+    if IsKeyPressed(KEY_UP) {
+        wrote += TerminalWrite(terminal, "\x1b[A", 3)
+    }
+    if IsKeyPressed(KEY_DOWN) {
+        wrote += TerminalWrite(terminal, "\x1b[B", 3)
+    }
+    if IsKeyPressed(KEY_RIGHT) {
+        wrote += TerminalWrite(terminal, "\x1b[C", 3)
+    }
+    if IsKeyPressed(KEY_LEFT) {
+        wrote += TerminalWrite(terminal, "\x1b[D", 3)
+    }
+    if IsKeyPressed(KEY_HOME) {
+        wrote += TerminalWrite(terminal, "\x1b[H", 3)
+    }
+    if IsKeyPressed(KEY_END) {
+        wrote += TerminalWrite(terminal, "\x1b[F", 3)
+    }
+    ch: i32 = GetCharPressed()
+    seq: [8]char
+    while ch > 0 {
+        if ch >= 32 && ch < 127 {
+            seq[0] = (char)ch
+            wrote += TerminalWrite(terminal, seq, 1)
+        }
+        ch = GetCharPressed()
+    }
+    return wrote
+}
+
+DrawTerminalPane :: (pane: TerminalPane) -> TerminalPaneResult #export {
+    result: TerminalPaneResult = (TerminalPaneResult){0}
+    metrics: TerminalPaneMetrics = MeasureTerminalPane(
+    pane.bounds, pane.font_size, pane.padding)
+    result.focused = pane.focused
+    result.cols = metrics.cols
+    result.rows = metrics.rows
+    theme: TerminalPaneColors = GetTerminalPaneThemeColors()
+    background: Color = PaneColor(pane.colors.background,
+    theme.background)
+    value: Color = PaneColor(pane.colors.text, theme.text)
+    cursor: Color = PaneColor(pane.colors.cursor, theme.cursor)
+    border: Color = PaneColor(pane.colors.border, theme.border)
+    policy: TerminalPaneMetricsPolicy =
+    TerminalPaneMetricsPolicyFor(TerminalPaneScale())
+    font: i32 = TerminalPaneFontSizeFor(pane.font_size, policy)
+    DrawRectangleRec(pane.bounds, background)
+    DrawRectangleLinesEx(pane.bounds, 1.0, border)
+    if CheckCollisionPointRec(GetMousePosition(), pane.bounds) &&
+    IsMouseButtonPressed(MOUSE_BUTTON_LEFT) {
+        result.focused = 1
+    }
+    if pane.terminal != nil {
+        if pane.terminal->running &&
+        (pane.terminal->cols != metrics.cols ||
+        pane.terminal->rows != metrics.rows) {
+            TerminalResize(pane.terminal, metrics.cols, metrics.rows)
+        }
+        if result.focused && pane.handle_input {
+            result.wrote_input = TerminalPaneHandleInput(pane.terminal)
+        }
+    }
+    BeginClip((int)metrics.content.x, (int)metrics.content.y,
+    (int)metrics.content.width, (int)metrics.content.height)
+    if pane.terminal != nil {
+        rows: i32 = pane.terminal->rows
+        if rows > metrics.rows {
+            rows = metrics.rows
+        }
+        row: i32 = 0
+        while row < rows {
+            line: [512]char
+            TerminalLine(pane.terminal, row, line, (int)sizeof(line))
+            RenderText(line, (int)metrics.content.x,
+            (int)metrics.content.y + row * metrics.line_height,
+            font, value)
+            row += 1
+        }
+        cursor_on: i32 = ((int)(GetTime() * 2.0) & 1) == 0
+        if result.focused && pane.show_cursor && cursor_on &&
+        pane.terminal->cx >= 0 && pane.terminal->cy >= 0 &&
+        pane.terminal->cx < metrics.cols &&
+        pane.terminal->cy < metrics.rows {
+            DrawRectangle((int)metrics.content.x +
+            pane.terminal->cx * metrics.cell_width,
+            (int)metrics.content.y +
+            pane.terminal->cy * metrics.line_height,
+            metrics.cell_width, metrics.line_height, cursor)
+        }
+    }
+    EndClip()
+    return result
+}

@@ -8,10 +8,7 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#include "terminal.h"
-
-#include "terminal_screen.h"
-#include "terminal_sixel.h"
+#include "terminal_pty.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -126,30 +123,27 @@ sanitize_terminal_child_path(void)
         setenv("PATH", clean, 1);
 }
 
-int terminal_spawn(TerminalState *terminal, const char *cwd, const char *shell,
-                   const char *command, int cols, int rows)
+int TerminalPtyOpen(const char *cwd, const char *shell, const char *command,
+                    int cols, int rows, int *out_pid)
 {
     int master;
     int pid;
 
-    if(terminal == NULL)
-        return 0;
-    terminal_close(terminal);
-    terminal_init(terminal);
-    if(!terminal_allocate_screen(terminal, cols, rows))
-        return 0;
+    if(out_pid == NULL)
+        return -1;
+    *out_pid = -1;
     master = posix_openpt(O_RDWR | O_NOCTTY);
     if(master < 0)
-        return 0;
+        return -1;
     if(grantpt(master) != 0 || unlockpt(master) != 0) {
         close(master);
-        return 0;
+        return -1;
     }
-    set_window_size(master, terminal->cols, terminal->rows);
+    set_window_size(master, cols, rows);
     pid = fork();
     if(pid < 0) {
         close(master);
-        return 0;
+        return -1;
     }
     if(pid == 0) {
         const char *slave_name = ptsname(master);
@@ -199,146 +193,63 @@ int terminal_spawn(TerminalState *terminal, const char *cwd, const char *shell,
         if(flags >= 0)
             fcntl(master, F_SETFL, flags | O_NONBLOCK);
     }
-    terminal->pid = pid;
-    terminal->fd = master;
-    terminal->running = 1;
-    return 1;
+    *out_pid = pid;
+    return master;
 }
 
-int terminal_open(TerminalState *terminal, const char *cwd, int cols, int rows)
-{
-    return terminal_spawn(terminal, cwd, NULL, NULL, cols, rows);
-}
-
-int terminal_write(TerminalState *terminal, const void *data, int size)
+int TerminalPtyWrite(int fd, const void *data, int size)
 {
     int written;
 
-    if(terminal == NULL || !terminal->running || terminal->fd < 0 ||
-       data == NULL || size <= 0)
+    if(fd < 0 || data == NULL || size <= 0)
         return 0;
-    written = (int)write(terminal->fd, data, (size_t)size);
+    written = (int)write(fd, data, (size_t)size);
     return written > 0 ? written : 0;
 }
 
-int terminal_write_text(TerminalState *terminal, const char *text)
+int TerminalPtyRead(int fd, void *buffer, int buffer_size)
 {
-    if(text == NULL)
+    int got;
+
+    if(fd < 0 || buffer == NULL || buffer_size <= 0)
+        return -1;
+    got = (int)read(fd, buffer, (size_t)buffer_size);
+    if(got > 0)
+        return got;
+    if(got == 0)
+        return -1;
+    if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
         return 0;
-    return terminal_write(terminal, text, (int)strlen(text));
+    return -1;
 }
 
-int terminal_poll_bytes(TerminalState *terminal)
+void TerminalPtyResize(int fd, int cols, int rows)
 {
-    char buffer[4096];
+    if(fd >= 0)
+        set_window_size(fd, cols, rows);
+}
+
+int TerminalPtyChildExited(int pid)
+{
     int status;
-    int closed = 0;
-    int bytes = 0;
 
-    if(terminal == NULL || terminal->fd < 0)
-        return 0;
-    for(;;) {
-        int got = (int)read(terminal->fd, buffer, sizeof(buffer));
-
-        if(got < 0) {
-            if(errno == EINTR)
-                continue;
-            if(errno == EAGAIN || errno == EWOULDBLOCK)
-                break;
-            if(errno == EIO)
-                closed = 1;
-            break;
-        }
-        if(got == 0) {
-            closed = 1;
-            break;
-        }
-        terminal_feed(terminal, buffer, got);
-        bytes += got;
-    }
-    if(terminal->running && terminal->pid > 0) {
-        if(waitpid(terminal->pid, &status, WNOHANG) > 0)
-            terminal->running = 0;
-    }
-    if(closed && terminal->fd >= 0) {
-        close(terminal->fd);
-        terminal->fd = -1;
-        terminal->running = 0;
-    }
-    return bytes;
+    if(pid <= 0)
+        return 1;
+    return waitpid(pid, &status, WNOHANG) > 0;
 }
 
-int terminal_poll(TerminalState *terminal)
+void TerminalPtySignal(int pid, int signal_number)
 {
-    if(terminal == NULL)
-        return 0;
-    terminal_poll_bytes(terminal);
-    return terminal->running;
+    signal_terminal_process_group(pid, signal_number);
 }
 
-void terminal_resize(TerminalState *terminal, int cols, int rows)
+int TerminalPtyWaitExit(int pid, int timeout_ms)
 {
-    if(terminal == NULL)
-        return;
-    cols = terminal_clamp_int(cols, 8, MAX_COLS);
-    rows = terminal_clamp_int(rows, 4, MAX_ROWS);
-    if(cols == terminal->cols && rows == terminal->rows)
-        return;
-    if(!terminal_allocate_screen(terminal, cols, rows))
-        return;
-    if(terminal->fd >= 0)
-        set_window_size(terminal->fd, terminal->cols, terminal->rows);
+    return wait_for_child_exit(pid, timeout_ms);
 }
 
-void terminal_set_scrollback_limit(TerminalState *terminal, int rows)
+void TerminalPtyClose(int fd)
 {
-    if(terminal == NULL)
-        return;
-    if(rows < 0)
-        rows = 0;
-    if(rows > 1000000)
-        rows = 1000000;
-    if(rows == 0)
-        rows = SCROLLBACK_LIMIT;
-    terminal->scrollback_limit = rows;
-    if(terminal->cols > 0)
-        terminal_allocate_scrollback(terminal);
-}
-
-void terminal_set_ambiguous_width(TerminalState *terminal, int wide)
-{
-    if(terminal == NULL)
-        return;
-    terminal->ambiguous_width_wide = wide ? 1 : 0;
-}
-
-void terminal_close(TerminalState *terminal)
-{
-    if(terminal == NULL)
-        return;
-    if(terminal->fd >= 0) {
-        close(terminal->fd);
-        terminal->fd = -1;
-    }
-    if(terminal->running && terminal->pid > 0) {
-        signal_terminal_process_group(terminal->pid, SIGHUP);
-        signal_terminal_process_group(terminal->pid, SIGTERM);
-        if(!wait_for_child_exit(terminal->pid, 200)) {
-            signal_terminal_process_group(terminal->pid, SIGKILL);
-            (void)wait_for_child_exit(terminal->pid, 500);
-        }
-    } else if(terminal->pid > 0) {
-        (void)waitpid(terminal->pid, NULL, WNOHANG);
-    }
-    free(terminal->main_cells);
-    free(terminal->alt_cells);
-    free(terminal->scrollback);
-    free(terminal->main_wrapped);
-    free(terminal->alt_wrapped);
-    free(terminal->scrollback_wrapped);
-    free(terminal->tab_stops);
-    terminal_sixel_clear_images(terminal, -1);
-    free(terminal->sixel_images);
-    FreeTerminalPaneDCSBuffer(&terminal->dcs);
-    terminal_init(terminal);
+    if(fd >= 0)
+        close(fd);
 }

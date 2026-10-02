@@ -1,0 +1,37 @@
+#program_export
+AppendTerminalPaneUTF8Codepoint :: (output: *u8, output_size: s32,
+    used: *s32, codepoint: u32) -> bool {
+    if output == null || used == null || output_size <= 0 ||
+       used.* < 0 || used.* >= output_size { return false }
+    output[used.*] = 0
+    if codepoint == 0 || codepoint > 0x10ffff { return false }
+
+    width: s32 = 1
+    if codepoint >= 0x10000 {
+        width = 4
+    } else if codepoint >= 0x800 {
+        width = 3
+    } else if codepoint >= 0x80 {
+        width = 2
+    }
+    if used.* + width >= output_size { return false }
+
+    if width == 1 {
+        output[used.*] = cast(u8)codepoint
+    } else if width == 2 {
+        output[used.*] = cast(u8)(0xc0 | (codepoint >> 6))
+        output[used.* + 1] = cast(u8)(0x80 | (codepoint & 0x3f))
+    } else if width == 3 {
+        output[used.*] = cast(u8)(0xe0 | (codepoint >> 12))
+        output[used.* + 1] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))
+        output[used.* + 2] = cast(u8)(0x80 | (codepoint & 0x3f))
+    } else {
+        output[used.*] = cast(u8)(0xf0 | (codepoint >> 18))
+        output[used.* + 1] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3f))
+        output[used.* + 2] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3f))
+        output[used.* + 3] = cast(u8)(0x80 | (codepoint & 0x3f))
+    }
+    used.* += width
+    output[used.*] = 0
+    return true
+}

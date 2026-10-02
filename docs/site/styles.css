@@ -753,3 +753,6 @@ td, th { border-color: var(--line); }
   .hero { min-height: auto; padding-top: 70px; }
   .hero h1 { font-size: clamp(68px, 22vw, 110px); }
 }
+.migration-banner{width:min(1120px,calc(100% - 40px));margin:24px auto 0;padding:14px 18px;border:1px solid #d7d9cd;border-left:4px solid #a64e32;border-radius:5px;background:#fffcf6;color:#202c29;font-size:14px;line-height:1.6}
+.migration-banner code{font-size:.95em}
+.migration-banner a{color:#315e48}

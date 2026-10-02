@@ -1,0 +1,99 @@
+#import "terminal_pane_modes"
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+#program_export
+main :: () -> s32 {
+    state: TerminalPaneModeState
+    output: [64]u8
+
+    if TerminalPaneModeStateSetMode(*state, 4, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.insert_mode != 1 { return 1 }
+    if TerminalPaneModeStateSetMode(*state, 20, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.newline_mode != 1 { return 2 }
+    if TerminalPaneModeReportStatus(state, 0, 4) != 1 ||
+       TerminalPaneModeReportStatus(state, 0, 20) != 1 { return 3 }
+
+    if TerminalPaneModeStateSetPrivateMode(*state, 12, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.cursor_blink != 1 { return 4 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 25, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.cursor_visible != 1 { return 5 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 6, 1) !=
+       TERMINAL_PANE_MODE_ACTION_ORIGIN_CURSOR || state.origin_mode != 1 { return 6 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 7, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.autowrap != 1 { return 7 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE ||
+       state.application_cursor_keys != 1 { return 8 }
+
+    if TerminalPaneModeStateSetPrivateMode(*state, 1000, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_mode != 1000 { return 9 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1000, 0) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_mode != 0 { return 10 }
+
+    state.mouse_sgr = 1
+    state.mouse_urxvt = 1
+    state.mouse_pixels = 1
+    if TerminalPaneModeStateSetPrivateMode(*state, 1005, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_utf8 != 1 ||
+       state.mouse_sgr != 0 || state.mouse_urxvt != 0 ||
+       state.mouse_pixels != 0 { return 11 }
+    state.mouse_utf8 = 1
+    if TerminalPaneModeStateSetPrivateMode(*state, 1006, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_sgr != 1 ||
+       state.mouse_utf8 != 0 { return 12 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1007, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.alternate_scroll != 1 { return 13 }
+    state.mouse_utf8 = 1
+    state.mouse_sgr = 1
+    if TerminalPaneModeStateSetPrivateMode(*state, 1015, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_urxvt != 1 ||
+       state.mouse_utf8 != 0 || state.mouse_sgr != 0 { return 14 }
+    state.mouse_utf8 = 1
+    state.mouse_sgr = 1
+    state.mouse_urxvt = 1
+    if TerminalPaneModeStateSetPrivateMode(*state, 1016, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.mouse_pixels != 1 ||
+       state.mouse_utf8 != 0 || state.mouse_sgr != 0 ||
+       state.mouse_urxvt != 0 { return 15 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 2004, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.bracketed_paste != 1 { return 16 }
+
+    if TerminalPaneModeStateSetPrivateMode(*state, 1048, 1) !=
+       TERMINAL_PANE_MODE_ACTION_SAVE_CURSOR { return 17 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1048, 0) !=
+       TERMINAL_PANE_MODE_ACTION_RESTORE_CURSOR { return 18 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 47, 1) !=
+       TERMINAL_PANE_MODE_ACTION_NONE || state.alternate_screen != 1 { return 19 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1047, 1) !=
+       TERMINAL_PANE_MODE_ACTION_CLEAR_SCREEN { return 20 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1047, 0) !=
+       TERMINAL_PANE_MODE_ACTION_CLEAR_ALTERNATE ||
+       state.alternate_screen != 0 { return 21 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1049, 1) !=
+       (TERMINAL_PANE_MODE_ACTION_SAVE_CURSOR |
+        TERMINAL_PANE_MODE_ACTION_CLEAR_SCREEN) ||
+       state.alternate_screen != 1 { return 22 }
+    if TerminalPaneModeStateSetPrivateMode(*state, 1049, 0) !=
+       (TERMINAL_PANE_MODE_ACTION_CLEAR_ALTERNATE |
+        TERMINAL_PANE_MODE_ACTION_RESTORE_CURSOR) ||
+       state.alternate_screen != 0 { return 23 }
+
+    state.bracketed_paste = 1
+    if TerminalPaneModeReportStatus(state, 1, 2004) != 1 { return 24 }
+    if FormatTerminalPaneModeReport(*output[0], 64, state, 0, 4) != 7 ||
+       !Same(*output[0], "\x1b[4;1$y") { return 25 }
+    if FormatTerminalPaneModeReport(*output[0], 64, state, 1, 2004) != 11 ||
+       !Same(*output[0], "\x1b[?2004;1$y") { return 26 }
+    output[0] = 120
+    if FormatTerminalPaneModeReport(*output[0], 4, state, 1, 2004) != 0 ||
+       output[0] != 0 { return 27 }
+    return 0
+}

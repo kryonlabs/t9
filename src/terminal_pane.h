@@ -1,21 +1,35 @@
 #ifndef TERMINAL_PANE_H
 #define TERMINAL_PANE_H
 
+<<<<<<< HEAD
+#include "kryon.h"
+#include "simple_terminal.h"
+=======
 #include "kryon_compat.generated.h"
 #include "kryon_terminal.h"
+>>>>>>> b35bbfc (Relocate the terminal pane engine from kryon into t9)
 #include "ui_clipboard.generated.h"
 
 #include <stddef.h>
 
+<<<<<<< HEAD
+=======
 /* t9-local: kryon replaced the ClipboardPasteWriteFn typedef with the
  * ClipboardPasteWrite entry point; the pane keeps its own callback slot. */
 typedef int (*ClipboardPasteWriteFn)(void *userdata, const char *text,
                                      int size);
 
+>>>>>>> b35bbfc (Relocate the terminal pane engine from kryon into t9)
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+<<<<<<< HEAD
+typedef int32_t (*ClipboardPasteWriteFn)(void *userdata, const char *text,
+                                         int32_t size);
+
+=======
+>>>>>>> b35bbfc (Relocate the terminal pane engine from kryon into t9)
 typedef struct TerminalPaneColors {
     Color background;
     Color text;

@@ -2,6 +2,10 @@
 #define KTREM_TERMINAL_H
 
 #include "terminal_pane.h"
+<<<<<<< HEAD
+#include "ui_clipboard.generated.h"
+=======
+>>>>>>> b35bbfc (Relocate the terminal pane engine from kryon into t9)
 
 #include <stddef.h>
 

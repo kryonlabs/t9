@@ -174,6 +174,23 @@ TerminalPaneColors ResolveTerminalPaneThemeColors(TerminalPaneColors colors)
     return colors;
 }
 
+/* The pane widget object (which owns the real metrics helpers) stays out of
+   this link; app_sessions only needs them to resolve. */
+Rectangle TerminalPaneContentBounds(Rectangle bounds, int top_inset,
+                                    int padding)
+{
+    (void)top_inset;
+    (void)padding;
+    return bounds;
+}
+
+TerminalPaneMetrics MeasureTerminalPaneContent(Rectangle content,
+                                               int font_size)
+{
+    (void)font_size;
+    return (TerminalPaneMetrics){0, 0, 0, 0, content};
+}
+
 void SetClipboardText(const char *text)
 {
     if(text == NULL)
