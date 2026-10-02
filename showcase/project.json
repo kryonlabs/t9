@@ -5,8 +5,8 @@
   "summary": "Native terminal application with sessions, tabs, and focused developer workflows.",
   "repository": {
     "platform": "github",
-    "url": "https://github.com/kryonlabs/t9",
-    "owner": "kryonlabs",
+    "url": "https://github.com/taijiosnet/t9",
+    "owner": "taijiosnet",
     "name": "t9"
   },
   "homepage": "https://ktrem.kryonlabs.com",

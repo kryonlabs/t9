@@ -1,0 +1,11 @@
+[package]
+name = "t9"
+module_roots = ["src/terminal_pane", "tests"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "master"
+
+[dependencies.kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "master"

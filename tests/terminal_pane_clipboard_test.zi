@@ -1,0 +1,237 @@
+#import "terminal_pane_selection"
+#import "terminal_pane_clipboard"
+
+ClipboardFixture :: struct {
+    lines: [3][64]u8
+    wrapped: [3]s32
+}
+
+primary_value: [256]u8;
+clipboard_value: [256]u8;
+host_paste_value: [256]u8;
+callback_paste_value: [256]u8;
+source_paste_value: [256]u8;
+last_source: s32 = -1;
+last_bracketed_paste: s32 = -1;
+sync_count: s32 = 0;
+flush_count: s32 = 0;
+
+Fill :: (output: *u8, value: string) {
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = 0
+}
+
+CopyText :: (destination: *u8, source: *u8) {
+    index: s32 = 0
+    destination[0] = 0
+    if source == null { return }
+    while source[index] != 0 && index < 255 {
+        destination[index] = source[index]
+        index += 1
+    }
+    destination[index] = 0
+}
+
+Same :: (value: *u8, expected: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] { return false }
+        index += 1
+    }
+    return value[index] == 0
+}
+
+TextLength :: (text: *u8) -> s32 {
+    length: s32 = 0
+    if text == null { return 0 }
+    while text[length] != 0 { length += 1 }
+    return length
+}
+
+#program_export
+SetPrimarySelectionFromText :: (text: *u8) -> s32 {
+    CopyText(*primary_value[0], text)
+    return 1
+}
+
+#program_export
+CopySelectionTextToClipboard :: (clipboard: *void, text: *u8) -> s32 {
+    if clipboard == null || text == null { return 0 }
+    CopyText(*clipboard_value[0], text)
+    return 1
+}
+
+#program_export
+WriteClipboardTextPaste :: (clipboard: *ClipboardBuffer, text: *u8,
+    bracketed: s32, write_text: ClipboardPasteWriteFn,
+    userdata: *void) -> s32 {
+    if clipboard == null || text == null { return 0 }
+    CopyText(*host_paste_value[0], text)
+    last_bracketed_paste = bracketed
+    if write_text == null { return 0 }
+    if write_text(userdata, text, TextLength(text)) == 0 { return 0 }
+    return 1
+}
+
+#program_export
+WriteClipboardSourcePaste :: (clipboard: *ClipboardBuffer,
+    source: s32, bracketed: s32, write_text: ClipboardPasteWriteFn,
+    userdata: *void) -> s32 {
+    value: [32]u8
+    if clipboard == null || write_text == null { return 0 }
+    last_source = source
+    last_bracketed_paste = bracketed
+    if source == CLIPBOARD_SOURCE_PRIMARY {
+        Fill(*value[0], "primary text")
+    } else {
+        Fill(*value[0], "clipboard text")
+    }
+    if write_text(userdata, *value[0], TextLength(*value[0])) == 0 { return 0 }
+    return 1
+}
+
+#program_export
+ClipboardSourceHasText :: (source: s32) -> s32 {
+    if source == CLIPBOARD_SOURCE_PRIMARY { return 1 }
+    if source == CLIPBOARD_SOURCE_CLIPBOARD { return 0 }
+    return 1
+}
+
+#program_export
+SyncClipboardBufferFromHost :: (clipboard: *ClipboardBuffer) -> s32 {
+    if clipboard == null { return 0 }
+    sync_count += 1
+    return 1
+}
+
+#program_export
+FlushClipboardBufferToHost :: (clipboard: *ClipboardBuffer) -> s32 {
+    if clipboard == null { return 0 }
+    flush_count += 1
+    return 1
+}
+
+FixtureLineText :: (userdata: *void, row: s32, out: *u8,
+    out_size: s32) -> s32 {
+    fixture: *ClipboardFixture
+    index: s32 = 0
+    if userdata == null || out == null || out_size <= 0 ||
+       row < 0 || row >= 3 { return 0 }
+    fixture = cast(*ClipboardFixture)userdata
+    while fixture.lines[row][index] != 0 && index < out_size - 1 {
+        out[index] = fixture.lines[row][index]
+        index += 1
+    }
+    out[index] = 0
+    return 1
+}
+
+FixtureWrapped :: (userdata: *void, row: s32) -> s32 {
+    fixture: *ClipboardFixture
+    if userdata == null || row < 0 || row >= 3 { return 0 }
+    fixture = cast(*ClipboardFixture)userdata
+    return fixture.wrapped[row]
+}
+
+WriteInput :: (userdata: *void, text: *u8, size: s32) -> s32 {
+    if userdata == null || text == null || size <= 0 { return 0 }
+    CopyText(*callback_paste_value[0], text)
+    return 1
+}
+
+#program_export
+main :: () -> s32 {
+    fixture: ClipboardFixture
+    storage: [16]u8
+    selection: TerminalPaneSelection
+    text: [64]u8
+    clipboard: TerminalPaneClipboard
+    selection_controller: TerminalPaneClipboardController
+    session_controller: TerminalPaneClipboardController
+    actions: TerminalPaneClipboardActions
+    command_result: TerminalPaneClipboardCommandResult
+    selection_scroll: s32 = 7
+    session_scroll: s32 = 9
+
+    Fill(*fixture.lines[0][0], "alpha beta")
+    Fill(*fixture.lines[1][0], "gamma delta")
+    Fill(*fixture.lines[2][0], "epsilon")
+    fixture.wrapped[0] = 1
+
+    clipboard = MakeTerminalPaneClipboard(
+        cast(*ClipboardBuffer)*storage[0], 2, WriteInput, cast(*void)*storage[0])
+    if clipboard.bracketed_paste != 1 { return 1 }
+
+    selection_controller = MakeTerminalPaneClipboardController(clipboard,
+        *selection, FixtureLineText, FixtureWrapped, cast(*void)*fixture,
+        3, 11, *selection_scroll)
+    session_controller = TerminalPaneClipboardController.{}
+    session_controller.clipboard = clipboard
+    session_controller.scroll_offset = *session_scroll
+    actions = MakeTerminalPaneClipboardActions(selection_controller,
+        session_controller)
+
+    Fill(*text[0], "typed paste")
+    if TerminalPaneClipboardPasteText(clipboard, *text[0]) != 1 ||
+       !Same(*host_paste_value[0], "typed paste") ||
+       !Same(*callback_paste_value[0], "typed paste") ||
+       last_bracketed_paste != 1 { return 2 }
+
+    if TerminalPaneClipboardPastePrimary(clipboard) != 1 ||
+       last_source != CLIPBOARD_SOURCE_PRIMARY ||
+       !Same(*callback_paste_value[0], "primary text") { return 3 }
+    if TerminalPaneClipboardPasteClipboard(clipboard) != 1 ||
+       last_source != CLIPBOARD_SOURCE_CLIPBOARD ||
+       !Same(*callback_paste_value[0], "clipboard text") { return 4 }
+    if TerminalPaneClipboardPastePreferred(clipboard) != 1 ||
+       last_source != CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD { return 5 }
+    if TerminalPaneClipboardSourceHasText(CLIPBOARD_SOURCE_PRIMARY) != 1 ||
+       TerminalPaneClipboardSourceHasText(CLIPBOARD_SOURCE_CLIPBOARD) != 0 ||
+       TerminalPaneClipboardPrimarySelectionAvailable() != 1 { return 6 }
+
+    if TerminalPaneClipboardSyncFromHost(clipboard) != 1 || sync_count != 1 { return 7 }
+    if TerminalPaneClipboardFlushToHost(clipboard) != 1 || flush_count != 1 { return 8 }
+
+    TerminalPaneSelectionSetRange(*selection,
+        TERMINAL_PANE_SELECTION_CHAR, 1, 0, 6, 1, 11)
+    if TerminalPaneClipboardCollectSelectionText(actions, *text[0], 64) != 1 { return 90 }
+    if !Same(*text[0], "betagamma delta") { return 91 }
+    if TerminalPaneClipboardUpdatePrimary(actions) != 1 ||
+       !Same(*primary_value[0], "betagamma delta") { return 10 }
+    if TerminalPaneClipboardCopy(actions) != 1 ||
+       !Same(*clipboard_value[0], "betagamma delta") { return 11 }
+
+    TerminalPaneSelectionClear(*selection)
+    if TerminalPaneClipboardSelectAll(actions) != 1 ||
+       selection.active != 1 || selection.start_row != 0 ||
+       selection.start_col != 0 || selection.end_row != 2 ||
+       selection.end_col != 11 { return 12 }
+
+    Fill(*text[0], "action paste")
+    command_result = TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_TEXT, *text[0])
+    if command_result.performed != 1 || command_result.wrote_input != 1 ||
+       session_scroll != 0 || selection_scroll != 7 ||
+       !Same(*callback_paste_value[0], "action paste") { return 13 }
+
+    command_result = TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST, null)
+    if command_result.performed != 1 || command_result.wrote_input != 0 ||
+       sync_count != 2 { return 14 }
+    command_result = TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST, null)
+    if command_result.performed != 1 || command_result.wrote_input != 0 ||
+       flush_count != 2 { return 15 }
+
+    command_result = TerminalPaneClipboardRunSimpleCommand(clipboard,
+        *session_scroll, TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY, null)
+    if command_result.performed != 1 || command_result.wrote_input != 1 ||
+       session_scroll != 0 ||
+       !Same(*callback_paste_value[0], "primary text") { return 16 }
+
+    return 0
+}

@@ -51,14 +51,14 @@
     </div>
   </header>
 
-  <div class="migration-banner"><strong>Migration note:</strong> Ziran (<code>.zi</code>) is t9’s maintained source language. Each migrated module deletes its legacy input; the transition build still contains modules awaiting that final deletion.</div>
+  <div class="migration-banner"><strong>Migration note:</strong> Ziran (<code>.zi</code>) is t9’s maintained source language. Independent clipboard and selection checks work with current Ziran. Full application builds still require legacy Kryon/k2c APIs; the remaining migration is in progress.</div>
   <main id="top">
     <section class="hero">
       <div class="hero-inner">
         <span class="hero-eyebrow"><span class="dot"></span>Terminal emulator · Ziran migration</span>
         <img class="hero-icon" src="favicon.svg" width="84" height="84" alt="t9">
         <h1>t9</h1>
-        <p class="hero-sub">t9 is a Linux terminal with its maintained product sources in Ziran and its visual boundary moving to Ziran-based Kryon. Recorded benchmarks come from the current transition build.</p>
+        <p class="hero-sub">t9 is Taiji OS’s Terminal application, moving its product sources and visual boundary to Ziran-based Kryon. Recorded benchmarks describe an earlier transition build; a full build with current Kryon remains migration work.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#benchmarks">View benchmarks</a>
           <a class="btn" href="#parity">Parity matrix</a>
@@ -232,14 +232,12 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
     <section id="install" class="callout">
       <div class="callout-inner">
         <p class="section-eyebrow">Install</p>
-        <h2>Build t9 locally</h2>
-        <p>t9 currently builds from source against a neighboring Kryon checkout. Install commands and package links will move here as release assets become available.</p>
-<pre><code>git clone https://github.com/kryonlabs/kryon.git
-git clone https://github.com/kryonlabs/t9.git
+        <h2>Check t9 locally</h2>
+        <p>Install Ziran on your PATH, then run the independent pane checks. Package lookup uses the committed lock. Full application builds and installation still require legacy Kryon/k2c APIs while the remaining migration is underway.</p>
+<pre><code>git clone https://github.com/taijiosnet/t9.git
 cd t9
-make
-make test
-make install</code></pre>
+make pane-ziran-test
+make clipboard-plan9-c</code></pre>
       </div>
     </section>
 
@@ -256,7 +254,7 @@ make install</code></pre>
   </main>
 
   <footer class="site-footer">
-    <p>&copy; 2026 Kryon Labs - <a href="https://kryonlabs.com">Kryon</a> - <a href="https://github.com/kryonlabs/t9">GitHub</a></p>
+    <p>&copy; 2026 Taiji OS - <a href="https://kryonlabs.com">Kryon</a> - <a href="https://github.com/taijiosnet/t9">GitHub</a></p>
   </footer>
 
   <script>

@@ -1,35 +1,60 @@
 # Terminal (`t9`)
 
-t9 is a standalone terminal application using Kryon for windowing,
+t9 is the standalone Terminal application maintained by
+[Taiji OS](https://github.com/taijiosnet), using Kryon for windowing,
 rendering, input, and platform integration. The terminal emulator belongs here,
 not in Kryon.
 
 ```sh
-make
-make run
-make test
-make install
+make pane-ziran-test
+make clipboard-plan9-c
 ```
+
+These independent clipboard and selection tests use the locked Ziran
+toolchain or a canonical local override. The Plan 9 target emits C; it does
+not prove native compilation or execution.
+
+The full `make`, `make run`, `make test`, and `make install` routes retain
+the transition application's legacy Kryon/k2c pipeline. They currently need
+legacy compiler and C-header APIs that current Kryon has removed. Completing
+the application migration is separate from repository consolidation; the
+focused test results do not establish a working full application build.
 
 `make install` installs the `t9` command, the Rill host module, and a
 desktop launcher named Terminal.
 The default `PREFIX` is `~/.local`.
 
-Release builds are covered by `.github/workflows/release.yml`: pull requests
-and pushes run the Linux build/test path, and published GitHub Releases upload
-Linux `tar.gz`, `.deb`, and `.AppImage` assets plus checksums. The remaining
+The legacy release workflow is in `.github/workflows/release.yml`; it must
+be updated with the full application build during the remaining migration.
+Its intended assets are Linux `tar.gz`, `.deb`, and `.AppImage` packages.
+The remaining
 feature and release-readiness plan is tracked in
 `docs/REMAINING_FEATURE_PLAN.md`.
 t9's maintained source language is Ziran. The migration from the legacy
 `.kry`/k2c stack is tracked in `docs/ZIRAN_MIGRATION.md`; migrated modules are
 removed from the legacy set only after focused hosted and Plan 9 checks pass.
-`make test` runs the engine, pane, and live-process suites.
+`make test` includes the engine, pane, and live-process suites when that
+legacy application pipeline is available.
 
-By default the build uses `../kryon`. Override with:
+Dependencies resolve through `scripts/ziran.sh`, `ziran.toml`, and the
+committed `ziran.lock`. Install Ziran on `PATH` for a locked checkout. The
+wrapper selects the package toolchain; if it has not been built, it prints
+the exact compiler build command.
 
-```sh
-make ENGINE_DIR=/path/to/kryon
+For local development, create the ignored `ziran.local.toml` with canonical
+organization-root overrides:
+
+```toml
+[overrides]
+ziran = "../../ziranlang/ziran"
+kryon = "../../kryonlabs/kryon"
 ```
+
+Additional source-package overrides, such as Kryon's `raylib` dependency,
+may point to an existing local package checkout. Without local overrides,
+package lookup uses `--locked`. A legacy Kryon build can still be selected
+explicitly with `make ENGINE_DIR=/path/to/compatible/kryon` while the
+remaining modules migrate.
 
 Run options:
 

@@ -1,10 +1,12 @@
 CC ?= cc
-ENGINE_DIR ?= ../kryon
-ZIRAN_DIR ?= ../ziran
-ZIRAN ?= $(ZIRAN_DIR)/build/bin/ziran
+.DEFAULT_GOAL := all
+ZIRAN ?= ./scripts/ziran.sh
+LOCK_FLAGS := $(if $(wildcard ziran.local.toml),,--locked)
+ENGINE_DIR ?= $(shell $(ZIRAN) pkg path kryon $(LOCK_FLAGS))
+ZIRAN_DIR ?= $(shell $(ZIRAN) pkg path ziran $(LOCK_FLAGS))
 BUILD_ROOT ?= build
 KRYON_BACKEND ?= raylib
-PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
+PLAN9PORT_DIR ?= $(PLAN9)
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 RILL_APP_HOSTDIR ?= $(PREFIX)/lib/rill/apps
@@ -33,6 +35,7 @@ ENGINE_BUILD_ROOT ?= $(ENGINE_DIR)/build
 ENGINE_BUILD_DIR ?= $(ENGINE_BUILD_ROOT)/$(PLATFORM)-$(ARCH)
 ENGINE_LIB = $(ENGINE_BUILD_DIR)/libkryon.a
 ENGINE_K2C = $(ENGINE_BUILD_DIR)/bin/k2c
+KRYON_FONT_PATH ?= $(firstword $(wildcard $(ENGINE_DIR)/assets/fonts/LiberationSans-Regular.ttf $(ENGINE_DIR)/fonts/noto/NotoSans-Regular.ttf))
 PANE_C_FILES := $(sort $(wildcard src/terminal_pane/*.c))
 PANE_C_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PANE_C_FILES))
 PANE_KRY := $(sort $(wildcard src/terminal_pane/*.kry))
@@ -104,6 +107,11 @@ PANE_SELECTION_TEST_ZIRAN = $(BUILD_DIR)/tests/terminal_pane_selection_ziran_tes
 PANE_SELECTION_TEST_ZIRAN_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_selection_ziran
 PANE_SELECTION_TEST_ZIRAN_C = $(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection.c \
 	$(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection_test.c
+PANE_CLIPBOARD_TEST = $(BUILD_DIR)/tests/terminal_pane_clipboard_test
+PANE_CLIPBOARD_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_clipboard
+PANE_CLIPBOARD_TEST_C = $(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_selection.c \
+	$(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_clipboard.c \
+	$(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_clipboard_test.c
 PANE_PROFILE_COLORS_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_colors_test
 PANE_PROFILE_COLORS_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_colors
 PANE_PROFILE_COLORS_TEST_C = $(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_types.c \
@@ -228,7 +236,7 @@ CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include -I$(ENGINE_DIR)/src/ui \
 	-I$(ENGINE_BUILD_DIR)/generated/src/runtime \
 	-I$(ENGINE_BUILD_DIR)/generated/include \
 	$(BACKEND_CFLAGS) $(SYSTEM_THEME_CFLAGS) \
-	-DKTREM_KRYON_FONT_PATH=\"$(abspath $(ENGINE_DIR))/fonts/noto/NotoSans-Regular.ttf\" \
+	-DKTREM_KRYON_FONT_PATH=\"$(KRYON_FONT_PATH)\" \
 	-DHAS_LIBOQS=1 -I$(ENGINE_BUILD_DIR)/vendor/liboqs/include \
 	-DHAS_LIBCURL=1 -DCURL_STATICLIB -I$(ENGINE_BUILD_DIR)/vendor/curl/include \
 	-DKRYON_HAS_CMARK_GFM=1 \
@@ -243,6 +251,9 @@ LDLIBS += $(BACKEND_LIBS) $(BOX2D_A) $(BACKEND_LDLIBS) $(LIBOQS_A) \
 all: $(APP) $(HOST_LIB) $(HOST_SO)
 
 engine:
+	@test -f "$(ENGINE_DIR)/include/kryon.h" || \
+		{ printf '%s\n' 't9: full application builds still require legacy Kryon/k2c APIs.' \
+		'Use make pane-ziran-test with current Ziran; see docs/ZIRAN_MIGRATION.md.' >&2; exit 1; }
 	$(MAKE) -C $(ENGINE_DIR) KRYON_BACKEND=$(KRYON_BACKEND) \
 		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB) $(ENGINE_K2C)
 
@@ -343,6 +354,19 @@ $(PANE_SELECTION_TEST_ZIRAN_C) &: tests/terminal_pane_selection_test.zi $(PANE_Z
 $(PANE_SELECTION_TEST_ZIRAN): $(PANE_SELECTION_TEST_ZIRAN_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_SELECTION_TEST_ZIRAN_GEN) \
 		$(PANE_SELECTION_TEST_ZIRAN_C) -o $@
+
+$(PANE_CLIPBOARD_TEST_C) &: tests/terminal_pane_clipboard_test.zi \
+		src/terminal_pane/terminal_pane_clipboard.zi \
+		src/terminal_pane/terminal_pane_selection.zi
+	@mkdir -p $(PANE_CLIPBOARD_TEST_GEN)
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --target=c --root tests \
+		--module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(PANE_CLIPBOARD_TEST_GEN) tests/terminal_pane_clipboard_test.zi
+
+$(PANE_CLIPBOARD_TEST): $(PANE_CLIPBOARD_TEST_C) | $(BUILD_DIR)/tests
+	$(CC) $(CFLAGS) -I$(PANE_CLIPBOARD_TEST_GEN) \
+		$(PANE_CLIPBOARD_TEST_C) -o $@
 
 $(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
@@ -509,11 +533,28 @@ ZIRAN_MIGRATION_TEST = tests/ziran_migration_test.sh
 ziran-migration-check:
 	$(ZIRAN_MIGRATION_TEST)
 
+# Hosted pane tests use isolated clipboard providers and never need the
+# application's legacy Kryon/k2c engine or a desktop display.
+.PHONY: clipboard-test selection-test pane-ziran-test clipboard-plan9-c
+clipboard-test: $(PANE_CLIPBOARD_TEST)
+	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
+
+selection-test: $(PANE_SELECTION_TEST_ZIRAN)
+	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_SELECTION_TEST_ZIRAN)
+
+pane-ziran-test: clipboard-test selection-test ziran-migration-check
+
+clipboard-plan9-c:
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --target=plan9-c \
+		--root tests --module-path src/terminal_pane \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_ROOT)/plan9/clipboard-test tests/terminal_pane_clipboard_test.zi
+
 test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_DCS_TEST) $(PANE_SIXEL_TEST) \
-	$(PANE_SELECTION_TEST_ZIRAN) \
+	$(PANE_SELECTION_TEST_ZIRAN) $(PANE_CLIPBOARD_TEST) \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
 	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
 	$(PANE_PROFILE_PROMPT_TEST) $(PANE_PROFILE_SETTINGS_TEST) \
@@ -530,6 +571,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_POLICY_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_DCS_TEST)
 	$(PANE_SIXEL_TEST)
 	$(PANE_SELECTION_TEST_ZIRAN)
+	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
 	$(PANE_PROFILE_COLORS_TEST)
 	$(PANE_SESSION_TEST)
 	$(PANE_RENDER_TEST)

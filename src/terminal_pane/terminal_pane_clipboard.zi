@@ -1,0 +1,396 @@
+#import "terminal_pane_selection"
+
+TERMINAL_PANE_CLIPBOARD_PASTE_TEXT :: 0;
+TERMINAL_PANE_CLIPBOARD_PASTE_CLIPBOARD :: 1;
+TERMINAL_PANE_CLIPBOARD_PASTE_PRIMARY :: 2;
+TERMINAL_PANE_CLIPBOARD_PASTE_PREFERRED :: 3;
+TERMINAL_PANE_CLIPBOARD_SYNC_FROM_HOST :: 4;
+TERMINAL_PANE_CLIPBOARD_FLUSH_TO_HOST :: 5;
+
+TERMINAL_PANE_CLIPBOARD_COMMAND_COPY_SELECTION :: 0;
+TERMINAL_PANE_CLIPBOARD_COMMAND_UPDATE_PRIMARY_SELECTION :: 1;
+TERMINAL_PANE_CLIPBOARD_COMMAND_SELECT_ALL :: 2;
+TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_TEXT :: 3;
+TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_CLIPBOARD :: 4;
+TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY :: 5;
+TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PREFERRED :: 6;
+TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST :: 7;
+TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST :: 8;
+
+CLIPBOARD_SOURCE_CLIPBOARD :: 0;
+CLIPBOARD_SOURCE_PRIMARY :: 1;
+CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD :: 2;
+
+ClipboardBuffer :: struct {}
+ClipboardPasteWriteFn :: #type (userdata: *void, text: *u8,
+    size: s32) -> s32 #c_call;
+
+TerminalPaneClipboard :: struct {
+    clipboard: *ClipboardBuffer
+    bracketed_paste: s32
+    write_text: ClipboardPasteWriteFn
+    userdata: *void
+}
+
+TerminalPaneClipboardController :: struct {
+    clipboard: TerminalPaneClipboard
+    selection: *TerminalPaneSelection
+    line_text: TerminalPaneSelectionLineFn
+    line_wrapped: TerminalPaneSelectionWrappedFn
+    userdata: *void
+    total_rows: s32
+    cols: s32
+    scroll_offset: *s32
+}
+
+TerminalPaneClipboardCommandResult :: struct {
+    performed: s32
+    wrote_input: s32
+}
+
+TerminalPaneClipboardActions :: struct {
+    selection: TerminalPaneClipboardController
+    session: TerminalPaneClipboardController
+}
+
+#scope_file
+kryon :: #system_library "c";
+WriteClipboardTextPasteHost :: (clipboard: *ClipboardBuffer,
+    text: *u8, bracketed: s32, write_text: ClipboardPasteWriteFn,
+    userdata: *void) -> s32 #foreign kryon "WriteClipboardTextPaste";
+WriteClipboardSourcePasteHost :: (clipboard: *ClipboardBuffer,
+    source: s32, bracketed: s32, write_text: ClipboardPasteWriteFn,
+    userdata: *void) -> s32 #foreign kryon "WriteClipboardSourcePaste";
+ClipboardSourceHasTextHost :: (
+    source: s32) -> s32 #foreign kryon "ClipboardSourceHasText";
+SyncClipboardBufferFromHostHost :: (clipboard: *ClipboardBuffer) -> s32 #foreign kryon "SyncClipboardBufferFromHost";
+FlushClipboardBufferToHostHost :: (clipboard: *ClipboardBuffer) -> s32 #foreign kryon "FlushClipboardBufferToHost";
+
+#scope_export
+
+#program_export
+MakeTerminalPaneClipboard :: (clipboard: *ClipboardBuffer,
+    bracketed_paste: s32, write_text: ClipboardPasteWriteFn,
+    userdata: *void) -> TerminalPaneClipboard {
+    pane: TerminalPaneClipboard = TerminalPaneClipboard.{}
+    pane.clipboard = clipboard
+    if bracketed_paste != 0 { pane.bracketed_paste = 1 }
+    pane.write_text = write_text
+    pane.userdata = userdata
+    return pane
+}
+
+#program_export
+MakeTerminalPaneClipboardController :: (clipboard: TerminalPaneClipboard,
+    selection: *TerminalPaneSelection, line_text: TerminalPaneSelectionLineFn,
+    line_wrapped: TerminalPaneSelectionWrappedFn, userdata: *void,
+    total_rows: s32, cols: s32,
+    scroll_offset: *s32) -> TerminalPaneClipboardController {
+    controller: TerminalPaneClipboardController = TerminalPaneClipboardController.{}
+    controller.clipboard = clipboard
+    controller.selection = selection
+    controller.line_text = line_text
+    controller.line_wrapped = line_wrapped
+    controller.userdata = userdata
+    controller.total_rows = total_rows
+    controller.cols = cols
+    controller.scroll_offset = scroll_offset
+    return controller
+}
+
+#program_export
+TerminalPaneClipboardPasteText :: (clipboard: TerminalPaneClipboard,
+    value: *u8) -> s32 {
+    if clipboard.clipboard == null || clipboard.write_text == null ||
+       value == null || value[0] == 0 { return 0 }
+    return WriteClipboardTextPasteHost(clipboard.clipboard, value,
+        clipboard.bracketed_paste, clipboard.write_text, clipboard.userdata)
+}
+
+#program_export
+TerminalPaneClipboardPasteSource :: (clipboard: TerminalPaneClipboard,
+    source: s32) -> s32 {
+    if clipboard.clipboard == null || clipboard.write_text == null { return 0 }
+    return WriteClipboardSourcePasteHost(clipboard.clipboard, source,
+        clipboard.bracketed_paste, clipboard.write_text, clipboard.userdata)
+}
+
+#program_export
+TerminalPaneClipboardPasteClipboard :: (
+    clipboard: TerminalPaneClipboard) -> s32 {
+    return TerminalPaneClipboardPasteSource(
+        clipboard, CLIPBOARD_SOURCE_CLIPBOARD)
+}
+
+#program_export
+TerminalPaneClipboardPastePrimary :: (
+    clipboard: TerminalPaneClipboard) -> s32 {
+    return TerminalPaneClipboardPasteSource(
+        clipboard, CLIPBOARD_SOURCE_PRIMARY)
+}
+
+#program_export
+TerminalPaneClipboardPastePreferred :: (
+    clipboard: TerminalPaneClipboard) -> s32 {
+    return TerminalPaneClipboardPasteSource(
+        clipboard, CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD)
+}
+
+#program_export
+TerminalPaneClipboardSourceHasText :: (source: s32) -> s32 {
+    return ClipboardSourceHasTextHost(source)
+}
+
+#program_export
+TerminalPaneClipboardPrimarySelectionAvailable :: () -> s32 {
+    return TerminalPaneClipboardSourceHasText(CLIPBOARD_SOURCE_PRIMARY)
+}
+
+#program_export
+TerminalPaneClipboardSyncFromHost :: (
+    clipboard: TerminalPaneClipboard) -> s32 {
+    if clipboard.clipboard == null { return 0 }
+    return SyncClipboardBufferFromHostHost(clipboard.clipboard)
+}
+
+#program_export
+TerminalPaneClipboardFlushToHost :: (
+    clipboard: TerminalPaneClipboard) -> s32 {
+    if clipboard.clipboard == null { return 0 }
+    return FlushClipboardBufferToHostHost(clipboard.clipboard)
+}
+
+#program_export
+TerminalPaneClipboardPerform :: (clipboard: TerminalPaneClipboard,
+    action: s32, value: *u8) -> s32 {
+    if action == TERMINAL_PANE_CLIPBOARD_PASTE_TEXT {
+        return TerminalPaneClipboardPasteText(clipboard, value)
+    }
+    if action == TERMINAL_PANE_CLIPBOARD_PASTE_CLIPBOARD {
+        return TerminalPaneClipboardPasteClipboard(clipboard)
+    }
+    if action == TERMINAL_PANE_CLIPBOARD_PASTE_PRIMARY {
+        return TerminalPaneClipboardPastePrimary(clipboard)
+    }
+    if action == TERMINAL_PANE_CLIPBOARD_PASTE_PREFERRED {
+        return TerminalPaneClipboardPastePreferred(clipboard)
+    }
+    if action == TERMINAL_PANE_CLIPBOARD_SYNC_FROM_HOST {
+        return TerminalPaneClipboardSyncFromHost(clipboard)
+    }
+    if action == TERMINAL_PANE_CLIPBOARD_FLUSH_TO_HOST {
+        return TerminalPaneClipboardFlushToHost(clipboard)
+    }
+    return 0
+}
+
+#program_export
+TerminalPaneClipboardUpdatePrimarySelection :: (
+    clipboard: TerminalPaneClipboard, selection: *TerminalPaneSelection,
+    line_text: TerminalPaneSelectionLineFn,
+    line_wrapped: TerminalPaneSelectionWrappedFn,
+    userdata: *void) -> s32 {
+    return TerminalPaneSelectionUpdatePrimary(selection, line_text,
+        line_wrapped, userdata)
+}
+
+#program_export
+TerminalPaneClipboardCopySelection :: (
+    clipboard: TerminalPaneClipboard, selection: *TerminalPaneSelection,
+    line_text: TerminalPaneSelectionLineFn,
+    line_wrapped: TerminalPaneSelectionWrappedFn,
+    userdata: *void) -> s32 {
+    if clipboard.clipboard == null { return 0 }
+    return TerminalPaneSelectionCopyToClipboard(selection, line_text,
+        line_wrapped, userdata, cast(*void)clipboard.clipboard)
+}
+
+#program_export
+TerminalPaneClipboardPerformCommand :: (
+    controller: TerminalPaneClipboardController, command: s32,
+    value: *u8) -> s32 {
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_COPY_SELECTION {
+        return TerminalPaneClipboardCopySelection(controller.clipboard,
+            controller.selection, controller.line_text,
+            controller.line_wrapped, controller.userdata)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_UPDATE_PRIMARY_SELECTION {
+        return TerminalPaneClipboardUpdatePrimarySelection(
+            controller.clipboard, controller.selection, controller.line_text,
+            controller.line_wrapped, controller.userdata)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_SELECT_ALL {
+        if controller.selection == null { return 0 }
+        TerminalPaneSelectionSelectAll(controller.selection,
+            controller.total_rows, controller.cols)
+        if controller.selection.active != 0 { return 1 }
+        return 0
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_TEXT {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_PASTE_TEXT, value)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_CLIPBOARD {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_PASTE_CLIPBOARD, value)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_PASTE_PRIMARY, value)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PREFERRED {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_PASTE_PREFERRED, value)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_SYNC_FROM_HOST, value)
+    }
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST {
+        return TerminalPaneClipboardPerform(controller.clipboard,
+            TERMINAL_PANE_CLIPBOARD_FLUSH_TO_HOST, value)
+    }
+    return 0
+}
+
+#program_export
+TerminalPaneClipboardCommandWritesInput :: (command: s32) -> s32 {
+    if command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_TEXT ||
+       command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_CLIPBOARD ||
+       command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY ||
+       command == TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PREFERRED {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+TerminalPaneClipboardRunCommand :: (controller: TerminalPaneClipboardController,
+    command: s32, value: *u8) -> TerminalPaneClipboardCommandResult {
+    result: TerminalPaneClipboardCommandResult = TerminalPaneClipboardCommandResult.{}
+    result.performed = TerminalPaneClipboardPerformCommand(controller,
+        command, value)
+    if result.performed != 0 {
+        result.wrote_input = TerminalPaneClipboardCommandWritesInput(command)
+    }
+    if result.wrote_input != 0 && controller.scroll_offset != null {
+        controller.scroll_offset.* = 0
+    }
+    return result
+}
+
+#program_export
+TerminalPaneClipboardRunSimpleCommand :: (clipboard: TerminalPaneClipboard,
+    scroll_offset: *s32, command: s32,
+    value: *u8) -> TerminalPaneClipboardCommandResult {
+    controller: TerminalPaneClipboardController = TerminalPaneClipboardController.{}
+    controller.clipboard = clipboard
+    controller.scroll_offset = scroll_offset
+    result: TerminalPaneClipboardCommandResult = TerminalPaneClipboardRunCommand(controller, command, value)
+    return result
+}
+
+#program_export
+MakeTerminalPaneClipboardActions :: (selection: TerminalPaneClipboardController,
+    session: TerminalPaneClipboardController) -> TerminalPaneClipboardActions {
+    actions: TerminalPaneClipboardActions = TerminalPaneClipboardActions.{}
+    actions.selection = selection
+    actions.session = session
+    return actions
+}
+
+#scope_file
+PaneClipboardControllerForCommand :: (actions: TerminalPaneClipboardActions,
+    command: s32) -> TerminalPaneClipboardController {
+    if TerminalPaneClipboardCommandWritesInput(command) != 0 ||
+       command == TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST ||
+       command == TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST {
+        return actions.session
+    }
+    return actions.selection
+}
+#scope_export
+
+#program_export
+TerminalPaneClipboardRunActionsCommand :: (
+    actions: TerminalPaneClipboardActions, command: s32,
+    value: *u8) -> TerminalPaneClipboardCommandResult {
+    return TerminalPaneClipboardRunCommand(
+        PaneClipboardControllerForCommand(actions, command), command, value)
+}
+
+#program_export
+TerminalPaneClipboardCollectSelectionText :: (
+    actions: TerminalPaneClipboardActions, buffer: *u8,
+    buffer_size: s32) -> s32 {
+    controller: TerminalPaneClipboardController = actions.selection
+    if buffer == null || buffer_size <= 0 { return 0 }
+    buffer[0] = 0
+    if controller.selection == null || controller.line_text == null { return 0 }
+    return TerminalPaneSelectionCollectText(controller.selection,
+        controller.line_text, controller.line_wrapped, controller.userdata,
+        buffer, buffer_size)
+}
+
+#program_export
+TerminalPaneClipboardUpdatePrimary :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_UPDATE_PRIMARY_SELECTION,
+        null).performed
+}
+
+#program_export
+TerminalPaneClipboardCopy :: (actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_COPY_SELECTION, null).performed
+}
+
+#program_export
+TerminalPaneClipboardSelectAll :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_SELECT_ALL, null).performed
+}
+
+#program_export
+TerminalPaneClipboardPasteActionsText :: (
+    actions: TerminalPaneClipboardActions, value: *u8) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_TEXT, value).performed
+}
+
+#program_export
+TerminalPaneClipboardPasteActionsClipboard :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_CLIPBOARD, null).performed
+}
+
+#program_export
+TerminalPaneClipboardPasteActionsPrimary :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY, null).performed
+}
+
+#program_export
+TerminalPaneClipboardPasteActionsPreferred :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PREFERRED, null).performed
+}
+
+#program_export
+TerminalPaneClipboardActionsSyncFromHost :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST, null).performed
+}
+
+#program_export
+TerminalPaneClipboardActionsFlushToHost :: (
+    actions: TerminalPaneClipboardActions) -> s32 {
+    return TerminalPaneClipboardRunActionsCommand(actions,
+        TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST, null).performed
+}
