@@ -1,0 +1,243 @@
+// Terminal configuration uses the pane's canonical settings record.
+#scope_module
+Types :: #import "terminal_pane_profile_types";
+Settings :: #import "terminal_pane_profile_settings";
+Profile :: #import "terminal_pane_profile";
+Text :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    File :: #import "std/file_linux";
+}
+libc :: #system_library "libc";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Trim :: (value: *u8) -> *u8 {
+    if value == null { return null }
+    while value.* == 32 || value.* == 9 { value = *value[1] }
+    end := cast(s32)Text.TextFromCString(value).count
+    while end > 0 && (value[end - 1] == 32 || value[end - 1] == 9 || value[end - 1] == 13) {
+        end -= 1
+    }
+    value[end] = 0
+    return value
+}
+
+ReadLine :: (config: *Types.TerminalPaneProfileSettings, line: *u8, length: s32) {
+    if length <= 0 || line[0] == 35 { return }
+    line[length] = 0
+    for index: 0..length - 1 {
+        if line[index] != 61 { continue }
+        line[index] = 0
+        name := Trim(line)
+        value := Trim(*line[index + 1])
+        decoded: [4096]u8
+        Profile.UnescapeTerminalPaneText(*decoded[0], 4096, value)
+        Apply(config, name, *decoded[0])
+        return
+    }
+}
+
+Output :: struct { bytes: []u8; used: s64; failed: bool; }
+
+Put :: (output: *Output, value: string) {
+    if output.failed { return }
+    if output.used + value.count >= output.bytes.count { output.failed = true; return }
+    for index: cast(s64)0..value.count - 1 {
+        output.bytes[output.used + index] = value[index]
+    }
+    output.used += value.count
+    output.bytes[output.used] = 0
+}
+
+Setting :: (output: *Output, name: string, value: string) {
+    Put(output, name); Put(output, "="); Put(output, value); Put(output, "\n")
+}
+
+Integer :: (output: *Output, name: string, value: s32) {
+    digits: [32]u8
+    Setting(output, name, Number.FormatInteger(cast(s64)value, digits[:]))
+}
+
+Boolean :: (output: *Output, name: string, value: s32) {
+    Setting(output, name, ifx value != 0 then "true" else "false")
+}
+
+StringSetting :: (output: *Output, name: string, value: *u8) {
+    if value == null || value[0] == 0 { return }
+    escaped: [4096]u8
+    Profile.EscapeTerminalPaneText(*escaped[0], 4096, value)
+    Setting(output, name, Text.TextFromCString(*escaped[0]))
+}
+
+Color :: (output: *Output, name: string, value: s32) {
+    if value == Types.TERMINAL_PANE_COLOR_DEFAULT { return }
+    text: [16]u8
+    if Profile.FormatTerminalPaneProfileColor(*text[0], 16, value) > 0 {
+        Setting(output, name, Text.TextFromCString(*text[0]))
+    }
+}
+
+TitleMode :: (mode: s32) -> string {
+    if mode == Types.TERMINAL_PANE_TITLE_PREPEND { return "prepend" }
+    if mode == Types.TERMINAL_PANE_TITLE_APPEND { return "append" }
+    if mode == Types.TERMINAL_PANE_TITLE_IGNORE { return "ignore" }
+    return "replace"
+}
+
+KeyBinding :: (binding: s32) -> string {
+    if binding == Types.TERMINAL_PANE_KEY_BINDING_CONTROL_H { return "control-h" }
+    if binding == Types.TERMINAL_PANE_KEY_BINDING_ESCAPE_SEQUENCE { return "escape-sequence" }
+    return "ascii-delete"
+}
+
+EnsureParents :: (path: string) -> bool {
+    for index: cast(s64)1..path.count - 1 {
+        if path[index] == 47 && !File.CreatePrivateDirectory(path[0:index]) { return false }
+    }
+    return true
+}
+
+#scope_export
+DefaultFontSize :: 16;
+MinFontSize :: 10;
+MaxFontSize :: 48;
+DefaultScrollback :: 5000;
+MinScrollback :: 100;
+MaxScrollback :: 100000;
+UnlimitedScrollback :: 1000000;
+
+Limits :: () -> Types.TerminalPaneProfileLimits {
+    return .{DefaultFontSize, MinFontSize, MaxFontSize, DefaultScrollback,
+             MinScrollback, MaxScrollback, Types.TERMINAL_PANE_CURSOR_BLOCK}
+}
+
+Defaults :: (config: *Types.TerminalPaneProfileSettings) {
+    if config != null { Settings.InitTerminalPaneProfileSettings(config, Limits()) }
+}
+
+Apply :: (config: *Types.TerminalPaneProfileSettings, name: *u8, value: *u8) -> s32 {
+    return Settings.ApplyTerminalPaneProfileSetting(config, Limits(), name, value)
+}
+
+EffectiveScrollback :: (config: *Types.TerminalPaneProfileSettings) -> s32 {
+    if config != null && config.unlimited_scrollback != 0 { return UnlimitedScrollback }
+    if config == null || config.scrollback_limit <= 0 { return DefaultScrollback }
+    return config.scrollback_limit
+}
+
+ResolvePath :: (xdg: string, home: string, plan9: bool, output: []u8) -> string {
+    root := home
+    suffix := "/.config/t9/config"
+    if plan9 { suffix = "/lib/t9/config" }
+    else if xdg != "" { root = xdg; suffix = "/t9/config" }
+    if root == "" || root.count + suffix.count >= output.count { return "" }
+    used: s64
+    for index: cast(s64)0..root.count - 1 { output[used] = root[index]; used += 1 }
+    for index: cast(s64)0..suffix.count - 1 { output[used] = suffix[index]; used += 1 }
+    output[used] = 0
+    return TextView(output[0:used])
+}
+
+Path :: (output: []u8) -> string {
+    #if #defined(PLAN9) {
+        return ResolvePath("", Text.TextFromCString(Environment(Bytes("home"))), true, output)
+    } else {
+        return ResolvePath(Text.TextFromCString(Environment(Bytes("XDG_CONFIG_HOME"))),
+                           Text.TextFromCString(Environment(Bytes("HOME"))), false, output)
+    }
+}
+
+LoadFile :: (config: *Types.TerminalPaneProfileSettings, path: string) -> bool {
+    if config == null || path == "" { return false }
+    file := File.OpenRead(path)
+    if !file.valid { return false }
+    defer File.CloseFile(file)
+    chunk: [4096]u8
+    line: [4096]u8
+    used: s32
+    overflow: bool
+    while true {
+        got := File.Read(file, chunk[:])
+        if got < 0 { return false }
+        if got == 0 { break }
+        for index: cast(s64)0..got - 1 {
+            byte := chunk[index]
+            if byte == 10 {
+                if !overflow { ReadLine(config, *line[0], used) }
+                used = 0; overflow = false
+            } else if used < 4095 && !overflow {
+                line[used] = byte; used += 1
+            } else { overflow = true }
+        }
+    }
+    if !overflow { ReadLine(config, *line[0], used) }
+    return true
+}
+
+Load :: (config: *Types.TerminalPaneProfileSettings) -> bool {
+    path: [1024]u8
+    return LoadFile(config, Path(path[:]))
+}
+
+Serialize :: (config: *Types.TerminalPaneProfileSettings, bytes: []u8) -> s64 {
+    if config == null || bytes.count <= 0 { return -1 }
+    output: Output
+    output.bytes = bytes
+    bytes[0] = 0
+    Integer(*output, "font_size", config.font_size)
+    Integer(*output, "scrollback", config.scrollback_limit)
+    Boolean(*output, "unlimited_scrollback", config.unlimited_scrollback)
+    Setting(*output, "cursor_style", Text.TextFromCString(Profile.TerminalPaneCursorStyleName(config.cursor_style)))
+    Setting(*output, "dynamic_title_mode", TitleMode(config.dynamic_title_mode))
+    Setting(*output, "backspace_binding", KeyBinding(config.backspace_binding))
+    Setting(*output, "delete_binding", KeyBinding(config.delete_binding))
+    Setting(*output, "ambiguous_width_wide", ifx config.ambiguous_width_wide != 0 then "wide" else "narrow")
+    Boolean(*output, "allow_bold", config.allow_bold)
+    Boolean(*output, "auto_hide_mouse", config.auto_hide_mouse)
+    Boolean(*output, "middle_click_closes_tab", config.middle_click_closes_tab)
+    Boolean(*output, "always_show_tabs", config.always_show_tabs)
+    Boolean(*output, "disable_menu_mnemonics", config.disable_menu_mnemonics)
+    Boolean(*output, "disable_menu_shortcut", config.disable_menu_shortcut)
+    Boolean(*output, "disable_help_shortcut", config.disable_help_shortcut)
+    Integer(*output, "background_opacity", config.background_opacity)
+    StringSetting(*output, "shell", *config.shell[0])
+    StringSetting(*output, "working_directory", *config.working_directory[0])
+    StringSetting(*output, "command", *config.command[0])
+    StringSetting(*output, "terminal_font", *config.terminal_font[0])
+    StringSetting(*output, "background_image", *config.background_image[0])
+    Color(*output, "terminal_foreground", config.terminal_foreground)
+    Color(*output, "terminal_background", config.terminal_background)
+    Color(*output, "terminal_cursor", config.terminal_cursor)
+    Color(*output, "terminal_selection_foreground", config.terminal_selection_foreground)
+    Color(*output, "terminal_selection_background", config.terminal_selection_background)
+    if output.failed { return -1 }
+    return output.used
+}
+
+SaveFile :: (config: *Types.TerminalPaneProfileSettings, path: string) -> bool {
+    if config == null || path == "" { return false }
+    bytes: [16384]u8
+    length := Serialize(config, bytes[:])
+    if length < 0 || !EnsureParents(path) { return false }
+    file := File.OpenReplace(path)
+    if !file.valid { return false }
+    used: s64
+    while used < length {
+        got := File.Write(file, bytes[used:length])
+        if got <= 0 { File.CloseFile(file); return false }
+        used += got
+    }
+    return File.CloseFile(file)
+}
+
+Save :: (config: *Types.TerminalPaneProfileSettings) -> bool {
+    path: [1024]u8
+    return SaveFile(config, Path(path[:]))
+}

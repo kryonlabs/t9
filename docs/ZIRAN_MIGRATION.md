@@ -5,9 +5,9 @@ migration input only: each one is removed after its behavior has a current
 Ziran implementation and focused hosted/Plan 9 checks. No compatibility
 compiler path, dual product module, or `.kry` restore is part of the target.
 
-Current status: 42 maintained Ziran sources include 21 pane modules,
+Current status: 43 maintained Ziran sources include 21 pane modules,
 clipboard storage/protocol handling, both platform process transports, and
-the full terminal engine and its typed state. There are 19 legacy `.kry`
+the full terminal engine and its typed state, and application configuration. There are 18 legacy `.kry`
 inputs and two handwritten C implementations remaining at the pane and app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -22,7 +22,7 @@ The canonical repository is `taijiosnet/t9`. Its history includes Kapsule's
 original terminal sources and local compatibility fixes; those older C
 implementations are not restored alongside the maintained ports.
 
-`make pane-ziran-test` runs the engine, clipboard, selection, keyboard, OSC,
+`make pane-ziran-test` runs the engine, configuration, clipboard, selection, keyboard, OSC,
 pane sizing, and Linux PTY suites without the legacy application. Keyboard protocol and current
 Kryon session input are
 checked as native C/C++ and from saved IR. `make keys-plan9-test` with
@@ -135,6 +135,21 @@ width changes allocate a fresh history ring even when the previous ring is empty
 dependencies. `make terminal-plan9-c` emits the corresponding Plan 9 library
 sources. These library gates do not establish a working complete application.
 
+## Application configuration
+
+`src/app/app_config.zi` replaces `app_config.kry`. It uses the existing
+`TerminalPaneProfileSettings` record directly and imports standard Ziran file
+modules for Linux and native Plan 9. The defaults, limits, XDG/home path rules,
+escaped text, colors, and all 26 persisted settings are retained. The reader
+handles maximum-length escaped commands across file chunks and ignores an
+oversized setting line as a whole; failed serialization cannot truncate a file.
+
+`make config-test` verifies source/saved-IR C and C++ execution, and
+`make config-plan9-test` verifies actual native 8c/8l execution for both forms.
+Every file fixture lives inside its disposable generated-output folder.
+The remaining app consumers must use this module's `Defaults`, `Apply`,
+`Load`, `Save`, and `EffectiveScrollback` APIs with the canonical settings type.
+
 The next source boundary is the terminal widget and application state. Migrate
 their consumers to `Terminal` and the current pane/clipboard contracts, then
 migrate app
@@ -170,6 +185,7 @@ those whole-application gates pass.
 - `src/terminal_pty_linux.zi`
 - `src/terminal_pty_plan9.zi`
 - `src/terminal.zi` and its loaded `src/engine/*.zi` modules
+- `src/app/app_config.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

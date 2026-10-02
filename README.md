@@ -13,9 +13,10 @@ TAIJI_DIR=/path/to/taijiosnet/taiji make keys-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make osc-plan9-test pty-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make clipboard-plan9-test selection-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make terminal-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make config-plan9-test
 ```
 
-These independent engine, clipboard, selection, keyboard, OSC, pane sizing,
+These independent engine, configuration, clipboard, selection, keyboard, OSC, pane sizing,
 and Linux PTY tests use the locked Ziran toolchain or a canonical local override. The
 `clipboard-plan9-c` target emits C. Native keyboard, OSC, metrics, clipboard,
 selection, engine, and PTY gates compile and execute source and saved-IR fixtures

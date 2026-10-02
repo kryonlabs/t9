@@ -1,0 +1,129 @@
+Config :: #import, file "../src/app/app_config.zi";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    File :: #import "std/file_linux";
+}
+
+#scope_file
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+WriteFixture :: (path: string, input: []u8) -> bool {
+    file := File.OpenReplace(path)
+    if !file.valid { return false }
+    used: s64
+    while used < input.count {
+        got := File.Write(file, input[used:])
+        if got <= 0 { File.CloseFile(file); return false }
+        used += got
+    }
+    return File.CloseFile(file)
+}
+
+StringSame :: (left: *u8, right: *u8) -> bool {
+    return Text.TextFromCString(left) == Text.TextFromCString(right)
+}
+
+SettingsSame :: (left: *Types.TerminalPaneProfileSettings,
+                 right: *Types.TerminalPaneProfileSettings) -> bool {
+    return left.font_size == right.font_size && left.scrollback_limit == right.scrollback_limit &&
+        left.unlimited_scrollback == right.unlimited_scrollback && left.cursor_style == right.cursor_style &&
+        left.dynamic_title_mode == right.dynamic_title_mode && left.backspace_binding == right.backspace_binding &&
+        left.delete_binding == right.delete_binding && left.ambiguous_width_wide == right.ambiguous_width_wide &&
+        left.allow_bold == right.allow_bold && left.auto_hide_mouse == right.auto_hide_mouse &&
+        left.middle_click_closes_tab == right.middle_click_closes_tab && left.always_show_tabs == right.always_show_tabs &&
+        left.disable_menu_mnemonics == right.disable_menu_mnemonics && left.disable_menu_shortcut == right.disable_menu_shortcut &&
+        left.disable_help_shortcut == right.disable_help_shortcut && left.background_opacity == right.background_opacity &&
+        left.terminal_foreground == right.terminal_foreground && left.terminal_background == right.terminal_background &&
+        left.terminal_cursor == right.terminal_cursor && left.terminal_selection_foreground == right.terminal_selection_foreground &&
+        left.terminal_selection_background == right.terminal_selection_background &&
+        StringSame(*left.shell[0], *right.shell[0]) &&
+        StringSame(*left.working_directory[0], *right.working_directory[0]) &&
+        StringSame(*left.command[0], *right.command[0]) &&
+        StringSame(*left.terminal_font[0], *right.terminal_font[0]) &&
+        StringSame(*left.background_image[0], *right.background_image[0])
+}
+
+Case :: struct { name: string; value: string; }
+
+Cases :: () -> s32 {
+    config: Types.TerminalPaneProfileSettings
+    Config.Defaults(*config)
+    Config.Defaults(null)
+    if config.font_size != 16 || config.scrollback_limit != 5000 || config.allow_bold != 1 ||
+       Config.EffectiveScrollback(null) != 5000 { return 1 }
+    if Config.Apply(*config, Bytes("font_size"), Bytes("99")) != 0 || config.font_size != 16 { return 2 }
+    path: [1024]u8
+    if Config.ResolvePath("/xdg", "/owner", false, path[:]) != "/xdg/t9/config" ||
+       Config.ResolvePath("", "/owner", false, path[:]) != "/owner/.config/t9/config" ||
+       Config.ResolvePath("/ignored", "/owner", true, path[:]) != "/owner/lib/t9/config" ||
+       Config.ResolvePath("", "", false, path[:]) != "" ||
+       Config.ResolvePath("/xdg", "/owner", false, path[0:5]) != "" { return 3 }
+    values: [26]Case = .[
+        .{"font_size", "24"}, .{"scrollback", "12000"}, .{"unlimited_scrollback", "true"},
+        .{"cursor_style", "bar"}, .{"dynamic_title_mode", "append"},
+        .{"backspace_binding", "control-h"}, .{"delete_binding", "ascii-delete"},
+        .{"ambiguous_width_wide", "wide"}, .{"allow_bold", "false"},
+        .{"auto_hide_mouse", "true"}, .{"middle_click_closes_tab", "true"},
+        .{"always_show_tabs", "true"}, .{"disable_menu_mnemonics", "true"},
+        .{"disable_menu_shortcut", "true"}, .{"disable_help_shortcut", "true"},
+        .{"background_opacity", "70"}, .{"shell", "/bin/sh"},
+        .{"working_directory", "/tmp/a b/终端"}, .{"command", "printf 'a\\b'\tline\nnext\r"},
+        .{"terminal_font", "/tmp/mono.ttf"}, .{"background_image", "/tmp/image.png"},
+        .{"terminal_foreground", "#123abc"}, .{"terminal_background", "#234bcd"},
+        .{"terminal_cursor", "#345cde"}, .{"terminal_selection_foreground", "#456def"},
+        .{"terminal_selection_background", "#567ef0"},
+    ]
+    for index: 0..25 {
+        if Config.Apply(*config, Bytes(values[index].name), Bytes(values[index].value)) != 1 { return 4 }
+    }
+    if Config.EffectiveScrollback(*config) != 1000000 { return 5 }
+    config.unlimited_scrollback = 0
+    if Config.EffectiveScrollback(*config) != 12000 { return 5 }
+    config.unlimited_scrollback = 1
+    // Both harnesses enter their disposable generated-output directory.
+    target := "settings/nested/config"
+    if !Config.SaveFile(*config, target) { return 6 }
+    loaded: Types.TerminalPaneProfileSettings
+    Config.Defaults(*loaded)
+    if !Config.LoadFile(*loaded, target) || !SettingsSame(*config, *loaded) { return 7 }
+    // A maximum-length escaped command exceeds the old 2048-byte reader.
+    for index: 0..1022 { config.command[index] = 92 }
+    config.command[1023] = 0
+    if !Config.SaveFile(*config, target) || !Config.LoadFile(*loaded, target) ||
+       !SettingsSame(*config, *loaded) { return 11 }
+    short: [8]u8
+    if Config.Serialize(*config, short[:]) != -1 || Config.Serialize(null, short[:]) != -1 ||
+       Config.SaveFile(null, target) || Config.LoadFile(null, target) || Config.LoadFile(*loaded, "") { return 8 }
+
+    fixture := "# comments\r\nfont_size=99\nunknown=ignored\nno equals\n font_size = 20 \r\nscrollback = 15000"
+    fixture_bytes: [256]u8
+    for index: cast(s64)0..fixture.count - 1 { fixture_bytes[index] = fixture[index] }
+    if !WriteFixture(target, fixture_bytes[0:fixture.count]) ||
+       !Config.LoadFile(*loaded, target) || loaded.font_size != 20 || loaded.scrollback_limit != 15000 { return 9 }
+    oversized: [7000]u8
+    prefix := "font_size=10"
+    for index: 0..cast(s32)prefix.count - 1 { oversized[index] = prefix[index] }
+    for index: cast(s32)prefix.count..6998 { oversized[index] = 120 }
+    oversized[6999] = 10
+    if !WriteFixture(target, oversized[:]) || !Config.LoadFile(*loaded, target) ||
+       loaded.font_size != 20 { return 10 }
+    if Config.SaveFile(*config, "") || Config.SaveFile(*config, "settings/nested/config/child") {
+        return 12
+    }
+    return 0
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    result := Cases()
+    if result != 0 { print("Terminal configuration failure %\n", result) }
+    else { print("Terminal configuration behavior passed\n") }
+    return result
+}

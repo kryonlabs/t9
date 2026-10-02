@@ -514,7 +514,13 @@ pty-test:
 pty-plan9-test:
 	sh tests/pane_plan9_test.sh pty
 
-.PHONY: terminal-test terminal-plan9-test terminal-native terminal-plan9-c
+.PHONY: terminal-test terminal-plan9-test terminal-native terminal-plan9-c config-test config-plan9-test
+config-test:
+	sh tests/config_test.sh
+
+config-plan9-test:
+	sh tests/pane_plan9_test.sh config
+
 terminal-test:
 	sh tests/terminal_engine_test.sh
 
@@ -535,7 +541,7 @@ terminal-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN) build --project $(LOCK_FLAGS) \
 		--target=plan9-c --no-main -o $(PLAN9_GENERATED)/terminal src/terminal.zi
 
-pane-ziran-test: terminal-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
+pane-ziran-test: terminal-test config-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
 
 clipboard-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c \

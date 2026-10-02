@@ -9,6 +9,7 @@ case "$suite" in
     protocol) module=terminal_clipboard_test ;;
     pty) module=terminal_pty_plan9_test ;;
     engine) module=terminal_engine_test ;;
+    config) module=terminal_config_test ;;
     *) echo "Unknown Terminal suite: $suite" >&2; exit 2 ;;
 esac
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY
