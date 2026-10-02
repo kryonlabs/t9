@@ -1,0 +1,282 @@
+// Terminal command-line options and tab specifications use owned Ziran records.
+#scope_module
+Config :: #import "app_config";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+
+Copy :: (output: []u8, value: string) {
+    if output.count <= 0 { return }
+    count := value.count
+    if count >= output.count { count = output.count - 1 }
+    for index: cast(s64)0..count - 1 { output[index] = value[index] }
+    output[count] = 0
+}
+
+Apply :: (config: *Types.TerminalPaneProfileSettings, name: string, value: string) {
+    key: [64]u8; text: [2048]u8
+    Copy(key[:], name); Copy(text[:], value)
+    Config.Apply(config, *key[0], *text[0])
+}
+
+Error :: (output: []u8, message: string, value: string = "") -> ParseResult {
+    Copy(output, message)
+    if value != "" && output.count > message.count + 2 {
+        output[message.count] = 58; output[message.count + 1] = 32
+        Copy(output[message.count + 2:output.count], value)
+    }
+    return ParseResult.ParseError
+}
+
+ValueSetting :: (name: string) -> bool {
+    names: [24]string = .{"font-size", "shell", "scrollback", "cursor-style",
+        "terminal-font", "terminal-foreground", "terminal-background", "terminal-cursor",
+        "terminal-selection-foreground", "terminal-selection-background", "dynamic-title-mode",
+        "backspace-binding", "delete-binding", "ambiguous-width", "allow-bold",
+        "unlimited-scrollback", "auto-hide-mouse", "middle-click-closes-tab", "always-show-tabs",
+        "disable-menu-mnemonics", "disable-menu-shortcut", "disable-help-shortcut",
+        "background-opacity", "background-image"}
+    for index: 0..23 { if name == names[index] { return true } }
+    return false
+}
+
+ToggleSetting :: (name: string) -> bool {
+    return name == "unlimited-scrollback" || name == "auto-hide-mouse" ||
+        name == "middle-click-closes-tab" || name == "always-show-tabs" ||
+        name == "disable-menu-mnemonics" || name == "disable-menu-shortcut" ||
+        name == "disable-help-shortcut"
+}
+
+IgnoredValue :: (name: string) -> bool {
+    return name == "display" || name == "default-display" || name == "role" ||
+        name == "startup-id" || name == "icon"
+}
+
+HasOptions :: (tab: *LaunchTabSpec) -> bool {
+    return tab.title[0] != 0 || tab.working_directory[0] != 0 || tab.command[0] != 0
+}
+
+AppendTab :: (options: *LaunchOptions, config: *Types.TerminalPaneProfileSettings,
+    title: string) -> s32 {
+    if options.tab_count >= MaxTabs { return -1 }
+    index := options.tab_count
+    tab := *options.tabs[index]
+    tab.* = LaunchTabSpec.{}
+    Copy(tab.working_directory[:], Text.TextFromCString(*config.working_directory[0]))
+    Copy(tab.command[:], Text.TextFromCString(*config.command[0]))
+    Copy(tab.title[:], title)
+    options.tab_count += 1
+    return index
+}
+
+Dimension :: (value: string, cursor: *s64) -> s32 {
+    while cursor.* < value.count && (value[cursor.*] == 32 || value[cursor.*] == 9) { cursor.* += 1 }
+    negative: bool
+    if cursor.* < value.count && (value[cursor.*] == 43 || value[cursor.*] == 45) {
+        negative = value[cursor.*] == 45
+        cursor.* += 1
+    }
+    digits: s32; result: s32
+    while cursor.* < value.count && value[cursor.*] >= 48 && value[cursor.*] <= 57 {
+        digits += 1
+        if result > 1000 { return -1 }
+        result = result * 10 + cast(s32)(value[cursor.*] - 48)
+        cursor.* += 1
+    }
+    if digits == 0 || negative { return -1 }
+    return result
+}
+
+Geometry :: (options: *LaunchOptions, value: string) -> bool {
+    cursor: s64
+    cols := Dimension(value, *cursor)
+    if cursor >= value.count || (value[cursor] != 120 && value[cursor] != 88) { return false }
+    cursor += 1
+    rows := Dimension(value, *cursor)
+    if cols < 8 || cols > 1000 || rows < 4 || rows > 1000 { return false }
+    options.geometry_cols = cols; options.geometry_rows = rows
+    return true
+}
+
+Put :: (output: []u8, used: *s64, value: string) -> bool {
+    if used.* + value.count >= output.count { return false }
+    for index: cast(s64)0..value.count - 1 { output[used.* + index] = value[index] }
+    used.* += value.count
+    output[used.*] = 0
+    return true
+}
+
+#scope_export
+MaxTabs :: 8;
+ParseResult :: enum s32 { ParseOk :: 0; ParseHelp :: 1; ParseVersion :: 2; ParseColorTable :: 3; ParseError :: 4; }
+LaunchTabSpec :: struct { title: [128]u8; working_directory: [1024]u8; command: [1024]u8; }
+LaunchOptions :: struct {
+    initial_title: [128]u8
+    tabs: [MaxTabs]LaunchTabSpec
+    tab_count: s32
+    hold: bool
+    drop_down: bool
+    fullscreen: bool
+    maximize: bool
+    show_menubar: bool
+    show_toolbar: bool
+    show_borders: bool
+    geometry_cols: s32
+    geometry_rows: s32
+}
+
+Defaults :: (options: *LaunchOptions) {
+    if options == null { return }
+    options.* = LaunchOptions.{}
+    options.show_menubar = true; options.show_toolbar = true; options.show_borders = true
+}
+
+JoinExecuteCommand :: (arguments: []string, output: []u8, plan9: bool = false) -> bool {
+    if arguments.count == 0 || output.count <= 0 { return false }
+    output[0] = 0
+    used: s64
+    for index: cast(s64)0..arguments.count - 1 {
+        if index > 0 && !Put(output, *used, " ") { return false }
+        if !Put(output, *used, "'") { return false }
+        argument := arguments[index]
+        for byte: cast(s64)0..argument.count - 1 {
+            if argument[byte] == 39 {
+                if !Put(output, *used, ifx plan9 then "''" else "'\\''") { return false }
+            } else {
+                if argument[byte] == 0 || used + 1 >= output.count { return false }
+                output[used] = argument[byte]; used += 1; output[used] = 0
+            }
+        }
+        if !Put(output, *used, "'") { return false }
+    }
+    return true
+}
+
+Parse :: (options: *LaunchOptions, config: *Types.TerminalPaneProfileSettings,
+    arguments: []string, error: []u8) -> ParseResult {
+    if error.count > 0 { error[0] = 0 }
+    if options == null || config == null { return ParseResult.ParseError }
+    base := config.*
+    active_tab: s32 = -1
+    implicit_options: bool
+    cursor: s64 = 1
+    while cursor < arguments.count {
+        arg := arguments[cursor]
+        cursor += 1
+        if arg == "--help" || arg == "-h" { return ParseResult.ParseHelp }
+        if arg == "--version" || arg == "-V" { return ParseResult.ParseVersion }
+        if arg == "--color-table" { return ParseResult.ParseColorTable }
+        if arg == "--disable-server" { continue }
+        if arg == "--drop-down" {
+            options.drop_down = true; options.show_borders = false
+            options.show_menubar = false; options.show_toolbar = false
+            continue
+        }
+        if arg == "--fullscreen" { options.fullscreen = true; continue }
+        if arg == "--maximize" { options.maximize = true; continue }
+        if arg == "--show-menubar" { options.show_menubar = true; continue }
+        if arg == "--hide-menubar" { options.show_menubar = false; continue }
+        if arg == "--show-toolbar" { options.show_toolbar = true; continue }
+        if arg == "--hide-toolbar" { options.show_toolbar = false; continue }
+        if arg == "--show-borders" { options.show_borders = true; continue }
+        if arg == "--hide-borders" { options.show_borders = false; continue }
+        if arg == "--hold" || arg == "-H" { options.hold = true; continue }
+        if arg == "--tab" || arg == "--window" {
+            if options.tab_count == 0 && active_tab < 0 && implicit_options {
+                if AppendTab(options, config, Text.TextFromCString(*options.initial_title[0])) < 0 {
+                    return Error(error, "too many tabs")
+                }
+                options.initial_title[0] = 0
+            }
+            active_tab = AppendTab(options, *base, "")
+            if active_tab < 0 { return Error(error, "too many tabs") }
+            implicit_options = false
+            continue
+        }
+        if arg == "--execute" || arg == "-x" {
+            command: [1024]u8
+            plan9: bool
+            #if #defined(PLAN9) {
+                plan9 = true
+            }
+            if !JoinExecuteCommand(arguments[cursor:arguments.count], command[:], plan9) {
+                return Error(error, "execute option requires a command", arg)
+            }
+            if active_tab >= 0 { Copy(options.tabs[active_tab].command[:], Text.TextFromCString(*command[0])) }
+            else { Apply(config, "command", Text.TextFromCString(*command[0])); implicit_options = true }
+            break
+        }
+        name := arg
+        value: string
+        equal: s64 = -1
+        for index: cast(s64)0..arg.count - 1 { if arg[index] == 61 { equal = index; break } }
+        if equal >= 0 { name = arg[0:equal]; value = arg[equal + 1:arg.count] }
+        if name == "-e" { name = "--command" }
+        if name == "-T" { name = "--title" }
+        if name == "-I" { name = "--icon" }
+        if name.count < 3 || name[0:2] != "--" { continue }
+        name = name[2:name.count]
+        if equal < 0 {
+            if ToggleSetting(name) { Apply(config, name, "true"); continue }
+            if name.count > 3 && name[0:3] == "no-" && ToggleSetting(name[3:name.count]) {
+                Apply(config, name[3:name.count], "false"); continue
+            }
+            if name == "enable-bold" { Apply(config, "allow-bold", "true"); continue }
+            if name == "disable-bold" { Apply(config, "allow-bold", "false"); continue }
+        }
+        known := ValueSetting(name) || IgnoredValue(name) || name == "command" ||
+            name == "working-directory" || name == "default-working-directory" || name == "title" || name == "geometry"
+        if !known { continue }
+        if equal < 0 {
+            if cursor >= arguments.count { return Error(error, "option requires a value", arg) }
+            value = arguments[cursor]; cursor += 1
+        }
+        if name == "command" || name == "working-directory" || name == "default-working-directory" || name == "title" {
+            if name == "default-working-directory" { name = "working-directory" }
+            if active_tab >= 0 {
+                tab := *options.tabs[active_tab]
+                if name == "command" { Copy(tab.command[:], value) }
+                else if name == "working-directory" { Copy(tab.working_directory[:], value) }
+                else { Copy(tab.title[:], value) }
+            } else {
+                if name == "title" { Copy(options.initial_title[:], value) }
+                else { Apply(config, name, value) }
+                implicit_options = true
+            }
+        } else if name == "geometry" {
+            if !Geometry(options, value) { return Error(error, "invalid geometry", value) }
+        } else if !IgnoredValue(name) { Apply(config, name, value) }
+    }
+    if options.tab_count == 1 && !HasOptions(*options.tabs[0]) && !implicit_options { options.tab_count = 0 }
+    return ParseResult.ParseOk
+}
+
+PrintUsage :: () {
+    print("usage: t9 [options]\n")
+    print("  --working-directory PATH, --default-working-directory PATH\n")
+    print("  --shell PATH; --command CMD, --command=CMD, -e CMD\n")
+    print("  -x, --execute CMD [ARG...]; --tab, --window, --drop-down\n")
+    print("  --title TITLE, -T TITLE; --hold, -H\n")
+    print("  --geometry COLSxROWS, --fullscreen, --maximize\n")
+    print("  --show-menubar, --hide-menubar, --show-toolbar, --hide-toolbar\n")
+    print("  --show-borders, --hide-borders, --disable-server\n")
+    print("  --font-size N, --scrollback N, --cursor-style block|underline|bar\n")
+    print("  --terminal-font PATH; --terminal-foreground #rrggbb|default\n")
+    print("  --terminal-background #rrggbb|default; --terminal-cursor #rrggbb|default\n")
+    print("  --terminal-selection-foreground #rrggbb|default\n")
+    print("  --terminal-selection-background #rrggbb|default\n")
+    print("  --dynamic-title-mode replace|prepend|append|ignore\n")
+    print("  --backspace-binding ascii-delete|control-h; --delete-binding escape-sequence|ascii-delete\n")
+    print("  --ambiguous-width narrow|wide; --allow-bold true|false, --enable-bold, --disable-bold\n")
+    print("  --unlimited-scrollback, --auto-hide-mouse, --middle-click-closes-tab, --always-show-tabs\n")
+    print("  --disable-menu-mnemonics, --disable-menu-shortcut, --disable-help-shortcut\n")
+    print("  --background-opacity 0..100, --background-image PATH\n")
+}
+PrintVersion :: () { print("t9 0.1\n") }
+PrintColorTable :: () {
+    for index: cast(s32)0..cast(s32)15 {
+        print("\x1b[48;5;%m  \x1b[0m ", index)
+        if index < 10 { print("0") }
+        print("%", index)
+        if index % 8 == 7 { print("\n") } else { print("  ") }
+    }
+}

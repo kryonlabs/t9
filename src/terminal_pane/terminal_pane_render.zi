@@ -1,19 +1,11 @@
+using Drawing :: #import "kryon/drawing_props";
+using Geometry :: #import "kryon/geometry";
+Sessions :: #import "kryon/session";
+Paint :: #import "kryon/paint_queue";
+Text :: #import "terminal_pane_text";
+
 TERMINAL_PANE_GRID_CELL_WIDE_CONT :: 1;
 TERMINAL_PANE_GRID_CELL_HIDDEN :: 2;
-
-Color :: struct {
-    r: u8
-    g: u8
-    b: u8
-    a: u8
-}
-
-Rectangle :: struct {
-    x: float32
-    y: float32
-    width: float32
-    height: float32
-}
 
 TerminalPaneGridCell :: struct {
     codepoint: u32
@@ -32,37 +24,36 @@ TerminalPaneGridDraw :: struct {
     cells: *TerminalPaneGridCell
 }
 
-#scope_file
-kryon :: #system_library "c";
-RenderTextGlyphHost :: (codepoint: u32, x: s32, y: s32, font_size: s32, color: Color) -> s32 #foreign kryon "RenderTextGlyph";
-#scope_export
-
-#program_export
-DrawTerminalPaneGlyphCell :: (codepoint: u32, combining: u32,
-    x: s32, y: s32, font_size: s32, color: Color) {
-    RenderTextGlyphHost(codepoint, x, y, font_size, color)
-    if combining != 0 {
-        RenderTextGlyphHost(combining, x, y, font_size, color)
+// Kryon owns queued text, including temporary UTF-8 buffers for large grids.
+DrawTerminalPaneGlyphCell :: (session: Sessions.Session, node: s32,
+    codepoint: u32, combining: u32, x: s32, y: s32, font_size: s32,
+    color: Color, clip: Rectangle) {
+    bytes: [12]u8
+    length: s32
+    if codepoint == cast(u32)0 || codepoint == cast(u32)32 { return }
+    if !Text.AppendTerminalPaneUTF8Codepoint(*bytes[0], 12, *length, codepoint) { return }
+    if combining != cast(u32)0 {
+        Text.AppendTerminalPaneUTF8Codepoint(*bytes[0], 12, *length, combining)
     }
+    Paint.PaintClippedLabel(session, node, TextView(bytes[0:length]),
+        x, y, font_size, color, clip)
 }
 
-#program_export
-DrawTerminalPaneGlyphGrid :: (grid: TerminalPaneGridDraw) {
-    row: s32 = 0
+DrawTerminalPaneGlyphGrid :: (session: Sessions.Session, node: s32,
+    grid: TerminalPaneGridDraw) {
     if grid.cells == null || grid.cols <= 0 || grid.rows <= 0 ||
-       grid.cell_width <= 0 || grid.line_height <= 0 ||
-       grid.font_size <= 0 { return }
+       grid.cell_width <= 0 || grid.line_height <= 0 || grid.font_size <= 0 { return }
+    row: s32
     while row < grid.rows {
-        y: s32 = cast(s32)grid.bounds.y + row * grid.line_height
-        col: s32 = 0
+        col: s32
         while col < grid.cols {
-            cell: TerminalPaneGridCell =
-                grid.cells[row * grid.cols + col]
-            x: s32 = cast(s32)grid.bounds.x + col * grid.cell_width
+            cell := grid.cells[row * grid.cols + col]
             if (cell.flags & (TERMINAL_PANE_GRID_CELL_WIDE_CONT |
                     TERMINAL_PANE_GRID_CELL_HIDDEN)) == 0 {
-                DrawTerminalPaneGlyphCell(cell.codepoint, cell.combining,
-                    x, y, grid.font_size, cell.foreground)
+                DrawTerminalPaneGlyphCell(session, node, cell.codepoint, cell.combining,
+                    cast(s32)grid.bounds.x + col * grid.cell_width,
+                    cast(s32)grid.bounds.y + row * grid.line_height,
+                    grid.font_size, cell.foreground, grid.bounds)
             }
             col += 1
         }

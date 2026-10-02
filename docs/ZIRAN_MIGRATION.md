@@ -5,10 +5,11 @@ migration input only: each one is removed after its behavior has a current
 Ziran implementation and focused hosted/Plan 9 checks. No compatibility
 compiler path, dual product module, or `.kry` restore is part of the target.
 
-Current status: 43 maintained Ziran sources include 21 pane modules,
+Current status: 47 maintained Ziran sources include 22 pane modules,
 clipboard storage/protocol handling, both platform process transports, and
-the full terminal engine and its typed state, and application configuration. There are 18 legacy `.kry`
-inputs and two handwritten C implementations remaining at the pane and app
+the full terminal engine and its typed state, application configuration,
+command-line options, sessions and their persistence. There are 14 legacy `.kry`
+inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
 expressed as Ziran types and explicit foreign/host bindings, then linked to the
@@ -22,7 +23,8 @@ The canonical repository is `taijiosnet/t9`. Its history includes Kapsule's
 original terminal sources and local compatibility fixes; those older C
 implementations are not restored alongside the maintained ports.
 
-`make pane-ziran-test` runs the engine, configuration, clipboard, selection, keyboard, OSC,
+`make pane-ziran-test` runs the engine, configuration, sessions, launch options,
+widget, theme/profile, clipboard, selection, keyboard, OSC,
 pane sizing, and Linux PTY suites without the legacy application. Keyboard protocol and current
 Kryon session input are
 checked as native C/C++ and from saved IR. `make keys-plan9-test` with
@@ -36,7 +38,7 @@ clipboard port keeps primary-selection preference, soft-wrap copying,
 host sync/flush, paste callback routing, and scroll reset behavior.
 
 Full application, Rill host, and whole-application Plan 9 builds still use
-legacy application/widget sources and Kryon C headers. Current Kryon no longer exposes that API,
+legacy application sources and Kryon C headers. Current Kryon no longer exposes that API,
 so these builds are not established by the independent pane checks. Keep
 the existing application pipeline until the remaining app/runtime modules move
 to Ziran and current Kryon bindings.
@@ -62,7 +64,7 @@ The remaining legacy application must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`be96f1f7`) and compiler (`4164aff7`) master commits. These current
+Kryon (`ef4e7058`) and compiler (`86b3148`) master commits. These current
 commits are local; their publication remains necessary for fresh locked builds.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -150,8 +152,49 @@ Every file fixture lives inside its disposable generated-output folder.
 The remaining app consumers must use this module's `Defaults`, `Apply`,
 `Load`, `Save`, and `EffectiveScrollback` APIs with the canonical settings type.
 
-The next source boundary is the terminal widget and application state. Migrate
-their consumers to `Terminal` and the current pane/clipboard contracts, then
+## Embedded pane and themes
+
+`terminal_pane_widget.zi` uses explicit Kryon sessions, input frames and queued
+paint. Embedded panes use the application's `Terminal` engine; the second
+handwritten simple-terminal parser and state are removed. Rendering preserves
+Unicode, combining characters and wide-cell positions, clips glyphs and cursors,
+and supports a complete 240-by-120 grid without borrowing temporary cell text.
+Theme colors come from current Kryon palette/style rules; test-only legacy
+theme and rendering implementations are removed.
+
+`make widget-test profile-test` checks source and saved-IR C/C++ behavior,
+including real child-process keyboard input and current theme rules. `make
+widget-plan9-test` passes the same widget fixture under native 8c/8l. `make
+pane-native pane-plan9-c` produces the migrated pane's native library/output.
+
+## Sessions and launch options
+
+`app_session.zi` owns each tab's typed `Terminal`, launch text, title and
+scroll offset. It preserves dynamic-title modes, explicit title overrides,
+OSC working-directory updates and Linux process-directory lookup. Launch text
+is copied before restarting a tab; process sessions remain valid when tab
+records move. The configured scrollback limit is applied after engine startup.
+
+`app_session_store.zi` uses standard file modules on both platforms. It keeps
+the escaped tab format and XDG/home paths, reads full records across file
+chunks, skips whole oversized lines and prepares serialization before opening
+an existing file for replacement. Signed persisted values saturate without
+overflow and tiny title buffers remain terminated.
+
+`app_launch_options.zi` replaces the legacy option parser, retaining per-tab
+launch specifications, terminal settings and supported desktop option aliases.
+Missing required values now report an error. Execute arguments use POSIX shell
+quoting on Linux and rc quoting on native Plan 9.
+
+`make session-test launch-test` checks source and saved-IR C/C++ execution;
+`make session-plan9-test launch-plan9-test` checks actual native 8c/8l execution.
+Sessions exercise real child I/O after a tab move and execute arguments
+containing spaces and apostrophes through the actual platform shell. File
+fixtures stay inside disposable test-output directories. Native QEMU gates
+also cap the translation buffer at 32 MB.
+
+The next source boundary is application state and its consumers. Migrate
+them to `Terminal`, `Session`, launch options and current pane/clipboard contracts, then
 migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
@@ -186,6 +229,10 @@ those whole-application gates pass.
 - `src/terminal_pty_plan9.zi`
 - `src/terminal.zi` and its loaded `src/engine/*.zi` modules
 - `src/app/app_config.zi`
+- `src/terminal_pane/terminal_pane_widget.zi`
+- `src/app/app_session.zi`
+- `src/app/app_session_store.zi`
+- `src/app/app_launch_options.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

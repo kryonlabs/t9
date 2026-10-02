@@ -14,14 +14,18 @@ TAIJI_DIR=/path/to/taijiosnet/taiji make osc-plan9-test pty-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make clipboard-plan9-test selection-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make terminal-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make config-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make widget-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make session-plan9-test launch-plan9-test
 ```
 
-These independent engine, configuration, clipboard, selection, keyboard, OSC, pane sizing,
+These independent engine, configuration, session, launch-option, widget,
+theme/profile, clipboard, selection, keyboard, OSC, pane sizing,
 and Linux PTY tests use the locked Ziran toolchain or a canonical local override. The
 `clipboard-plan9-c` target emits C. Native keyboard, OSC, metrics, clipboard,
-selection, engine, and PTY gates compile and execute source and saved-IR fixtures
+selection, engine, configuration, widget, session, launch-option and PTY gates compile and execute source and saved-IR fixtures
 with actual 8c/8l in a headless Taiji guest
-limited to one CPU, 256 MB, and 120 seconds. They never use the live desktop.
+limited to one CPU, 256 MB, a 32 MB translation buffer, and 120 seconds.
+They never use the live desktop.
 
 The full `make`, `make run`, `make test`, and `make install` routes retain
 the transition application's legacy Kryon/k2c pipeline. They currently need
@@ -31,7 +35,9 @@ focused test results do not establish a working full application build.
 
 The terminal engine is now Ziran: `src/terminal.zi` owns its typed state and
 loads `src/engine/*.zi`. Its native library target builds `libt9_terminal.a`;
-the remaining application and widget consumers still need migration.
+The embedded widget uses that same engine and current Kryon frames. Sessions,
+saved tabs and command-line options also use Ziran; the remaining application
+consumers still need migration.
 
 `make install` installs the `t9` command, the Rill host module, and a
 desktop launcher named Terminal.

@@ -1,0 +1,94 @@
+Launch :: #import "app_launch_options";
+Config :: #import "app_config";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+Numbers :: #import "std/number_text";
+
+Value :: (bytes: []u8) -> string { return Text.TextFromCString(*bytes[0]) }
+
+#program_export
+main :: () -> s32 {
+    config: Types.TerminalPaneProfileSettings
+    options: Launch.LaunchOptions
+    error: [256]u8
+    Config.Defaults(*config); Launch.Defaults(*options)
+    aliases: [13]string = .{"t9", "--default-working-directory=/tmp/project", "--command=printf ok",
+        "--font-size=20", "--title", "Build", "--geometry=120x40", "--hold", "--maximize",
+        "--hide-menubar", "--show-toolbar", "--hide-borders", "--disable-server"}
+    if cast(s32)Launch.Parse(*options, *config, aliases[:], error[:]) != 0 ||
+        Value(config.working_directory[:]) != "/tmp/project" || Value(config.command[:]) != "printf ok" ||
+        config.font_size != 20 || Value(options.initial_title[:]) != "Build" ||
+        options.geometry_cols != 120 || options.geometry_rows != 40 || !options.hold ||
+        !options.maximize || options.show_menubar || !options.show_toolbar || options.show_borders { return 1 }
+    Config.Defaults(*config); Launch.Defaults(*options)
+    tabs: [14]string = .{"t9", "--command=make test", "--title", "Build", "--tab",
+        "--default-working-directory", "/tmp/logs", "--title=Logs", "--command=tail -f app.log",
+        "--tab", "-T", "Shell", "--shell=/bin/sh", "--scrollback=10000"}
+    if cast(s32)Launch.Parse(*options, *config, tabs[:], error[:]) != 0 || options.tab_count != 3 ||
+        Value(options.tabs[0].title[:]) != "Build" || Value(options.tabs[0].command[:]) != "make test" ||
+        Value(options.tabs[1].title[:]) != "Logs" || Value(options.tabs[1].working_directory[:]) != "/tmp/logs" ||
+        Value(options.tabs[1].command[:]) != "tail -f app.log" || Value(options.tabs[2].title[:]) != "Shell" ||
+        options.tabs[2].command[0] != 0 || config.scrollback_limit != 10000 || Value(config.shell[:]) != "/bin/sh" { return 2 }
+    Config.Defaults(*config); Launch.Defaults(*options)
+    leading: [12]string = .{"t9", "--default-display=:7", "--drop-down", "--tab", "--title", "One",
+        "--window", "--command", "pwd", "--display", ":8", "--role=ignored"}
+    if cast(s32)Launch.Parse(*options, *config, leading[:], error[:]) != 0 || options.tab_count != 2 ||
+        !options.drop_down || options.show_borders || options.show_menubar || options.show_toolbar ||
+        Value(options.tabs[0].title[:]) != "One" || Value(options.tabs[1].command[:]) != "pwd" { return 3 }
+    Config.Defaults(*config); Launch.Defaults(*options)
+    empty: [2]string = .{"t9", "--tab"}
+    if cast(s32)Launch.Parse(*options, *config, empty[:], error[:]) != 0 || options.tab_count != 0 { return 4 }
+    many: [10]string
+    many[0] = "t9"
+    for at: 1..9 { many[at] = "--tab" }
+    Launch.Defaults(*options)
+    if cast(s32)Launch.Parse(*options, *config, many[:], error[:]) != 4 ||
+        Value(error[:]) != "too many tabs" { return 5 }
+    Config.Defaults(*config); Launch.Defaults(*options)
+    toggles: [12]string = .{"t9", "--unlimited-scrollback", "--auto-hide-mouse", "--middle-click-closes-tab",
+        "--always-show-tabs", "--disable-menu-mnemonics", "--disable-menu-shortcut", "--disable-help-shortcut",
+        "--disable-bold", "--background-opacity=50", "--terminal-foreground=#112233", "--ambiguous-width=wide"}
+    if cast(s32)Launch.Parse(*options, *config, toggles[:], error[:]) != 0 ||
+        config.unlimited_scrollback != 1 || config.auto_hide_mouse != 1 || config.middle_click_closes_tab != 1 ||
+        config.always_show_tabs != 1 || config.disable_menu_mnemonics != 1 || config.disable_menu_shortcut != 1 ||
+        config.disable_help_shortcut != 1 || config.allow_bold != 0 || config.background_opacity != 50 ||
+        config.terminal_foreground != (Types.TERMINAL_PANE_COLOR_TRUE_RGB | 0x112233) || config.ambiguous_width_wide != 1 { return 6 }
+    off: [8]string = .{"t9", "--no-unlimited-scrollback", "--no-auto-hide-mouse", "--no-middle-click-closes-tab",
+        "--no-always-show-tabs", "--enable-bold", "--disable-menu-mnemonics=false", "--allow-bold=true"}
+    if cast(s32)Launch.Parse(*options, *config, off[:], error[:]) != 0 ||
+        config.unlimited_scrollback != 0 || config.auto_hide_mouse != 0 || config.middle_click_closes_tab != 0 ||
+        config.always_show_tabs != 0 || config.allow_bold != 1 || config.disable_menu_mnemonics != 0 { return 7 }
+    bad_geometry: [2]string = .{"t9", "--geometry=999999999999999999999x4"}
+    if cast(s32)Launch.Parse(*options, *config, bad_geometry[:], error[:]) != 4 { return 8 }
+    missing: [2]string = .{"t9", "--shell"}
+    if cast(s32)Launch.Parse(*options, *config, missing[:], error[:]) != 4 ||
+        Value(error[:]) != "option requires a value: --shell" { return 9 }
+    special: [2]string = .{"t9", "--help"}
+    if cast(s32)Launch.Parse(*options, *config, special[:], error[:]) != 1 { return 10 }
+    special[1] = "-V"
+    if cast(s32)Launch.Parse(*options, *config, special[:], error[:]) != 2 { return 11 }
+    special[1] = "--color-table"
+    if cast(s32)Launch.Parse(*options, *config, special[:], error[:]) != 3 { return 12 }
+    execute: [5]string = .{"t9", "-x", "printf", "a b", "c'd"}
+    Config.Defaults(*config); Launch.Defaults(*options)
+    if cast(s32)Launch.Parse(*options, *config, execute[:], error[:]) != 0 { return 13 }
+    #if #defined(PLAN9) {
+        if Value(config.command[:]) != "'printf' 'a b' 'c''d'" { return 14 }
+    } else {
+        if Value(config.command[:]) != "'printf' 'a b' 'c'\\''d'" { return 14 }
+    }
+    command: [1024]u8
+    quotes: [3]string = .{"", "line\nwith tab\t", "c'd"}
+    if !Launch.JoinExecuteCommand(quotes[:], command[:], true) ||
+        Value(command[:]) != "'' 'line\nwith tab\t' 'c''d'" { return 15 }
+    long: [1024]u8
+    for at: cast(s64)0..cast(s64)1022 { long[at] = 120 }
+    execute[2] = TextView(long[0:1023])
+    if cast(s32)Launch.Parse(*options, *config, execute[:], error[:]) != 4 { return 16 }
+    options.tab_count = 0
+    error[0] = 99
+    if cast(s32)Launch.Parse(null, *config, aliases[:], error[:]) != 4 || error[0] != 0 { return 17 }
+    // Keep the user-visible information routes part of generated builds.
+    Launch.PrintUsage(); Launch.PrintVersion(); Launch.PrintColorTable()
+    return 0
+}

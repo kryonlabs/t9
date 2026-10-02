@@ -21,8 +21,8 @@ Execute :: (path: *s8, arguments: **s8) -> s32 #foreign libc "execv";
 Exit :: (status: s32) #foreign libc "_exit";
 DescriptorFlags :: (descriptor: s32, command: s32, flags: s32) -> s32 #foreign libc "fcntl";
 Ioctl :: (descriptor: s32, request: usize, value: *void) -> s32 #foreign libc "ioctl";
-Read :: (descriptor: s32, output: *void, capacity: usize) -> isize #foreign libc "read";
-Write :: (descriptor: s32, input: *void, count: usize) -> isize #foreign libc "write";
+ReadHost :: (descriptor: s32, output: *void, capacity: usize) -> isize #foreign libc "read";
+WriteHost :: (descriptor: s32, input: *void, count: usize) -> isize #foreign libc "write";
 Wait :: (pid: s32, status: *s32, options: s32) -> s32 #foreign libc "waitpid";
 Signal :: (pid: s32, number: s32) -> s32 #foreign libc "kill";
 ErrorPointer :: () -> *s32 #foreign libc "__errno_location";
@@ -143,14 +143,14 @@ TerminalPtyOpen :: (cwd: *u8, shell: *u8, command: *u8, cols: s32, rows: s32, ou
 #program_export
 TerminalPtyWrite :: (descriptor: s32, data: *void, count: s32) -> s32 {
     if descriptor < 0 || data == null || count <= 0 { return 0 }
-    written := Write(descriptor, data, cast(usize)count)
+    written := WriteHost(descriptor, data, cast(usize)count)
     return ifx written > 0 then cast(s32)written else 0
 }
 
 #program_export
 TerminalPtyRead :: (descriptor: s32, data: *void, capacity: s32) -> s32 {
     if descriptor < 0 || data == null || capacity <= 0 { return -1 }
-    count := Read(descriptor, data, cast(usize)capacity)
+    count := ReadHost(descriptor, data, cast(usize)capacity)
     if count > 0 { return cast(s32)count }
     if count == 0 { return -1 }
     error := ErrorPointer().*

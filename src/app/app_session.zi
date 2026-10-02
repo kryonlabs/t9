@@ -1,0 +1,253 @@
+// Each tab owns its emulator and text; moving a Session retains no self pointers.
+#scope_module
+Engine :: #import "terminal";
+Pane :: #import "terminal_pane_session";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+Numbers :: #import "std/number_text";
+libc :: #system_library "c";
+EnvironmentHost :: (name: *s8) -> *s8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    FreeHost :: (value: *void) #foreign libc "free";
+} else {
+    HostnameHost :: (output: *s8, capacity: usize) -> s32 #foreign libc "gethostname";
+    ReadLinkHost :: (path: *s8, output: *s8, capacity: usize) -> s64 #foreign libc "readlink";
+}
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Append :: (output: []u8, used: *s64, value: string) {
+    if output.count <= 0 { return }
+    for index: cast(s64)0..value.count - 1 {
+        if used.* >= output.count - 1 || value[index] == 0 { break }
+        output[used.*] = value[index]
+        used.* += 1
+    }
+    output[used.*] = 0
+}
+
+Environment :: (name: string, output: []u8) -> string {
+    raw := cast(*u8)EnvironmentHost(cast(*s8)Bytes(name))
+    result := CopyText(output, Text.TextFromCString(raw))
+    #if #defined(PLAN9) {
+        FreeHost(cast(*void)raw)
+    }
+    return result
+}
+
+ShortTitle :: (output: []u8, value: string) {
+    if output.count <= 0 { return }
+    // The formatter receives a terminated copy, including for borrowed slices.
+    buffer: [512]u8
+    CopyText(buffer[:], value)
+    Pane.FormatTerminalPaneSessionTitle(*output[0], cast(s32)output.count,
+        *buffer[0], Bytes("terminal"))
+}
+
+SetDefaultTitle :: (session: *Session) {
+    home: [1024]u8; user: [128]u8; host: [256]u8
+    #if #defined(PLAN9) {
+        Environment("home", home[:])
+    } else {
+        Environment("HOME", home[:])
+    }
+    if Environment("USER", user[:]) == "" { Environment("user", user[:]) }
+    if Environment("HOSTNAME", host[:]) == "" {
+        #if #defined(PLAN9) {
+            Environment("sysname", host[:])
+        } else {
+            if HostnameHost(cast(*s8)(*host[0]), cast(usize)255) != 0 { host[0] = 0 }
+            host[255] = 0
+        }
+    }
+    DefaultTitleFor(session, Text.TextFromCString(*home[0]),
+        Text.TextFromCString(*user[0]), Text.TextFromCString(*host[0]), session.title[:])
+}
+
+SetShellTitle :: (session: *Session, value: string) -> bool {
+    at: s64 = -1; colon: s64 = -1; space: s64 = -1
+    for index: cast(s64)0..value.count - 1 {
+        if value[index] == 64 && at < 0 { at = index }
+        if value[index] == 58 && at >= 0 && colon < 0 { colon = index }
+        if value[index] == 32 && space < 0 { space = index }
+    }
+    if at <= 0 || colon <= at + 1 || (space >= 0 && space < colon) { return false }
+    path := colon + 1
+    while path < value.count && value[path] == 32 { path += 1 }
+    if path >= value.count { return false }
+    home: [1024]u8
+    #if #defined(PLAN9) {
+        Environment("home", home[:])
+    } else {
+        Environment("HOME", home[:])
+    }
+    used: s64
+    Append(session.title[:], *used, "Terminal - ")
+    Append(session.title[:], *used, value[0:colon])
+    Append(session.title[:], *used, " ")
+    Append(session.title[:], *used,
+        DisplayDirectory(value[path:value.count], Text.TextFromCString(*home[0])))
+    return true
+}
+
+#scope_export
+Session :: struct {
+    terminal: Engine.Terminal
+    scroll_offset: s32
+    used: bool
+    cwd: [1024]u8
+    shell: [512]u8
+    command: [1024]u8
+    title: [128]u8
+    title_override: bool
+    initialized: bool
+}
+
+CopyText :: (output: []u8, value: string) -> string {
+    used: s64
+    Append(output, *used, value)
+    return TextView(output[0:used])
+}
+
+DisplayDirectory :: (cwd: string, home: string) -> string {
+    if cwd == "" || (home != "" && cwd == home) { return "~" }
+    if home != "" && cwd.count > home.count &&
+        cwd[0:home.count] == home && cwd[home.count] == 47 {
+        return cwd[home.count + 1:cwd.count]
+    }
+    if cwd == "/" { return "/" }
+    index := cwd.count - 1
+    while index >= 0 {
+        if cwd[index] == 47 {
+            if index + 1 < cwd.count { return cwd[index + 1:cwd.count] }
+            break
+        }
+        index -= 1
+    }
+    return cwd
+}
+
+DefaultTitleFor :: (session: *Session, home: string, user: string,
+    host: string, output: []u8) {
+    if output.count <= 0 { return }
+    output[0] = 0
+    if session == null { return }
+    if session.command[0] != 0 {
+        ShortTitle(output, Text.TextFromCString(*session.command[0]))
+        return
+    }
+    used: s64
+    Append(output, *used, "Terminal - ")
+    Append(output, *used, ifx user != "" then user else "user")
+    Append(output, *used, "@")
+    Append(output, *used, ifx host != "" then host else "localhost")
+    Append(output, *used, " ")
+    Append(output, *used, DisplayDirectory(Text.TextFromCString(*session.cwd[0]), home))
+}
+
+Init :: (session: *Session) {
+    if session == null { return }
+    session.* = Session.{}
+    Engine.terminal_init(*session.terminal)
+    session.initialized = true
+}
+
+Open :: (session: *Session, cwd: string, shell: string, command: string,
+    cols: s32, rows: s32, scrollback_limit: s32) -> bool {
+    if session == null { return false }
+    // A restart may pass views into this Session's own launch fields.
+    directory: [1024]u8; executable: [512]u8; script: [1024]u8
+    CopyText(directory[:], cwd); CopyText(executable[:], shell); CopyText(script[:], command)
+    Close(session)
+    Init(session)
+    CopyText(session.cwd[:], Text.TextFromCString(*directory[0]))
+    CopyText(session.shell[:], Text.TextFromCString(*executable[0]))
+    CopyText(session.command[:], Text.TextFromCString(*script[0]))
+    SetDefaultTitle(session)
+    opened := Engine.terminal_spawn(*session.terminal, *session.cwd[0],
+        *session.shell[0], *session.command[0], cols, rows) != 0
+    Engine.terminal_set_scrollback_limit(*session.terminal, scrollback_limit)
+    if !opened {
+        message := "Could not start shell\r\n"
+        Engine.terminal_feed(*session.terminal, cast(*void)Bytes(message), cast(s32)message.count)
+    }
+    session.used = true
+    return opened
+}
+
+Close :: (session: *Session) {
+    if session == null { return }
+    if session.initialized { Engine.terminal_close(*session.terminal) }
+    session.used = false
+    session.scroll_offset = 0
+}
+
+Title :: (session: *Session) -> string {
+    if session == null { return "" }
+    if session.title[0] != 0 { return Text.TextFromCString(*session.title[0]) }
+    return "terminal"
+}
+
+SetTitle :: (session: *Session, title: string) {
+    if session == null { return }
+    CopyText(session.title[:], ifx title != "" then title else "terminal")
+    session.title_override = true
+}
+
+RestoreTitle :: (session: *Session, title: string, override: bool) {
+    if session == null || title == "" { return }
+    session.title_override = override
+    if override { CopyText(session.title[:], title) }
+    else { ShortTitle(session.title[:], title) }
+}
+
+SyncMetadata :: (session: *Session, mode: s32 = Types.TERMINAL_PANE_TITLE_REPLACE) {
+    if session == null { return }
+    directory := Text.TextFromCString(*session.terminal.current_directory[0])
+    if directory != "" && directory != Text.TextFromCString(*session.cwd[0]) {
+        CopyText(session.cwd[:], directory)
+        if !session.title_override && session.terminal.title[0] == 0 { SetDefaultTitle(session) }
+    }
+    value := Text.TextFromCString(*session.terminal.title[0])
+    if value == "" || session.title_override { return }
+    if mode == Types.TERMINAL_PANE_TITLE_IGNORE { SetDefaultTitle(session); return }
+    if mode == Types.TERMINAL_PANE_TITLE_PREPEND || mode == Types.TERMINAL_PANE_TITLE_APPEND {
+        SetDefaultTitle(session)
+        base: [128]u8; composed: [512]u8
+        CopyText(base[:], Title(session))
+        used: s64
+        Append(composed[:], *used,
+            ifx mode == Types.TERMINAL_PANE_TITLE_PREPEND then value else Text.TextFromCString(*base[0]))
+        Append(composed[:], *used, " - ")
+        Append(composed[:], *used,
+            ifx mode == Types.TERMINAL_PANE_TITLE_PREPEND then Text.TextFromCString(*base[0]) else value)
+        ShortTitle(session.title[:], Text.TextFromCString(*composed[0]))
+    } else if !SetShellTitle(session, value) { ShortTitle(session.title[:], value) }
+}
+
+CurrentCwd :: (session: *Session, output: []u8) -> string {
+    if output.count <= 0 { return "" }
+    output[0] = 0
+    if session == null { return "" }
+    if session.terminal.current_directory[0] != 0 {
+        return CopyText(output, Text.TextFromCString(*session.terminal.current_directory[0]))
+    }
+    #if !#defined(PLAN9) {
+        if session.terminal.pid > 0 {
+            path: [64]u8; number: [16]u8
+            used: s64
+            Append(path[:], *used, "/proc/")
+            Append(path[:], *used, Numbers.FormatInteger(cast(s64)session.terminal.pid, number[:]))
+            Append(path[:], *used, "/cwd")
+            length := ReadLinkHost(cast(*s8)(*path[0]), cast(*s8)(*output[0]), cast(usize)(output.count - 1))
+            if length > 0 && length < output.count {
+                output[length] = 0
+                return TextView(output[0:length])
+            }
+        }
+    }
+    return CopyText(output, Text.TextFromCString(*session.cwd[0]))
+}

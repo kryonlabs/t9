@@ -1,7 +1,0 @@
-#import "terminal_pane_profile_colors"
-
-#program_export
-ResolveTerminalPaneThemeColors :: (
-    colors: TerminalPaneColors) -> TerminalPaneColors {
-    return colors
-}

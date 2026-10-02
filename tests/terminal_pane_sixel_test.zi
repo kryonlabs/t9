@@ -1,6 +1,5 @@
 #import "terminal_pane_sixel"
 #import "terminal_pane_profile_types"
-#import "terminal_pane_profile_colors_theme"
 
 Fill :: (output: *u8, value: string) {
     index: s32 = 0

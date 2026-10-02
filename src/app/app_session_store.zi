@@ -1,0 +1,146 @@
+// Persist tab metadata through the same Ziran file modules on both platforms.
+#scope_module
+Sessions :: #import "app_session";
+Pane :: #import "terminal_pane_session";
+Text :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    File :: #import "std/file_linux";
+}
+libc :: #system_library "c";
+Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    FreeHost :: (value: *void) #foreign libc "free";
+}
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Put :: (output: []u8, used: *s64, value: string) -> bool {
+    if used.* + value.count >= output.count { return false }
+    for index: cast(s64)0..value.count - 1 { output[used.* + index] = value[index] }
+    used.* += value.count
+    output[used.*] = 0
+    return true
+}
+
+Parents :: (path: string) -> bool {
+    for index: cast(s64)1..path.count - 1 {
+        if path[index] == 47 && !File.CreatePrivateDirectory(path[0:index]) { return false }
+    }
+    return true
+}
+
+ReadLine :: (line: *u8, length: s32, records: []Pane.TerminalPaneSessionRecord,
+    count: *s32, active: *s32) {
+    line[length] = 0
+    if Pane.ParseTerminalPaneSessionActive(line, active) != 0 { return }
+    if count.* < cast(s32)records.count &&
+        Pane.ParseTerminalPaneSessionRecord(line, *records[count.*]) != 0 { count.* += 1 }
+}
+
+#scope_export
+ResolvePath :: (xdg: string, home: string, plan9: bool, output: []u8) -> string {
+    root := home
+    suffix := "/.local/state/t9/session"
+    if plan9 { suffix = "/lib/t9/session" }
+    else if xdg != "" { root = xdg; suffix = "/t9/session" }
+    if root == "" || root.count + suffix.count >= output.count { return "" }
+    used: s64
+    Put(output, *used, root); Put(output, *used, suffix)
+    return TextView(output[0:used])
+}
+
+Path :: (output: []u8) -> string {
+    #if #defined(PLAN9) {
+        home := Environment(cast(*s8)Bytes("home"))
+        result := ResolvePath("", Text.TextFromCString(cast(*u8)home), true, output)
+        FreeHost(cast(*void)home)
+        return result
+    } else {
+        return ResolvePath(Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("XDG_STATE_HOME"))),
+            Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("HOME"))), false, output)
+    }
+}
+
+Serialize :: (sessions: []Sessions.Session, active: s32, output: []u8) -> s64 {
+    if output.count <= 0 { return -1 }
+    output[0] = 0
+    used: s64
+    number: [32]u8
+    index := ifx sessions.count > 0 then active else 0
+    if !Put(output, *used, "active=") ||
+        !Put(output, *used, Number.FormatInteger(cast(s64)index, number[:])) ||
+        !Put(output, *used, "\n") { return -1 }
+    for tab: cast(s64)0..sessions.count - 1 {
+        session := *sessions[tab]
+        record: Pane.TerminalPaneSessionRecord
+        Sessions.CurrentCwd(session, record.cwd[:])
+        Sessions.CopyText(record.shell[:], Text.TextFromCString(*session.shell[0]))
+        Sessions.CopyText(record.command[:], Text.TextFromCString(*session.command[0]))
+        if session.title_override { Sessions.CopyText(record.title[:], Sessions.Title(session)) }
+        record.title_override = cast(s32)session.title_override
+        record.scroll_offset = session.scroll_offset
+        line: [8192]u8
+        length := Pane.FormatTerminalPaneSessionRecord(*line[0], 8192, record)
+        if length <= 0 || !Put(output, *used, TextView(line[0:length])) ||
+            !Put(output, *used, "\n") { return -1 }
+    }
+    return used
+}
+
+SaveFile :: (sessions: []Sessions.Session, active: s32, path: string) -> bool {
+    if path == "" { return false }
+    bytes: [65536]u8
+    length := Serialize(sessions, active, bytes[:])
+    // Prepare every record before opening an existing session file for writing.
+    if length < 0 || !Parents(path) { return false }
+    file := File.OpenReplace(path)
+    if !file.valid { return false }
+    used: s64
+    while used < length {
+        wrote := File.Write(file, bytes[used:length])
+        if wrote <= 0 { File.CloseFile(file); return false }
+        used += wrote
+    }
+    return File.CloseFile(file)
+}
+
+LoadFile :: (records: []Pane.TerminalPaneSessionRecord, active: *s32, path: string) -> s32 {
+    if active != null { active.* = 0 }
+    if records.count <= 0 || path == "" { return 0 }
+    file := File.OpenRead(path)
+    if !file.valid { return 0 }
+    defer File.CloseFile(file)
+    chunk: [4096]u8; line: [8192]u8
+    used: s32; count: s32; overflow: bool
+    while true {
+        got := File.Read(file, chunk[:])
+        if got <= 0 { break }
+        for index: cast(s64)0..got - 1 {
+            byte := chunk[index]
+            if byte == 10 {
+                if !overflow { ReadLine(*line[0], used, records, *count, active) }
+                used = 0; overflow = false
+            } else if byte == 0 { overflow = true }
+            else if !overflow && used < 8191 { line[used] = byte; used += 1 }
+            else { overflow = true }
+        }
+    }
+    if !overflow && used > 0 { ReadLine(*line[0], used, records, *count, active) }
+    return count
+}
+
+Save :: (sessions: []Sessions.Session, active: s32) -> bool {
+    path: [1024]u8
+    return SaveFile(sessions, active, Path(path[:]))
+}
+
+Load :: (records: []Pane.TerminalPaneSessionRecord, active: *s32) -> s32 {
+    path: [1024]u8
+    return LoadFile(records, active, Path(path[:]))
+}

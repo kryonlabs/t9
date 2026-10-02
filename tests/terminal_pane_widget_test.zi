@@ -1,0 +1,184 @@
+Pane :: #import "terminal_pane_widget";
+Render :: #import "terminal_pane_render";
+Colors :: #import "terminal_pane_profile_colors";
+Engine :: #import "terminal";
+Text :: #import "std/byte_text_linux";
+using Geometry :: #import "kryon/geometry";
+Sessions :: #import "kryon/session";
+Tree :: #import "kryon/tree";
+Frame :: #import "kryon/Frame";
+Input :: #import "kryon/tree_input";
+Paint :: #import "kryon/paint_queue";
+Host :: #import "terminal_pane_widget_host";
+ClipboardHost :: #import "terminal_clipboard_host";
+
+#scope_file
+libc :: #system_library "c";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+} else {
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)(milliseconds * 1000)) }
+}
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Feed :: (terminal: *Engine.Terminal, value: string) {
+    Engine.terminal_feed(terminal, cast(*void)Bytes(value), cast(s32)value.count)
+}
+Begin :: (session: Sessions.Session, bounds: Rectangle) {
+    Host.Reset()
+    Frame.BeginFrame(session, cast(u64)1, bounds)
+}
+Finish :: (session: Sessions.Session) -> bool {
+    return cast(s32)Frame.EndFrame(session) == 0 && !Host.failed
+}
+
+TestGrid :: (session: Sessions.Session) -> bool {
+    Begin(session, Rectangle.{0.0, 0.0, 100.0, 100.0})
+    cells: [4]Render.TerminalPaneGridCell
+    cells[0].codepoint = 65
+    cells[0].combining = 769
+    cells[1].codepoint = 66
+    cells[1].flags = Render.TERMINAL_PANE_GRID_CELL_HIDDEN
+    cells[2].codepoint = 67
+    cells[2].flags = Render.TERMINAL_PANE_GRID_CELL_WIDE_CONT
+    cells[3].codepoint = 68
+    grid: Render.TerminalPaneGridDraw
+    grid.bounds = Rectangle.{10.0, 20.0, 24.0, 24.0}
+    grid.cols = 2; grid.rows = 2
+    grid.cell_width = 8; grid.line_height = 12; grid.font_size = 14
+    grid.cells = *cells[0]
+    Render.DrawTerminalPaneGlyphGrid(session, -1, grid)
+    if Paint.PendingPaintCount(session) != 2 {
+        print("Terminal glyph grid count %\n", Paint.PendingPaintCount(session))
+        return false
+    }
+    first := Paint.PendingPaintAt(session, 0)
+    last := Paint.PendingPaintAt(session, 1)
+    if first.value != "Á" || first.x != 10 || first.y != 20 ||
+        last.value != "D" || last.x != 18 || last.y != 32 {
+        print("Terminal glyph grid values [%] [%], positions %,%,%,%\n",
+            first.value, last.value, first.x, first.y, last.x, last.y)
+        print("Terminal glyph text ownership %,%,%,% / %,%,%,%\n",
+            first.owns_text, first.text_block, first.text_start, first.text_count,
+            last.owns_text, last.text_block, last.text_start, last.text_count)
+        return false
+    }
+    grid.cells = null
+    Render.DrawTerminalPaneGlyphGrid(session, -1, grid)
+    grid.cells = *cells[0]; grid.rows = 0
+    Render.DrawTerminalPaneGlyphGrid(session, -1, grid)
+    grid.rows = 2; grid.cell_width = 0
+    Render.DrawTerminalPaneGlyphGrid(session, -1, grid)
+    ok := Paint.PendingPaintCount(session) == 2 && Finish(session) && Host.texts == 2
+    if !ok { print("Terminal glyph grid flush %,%,%\n", Host.texts, Host.failed,
+        Paint.PendingPaintCount(session)) }
+    return ok
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    session := Sessions.SessionOpen()
+    if !TestGrid(session) { return 1 }
+    bounds := Rectangle.{0.0, 0.0, 68.0, 68.0}
+    pane: Pane.TerminalPane
+    pane.key = cast(u64)2; pane.bounds = bounds
+    pane.font_size = 14; pane.padding = 2
+    pane.focused = true; pane.show_cursor = true; pane.blink_on = true
+    terminal: Engine.Terminal
+    Engine.terminal_init(*terminal)
+    pane.terminal = *terminal
+    Begin(session, bounds)
+    result := Pane.DrawTerminalPane(session, pane)
+    if result.cols != 8 || result.rows != 4 || result.node != 1 ||
+        terminal.cols != 8 || terminal.rows != 4 || !Finish(session) { return 2 }
+    Feed(*terminal, "Á界🙂\r\nsecond")
+    Begin(session, bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if !result.focused || Paint.PendingPaintCount(session) != 12 { return 3 }
+    if Paint.PendingPaintAt(session, 2).value != "Á" ||
+        Paint.PendingPaintAt(session, 3).value != "界" ||
+        Paint.PendingPaintAt(session, 3).x != 10 ||
+        Paint.PendingPaintAt(session, 4).value != "🙂" ||
+        Paint.PendingPaintAt(session, 4).x != 26 || !Finish(session) { return 4 }
+    if Host.texts != 9 || Host.fills != 2 || Host.outlines != 1 { return 5 }
+    pane.blink_on = false
+    Begin(session, bounds)
+    Pane.DrawTerminalPane(session, pane)
+    if !Finish(session) || Host.fills != 1 { return 6 }
+    pane.focused = false
+    Input.TreePointerUpdate(session, Input.PointerFrame.{4.0, 4.0, true, true, false})
+    Begin(session, bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if !result.focused || !Finish(session) { return 7 }
+    Input.TreePointerUpdate(session, Input.PointerFrame.{70.0, 4.0, true, true, false})
+    Begin(session, bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if result.focused || !Finish(session) { return 8 }
+    label: [64]u8
+    count := Pane.FormatTerminalPaneScrollIndicatorLabel(*label[0], 64, 2147483647)
+    if TextView(label[0:count]) != "2147483647 lines" ||
+        Pane.FormatTerminalPaneScrollIndicatorLabel(*label[0], 4, 1) != 0 || label[0] != 0 { return 9 }
+    indicator: Pane.TerminalPaneScrollIndicator
+    indicator.viewport = bounds; indicator.scroll_offset = 20
+    Begin(session, bounds)
+    badge := Pane.DrawTerminalPaneScrollIndicator(session, -1, indicator)
+    if badge.width > bounds.width || badge.x < bounds.x || !Finish(session) ||
+        TextView(Host.last_text[0:Host.last_length]) != "20 lines" { return 10 }
+    // Render a full-sized Unicode grid with temporary per-cell text buffers.
+    Engine.terminal_close(*terminal)
+    Engine.terminal_resize(*terminal, 240, 120)
+    for row: cast(s32)0..cast(s32)119 {
+        for col: cast(s32)0..cast(s32)239 {
+            cell := Engine.terminal_cell(*terminal, col, row)
+            cell.codepoint = cast(u32)0x1f642; cell.combining = cast(u32)769
+        }
+    }
+    pane.bounds = Rectangle.{0.0, 0.0, 1920.0, 1920.0}
+    pane.padding = 0; pane.focused = false
+    Begin(session, pane.bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if result.cols != 240 || result.rows != 120 || Paint.PaintOverflow(session) ||
+        Paint.PendingPaintCount(session) != 28802 ||
+        Paint.PendingPaintAt(session, 28000).value != "🙂́" ||
+        !Finish(session) || Host.texts != 28800 { return 11 }
+    Engine.terminal_close(*terminal)
+    // Route real Kryon key/text frames into a supervised child process.
+    shell: *u8
+    #if #defined(PLAN9) {
+        shell = Bytes("/bin/rc")
+    } else {
+        shell = Environment(Bytes("T9_TEST_SHELL"))
+    }
+    if Engine.terminal_spawn(*terminal, Bytes("/"), shell, Bytes("exec cat"), 8, 4) == 0 { return 12 }
+    pane.bounds = bounds; pane.padding = 2; pane.focused = true; pane.handle_input = true
+    Input.TreePointerUpdate(session, Input.PointerFrame.{})
+    Input.TypedCodepointSend(session, 937)
+    Begin(session, bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if result.wrote_input != 2 || !Finish(session) { return 13 }
+    Input.KeyboardSend(session, Input.KeyEnter)
+    Begin(session, bounds)
+    result = Pane.DrawTerminalPane(session, pane)
+    if result.wrote_input != 1 || !Finish(session) { return 14 }
+    found: bool
+    for attempt: 0..199 {
+        Engine.terminal_poll(*terminal)
+        for row: cast(s32)0..cast(s32)3 {
+            Engine.terminal_line(*terminal, row, *label[0], 64)
+            if Text.TextFromCString(*label[0]) == "Ω" { found = true }
+        }
+        if found { break }
+        Pause(10)
+    }
+    Engine.terminal_close(*terminal)
+    if !found { return 15 }
+    Paint.PaintDispose(session)
+    Tree.TreeDispose(session)
+    if !Sessions.SessionClose(session) { return 16 }
+    return 0
+}

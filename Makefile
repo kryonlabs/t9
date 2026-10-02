@@ -53,6 +53,8 @@ PTY_C := $(addprefix $(PTY_GEN)/,$(addsuffix .c,$(PTY_MODULES)))
 PTY_OBJS := $(PTY_C:.c=.o)
 TERMINAL_GEN := $(BUILD_DIR)/generated/terminal
 TERMINAL_LIB := $(BUILD_DIR)/lib/libt9_terminal.a
+PANE_GEN := $(BUILD_DIR)/generated/pane
+PANE_LIB := $(BUILD_DIR)/lib/libt9_pane.a
 APP_KRY := $(sort $(wildcard src/app/*.kry))
 APP_KRY_C := $(patsubst src/%.kry,$(BUILD_DIR)/generated/src/%.c,$(APP_KRY))
 APP_KRY_H := $(APP_KRY_C:.c=.h)
@@ -68,7 +70,6 @@ APP = $(BUILD_DIR)/bin/t9
 HOST_LIB = $(BUILD_DIR)/lib/libt9_host.a
 HOST_SO = $(BUILD_DIR)/lib/t9-host.so
 TEST = $(BUILD_DIR)/tests/terminal_test
-SIMPLE_TEST = $(BUILD_DIR)/tests/simple_terminal_test
 PANE_SELECTION_TEST = $(BUILD_DIR)/tests/terminal_pane_selection_test
 PANE_TEXT_TEST = $(BUILD_DIR)/tests/terminal_pane_text_test
 PANE_TEXT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_text
@@ -98,27 +99,23 @@ PANE_SIXEL_TEST = $(BUILD_DIR)/tests/terminal_pane_sixel_test
 PANE_SIXEL_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_sixel
 PANE_SIXEL_TEST_C = $(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_colors.c \
-	$(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel_test.c
 PANE_PROFILE_COLORS_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_colors_test
 PANE_PROFILE_COLORS_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_colors
 PANE_PROFILE_COLORS_TEST_C = $(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_colors.c \
-	$(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_colors_test.c
 PANE_PROFILE_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_test
 PANE_PROFILE_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile
 PANE_PROFILE_TEST_C = $(PANE_PROFILE_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_PROFILE_TEST_GEN)/terminal_pane_profile_colors.c \
-	$(PANE_PROFILE_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_PROFILE_TEST_GEN)/terminal_pane_profile.c \
 	$(PANE_PROFILE_TEST_GEN)/terminal_pane_profile_test.c
 PANE_PROFILE_PROMPT_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_prompt_test
 PANE_PROFILE_PROMPT_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_prompt
 PANE_PROFILE_PROMPT_TEST_C = $(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile_colors.c \
-	$(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile.c \
 	$(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile_settings.c \
 	$(PANE_PROFILE_PROMPT_TEST_GEN)/terminal_pane_profile_prompt.c \
@@ -127,7 +124,6 @@ PANE_PROFILE_SETTINGS_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_settings_t
 PANE_PROFILE_SETTINGS_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_settings
 PANE_PROFILE_SETTINGS_TEST_C = $(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile_colors.c \
-	$(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile.c \
 	$(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile_settings.c \
 	$(PANE_PROFILE_SETTINGS_TEST_GEN)/terminal_pane_profile_settings_test.c
@@ -135,11 +131,6 @@ PANE_SESSION_TEST = $(BUILD_DIR)/tests/terminal_pane_session_test
 PANE_SESSION_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_session
 PANE_SESSION_TEST_C = $(PANE_SESSION_TEST_GEN)/terminal_pane_session.c \
 	$(PANE_SESSION_TEST_GEN)/terminal_pane_session_test.c
-PANE_RENDER_TEST = $(BUILD_DIR)/tests/terminal_pane_render_test
-PANE_RENDER_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_render
-PANE_RENDER_TEST_C = $(PANE_RENDER_TEST_GEN)/terminal_pane_render.c \
-	$(PANE_RENDER_TEST_GEN)/terminal_pane_render_theme.c \
-	$(PANE_RENDER_TEST_GEN)/terminal_pane_render_test.c
 PANE_REFLOW_TEST = $(BUILD_DIR)/tests/terminal_pane_reflow_test
 PANE_REFLOW_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_reflow
 PANE_REFLOW_TEST_C = $(PANE_REFLOW_TEST_GEN)/terminal_pane_reflow.c \
@@ -324,10 +315,9 @@ $(PANE_SIXEL_TEST_C) &: tests/terminal_pane_sixel_test.zi $(PANE_ZI)
 
 $(PANE_SIXEL_TEST): $(PANE_SIXEL_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_SIXEL_TEST_GEN) \
-		$(PANE_SIXEL_TEST_C) -o $@
+		$(PANE_SIXEL_TEST_GEN)/*.c -o $@
 
-$(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
-		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
+$(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_COLORS_TEST_GEN)
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_COLORS_TEST_GEN) \
@@ -335,10 +325,9 @@ $(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
 
 $(PANE_PROFILE_COLORS_TEST): $(PANE_PROFILE_COLORS_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_PROFILE_COLORS_TEST_GEN) \
-		$(PANE_PROFILE_COLORS_TEST_C) -o $@
+		$(PANE_PROFILE_COLORS_TEST_GEN)/*.c -o $@
 
-$(PANE_PROFILE_PROMPT_TEST_C) &: tests/terminal_pane_profile_prompt_test.zi \
-		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
+$(PANE_PROFILE_PROMPT_TEST_C) &: tests/terminal_pane_profile_prompt_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_PROMPT_TEST_GEN)
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_PROMPT_TEST_GEN) \
@@ -346,10 +335,9 @@ $(PANE_PROFILE_PROMPT_TEST_C) &: tests/terminal_pane_profile_prompt_test.zi \
 
 $(PANE_PROFILE_PROMPT_TEST): $(PANE_PROFILE_PROMPT_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_PROFILE_PROMPT_TEST_GEN) \
-		$(PANE_PROFILE_PROMPT_TEST_C) -o $@
+		$(PANE_PROFILE_PROMPT_TEST_GEN)/*.c -o $@
 
-$(PANE_PROFILE_SETTINGS_TEST_C) &: tests/terminal_pane_profile_settings_test.zi \
-		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
+$(PANE_PROFILE_SETTINGS_TEST_C) &: tests/terminal_pane_profile_settings_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_SETTINGS_TEST_GEN)
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_SETTINGS_TEST_GEN) \
@@ -357,10 +345,9 @@ $(PANE_PROFILE_SETTINGS_TEST_C) &: tests/terminal_pane_profile_settings_test.zi 
 
 $(PANE_PROFILE_SETTINGS_TEST): $(PANE_PROFILE_SETTINGS_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_PROFILE_SETTINGS_TEST_GEN) \
-		$(PANE_PROFILE_SETTINGS_TEST_C) -o $@
+		$(PANE_PROFILE_SETTINGS_TEST_GEN)/*.c -o $@
 
-$(PANE_PROFILE_TEST_C) &: tests/terminal_pane_profile_test.zi \
-		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
+$(PANE_PROFILE_TEST_C) &: tests/terminal_pane_profile_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_TEST_GEN)
 	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
 		-o $(PANE_PROFILE_TEST_GEN) \
@@ -368,7 +355,7 @@ $(PANE_PROFILE_TEST_C) &: tests/terminal_pane_profile_test.zi \
 
 $(PANE_PROFILE_TEST): $(PANE_PROFILE_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_PROFILE_TEST_GEN) \
-		$(PANE_PROFILE_TEST_C) -o $@
+		$(PANE_PROFILE_TEST_GEN)/*.c -o $@
 
 $(PANE_SESSION_TEST_C) &: tests/terminal_pane_session_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_SESSION_TEST_GEN)
@@ -377,16 +364,6 @@ $(PANE_SESSION_TEST_C) &: tests/terminal_pane_session_test.zi $(PANE_ZI)
 
 $(PANE_SESSION_TEST): $(PANE_SESSION_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_SESSION_TEST_GEN) $(PANE_SESSION_TEST_C) -o $@
-
-$(PANE_RENDER_TEST_C) &: tests/terminal_pane_render_test.zi \
-		tests/terminal_pane_render_theme.zi $(PANE_ZI)
-	@mkdir -p $(PANE_RENDER_TEST_GEN)
-	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
-		-o $(PANE_RENDER_TEST_GEN) tests/terminal_pane_render_test.zi
-
-$(PANE_RENDER_TEST): $(PANE_RENDER_TEST_C) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) -I$(PANE_RENDER_TEST_GEN) \
-		$(PANE_RENDER_TEST_C) -o $@
 
 $(PANE_REFLOW_TEST_C) &: tests/terminal_pane_reflow_test.zi $(PANE_ZI)
 	@mkdir -p $(PANE_REFLOW_TEST_GEN)
@@ -418,11 +395,6 @@ $(TEST): engine $(TEST_OBJS) $(PANE_TEST_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Wl,--allow-multiple-definition -o $@ \
 		$(TEST_OBJS) \
 		$(PANE_TEST_OBJS) $(ENGINE_LIB) $(LDLIBS)
-
-$(SIMPLE_TEST): engine $(BUILD_DIR)/tests/simple_terminal_test.o \
-	$(BUILD_DIR)/src/terminal_pane/simple_terminal.o | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(BUILD_DIR)/tests/simple_terminal_test.o \
-		$(BUILD_DIR)/src/terminal_pane/simple_terminal.o
 
 $(PROCESS_TEST): engine $(BUILD_DIR)/tests/process_test.o \
 	$(ENGINE_CLIPBOARD_OBJ) \
@@ -541,24 +513,59 @@ terminal-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN) build --project $(LOCK_FLAGS) \
 		--target=plan9-c --no-main -o $(PLAN9_GENERATED)/terminal src/terminal.zi
 
-pane-ziran-test: terminal-test config-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
+.PHONY: widget-test widget-plan9-test profile-test session-test session-plan9-test launch-test launch-plan9-test pane-native pane-plan9-c
+widget-test:
+	sh tests/widget_test.sh
+
+widget-plan9-test:
+	sh tests/pane_plan9_test.sh widget
+
+profile-test:
+	sh tests/profile_test.sh
+
+session-test:
+	sh tests/session_test.sh
+
+session-plan9-test:
+	sh tests/pane_plan9_test.sh session
+
+launch-test:
+	sh tests/launch_options_test.sh
+
+launch-plan9-test:
+	sh tests/pane_plan9_test.sh launch
+
+pane-native:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN) build --project $(LOCK_FLAGS) \
+		--target=c --no-main -o $(PANE_GEN) src/terminal_pane/terminal_pane_widget.zi
+	mkdir -p $(BUILD_DIR)/lib
+	set -e; for source in $(PANE_GEN)/*.c; do \
+		$(CC) -std=c11 -O1 -fPIC -I$(PANE_GEN) -c "$$source" -o "$${source%.c}.o"; \
+	done
+	rm -f $(PANE_LIB)
+	$(AR) rcs $(PANE_LIB) $(PANE_GEN)/*.o
+
+pane-plan9-c:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN) build --project $(LOCK_FLAGS) \
+		--target=plan9-c --no-main -o $(PLAN9_GENERATED)/pane src/terminal_pane/terminal_pane_widget.zi
+
+pane-ziran-test: terminal-test config-test widget-test profile-test session-test launch-test clipboard-test selection-test keys-test osc-test metrics-test pty-test ziran-migration-check
 
 clipboard-plan9-c:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=plan9-c \
 		--root tests \
 		-o $(BUILD_ROOT)/plan9/clipboard-test tests/terminal_pane_clipboard_test.zi
 
-test: $(TEST) $(SIMPLE_TEST) $(PANE_SELECTION_TEST) \
+test: $(TEST) widget-test $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_DCS_TEST) $(PANE_SIXEL_TEST) \
 	selection-test clipboard-test \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
-	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
+	$(PANE_REFLOW_TEST) \
 	$(PANE_PROFILE_PROMPT_TEST) $(PANE_PROFILE_SETTINGS_TEST) \
 	$(PANE_PROFILE_TEST) $(PROCESS_TEST) metrics-test osc-test pty-test ziran-migration-check
 	$(TEST)
-	$(SIMPLE_TEST)
 	$(PANE_SELECTION_TEST)
 	$(PANE_TEXT_TEST)
 	$(PANE_SGR_TEST)
@@ -569,7 +576,6 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_SIXEL_TEST)
 	$(PANE_PROFILE_COLORS_TEST)
 	$(PANE_SESSION_TEST)
-	$(PANE_RENDER_TEST)
 	$(PANE_REFLOW_TEST)
 	$(PANE_PROFILE_PROMPT_TEST)
 	$(PANE_PROFILE_SETTINGS_TEST)

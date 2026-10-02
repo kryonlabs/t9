@@ -1,6 +1,5 @@
 #import "terminal_pane_osc"
 #import "terminal_pane_profile_types"
-#import "terminal_pane_profile_colors_theme"
 
 Bytes :: (text: string) -> *u8 { return TerminalPaneTextBytes(text) }
 

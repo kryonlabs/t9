@@ -1,12 +1,8 @@
 #import "terminal_pane_profile_types"
-
-
-Color :: struct {
-    r: u8
-    g: u8
-    b: u8
-    a: u8
-}
+using Drawing :: #import "kryon/drawing_props";
+Theme :: #import "kryon/theme";
+Styles :: #import "kryon/style";
+Sheet :: #import "kryon/style_sheet";
 
 TerminalPaneColors :: struct {
     background: Color
@@ -44,8 +40,59 @@ TerminalPaneViewColors :: struct {
 }
 
 #scope_file
-t9_host :: #system_library "c";
-ResolveTerminalPaneThemeColorsHost :: (colors: TerminalPaneColors) -> TerminalPaneColors #foreign t9_host "ResolveTerminalPaneThemeColors";
+FadeColor :: (color: Color, alpha: float32) -> Color {
+    color.a = cast(u8)(cast(float32)color.a * alpha)
+    return color
+}
+
+ThemeStyle :: (kind: s32, background: u32, foreground: u32) -> Styles.StyleData {
+    base: Styles.StyleData
+    base.background = background
+    base.foreground = foreground
+    base.opacity = 1.0
+    return Sheet.ResolveInstalledStyleRules(base, Sheet.StyleDefaultFacts(kind), 1)
+}
+
+#scope_export
+// Theme resolution is product code, using the installed Kryon style rules.
+// The host supplies its palette through those rules; it does not decide
+// Terminal's color roles or implement a second theme resolver.
+GetTerminalPaneThemeColors :: (dark: bool = false) -> TerminalPaneColors {
+    palette := Theme.DefaultPalette(dark)
+    app := ThemeStyle(Sheet.StyleKindApp(), palette.background, palette.text)
+    surface := ThemeStyle(Sheet.StyleKindSurface(), palette.surface, palette.text)
+    text := ThemeStyle(Sheet.StyleKindText(), palette.surface, palette.text)
+    link := ThemeStyle(Sheet.StyleKindLink(), palette.surface, palette.link)
+    bg := Drawing.ColorFromPacked(app.background)
+    if bg.a == 0 { bg = Drawing.ColorFromPacked(surface.background) }
+    value := Drawing.ColorFromPacked(text.foreground)
+    link_color := Drawing.ColorFromPacked(link.foreground)
+    border := Drawing.ColorFromPacked(surface.background)
+    if border.r == bg.r && border.g == bg.g && border.b == bg.b { border = value }
+    return TerminalPaneColors.{bg, value, FadeColor(value, 0.70),
+        FadeColor(link_color, 0.28), bg, value, link_color,
+        FadeColor(border, 0.72), FadeColor(bg, 0.82), FadeColor(value, 0.78),
+        FadeColor(link_color, 0.16), FadeColor(link_color, 0.85)}
+}
+
+ResolveTerminalPaneThemeColors :: (colors: TerminalPaneColors) -> TerminalPaneColors {
+    fallback := GetTerminalPaneThemeColors()
+    if colors.background.a == 0 { colors.background = fallback.background }
+    if colors.text.a == 0 { colors.text = fallback.text }
+    if colors.muted_text.a == 0 { colors.muted_text = fallback.muted_text }
+    if colors.selection.a == 0 { colors.selection = fallback.selection }
+    if colors.selection_text.a == 0 { colors.selection_text = fallback.selection_text }
+    if colors.cursor.a == 0 { colors.cursor = fallback.cursor }
+    if colors.link.a == 0 { colors.link = fallback.link }
+    if colors.border.a == 0 { colors.border = fallback.border }
+    if colors.scroll_indicator.a == 0 { colors.scroll_indicator = fallback.scroll_indicator }
+    if colors.scroll_indicator_text.a == 0 { colors.scroll_indicator_text = fallback.scroll_indicator_text }
+    if colors.bell_overlay.a == 0 { colors.bell_overlay = fallback.bell_overlay }
+    if colors.bell_border.a == 0 { colors.bell_border = fallback.bell_border }
+    return colors
+}
+
+#scope_file
 
 PaneColorVisible :: (color: Color) -> bool {
     return color.a != 0
@@ -144,7 +191,7 @@ ResolveTerminalPaneViewColors :: (
     colors: TerminalPaneProfileColors,
     fallback: TerminalPaneColors) -> TerminalPaneViewColors {
     resolved_fallback: TerminalPaneColors =
-        ResolveTerminalPaneThemeColorsHost(fallback)
+        ResolveTerminalPaneThemeColors(fallback)
     foreground: Color = ResolveTerminalPaneColorWithOverrides(
         palette, overrides, colors.foreground, resolved_fallback.text)
     background: Color = ResolveTerminalPaneColorWithOverrides(

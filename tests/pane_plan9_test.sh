@@ -5,11 +5,13 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 suite=${1:-keys}
 case "$suite" in
-    keys|osc|metrics|clipboard|selection) module=terminal_pane_${suite}_test ;;
+    keys|osc|metrics|clipboard|selection|widget) module=terminal_pane_${suite}_test ;;
     protocol) module=terminal_clipboard_test ;;
     pty) module=terminal_pty_plan9_test ;;
     engine) module=terminal_engine_test ;;
     config) module=terminal_config_test ;;
+    session) module=terminal_session_test ;;
+    launch) module=terminal_launch_options_test ;;
     *) echo "Unknown Terminal suite: $suite" >&2; exit 2 ;;
 esac
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY
@@ -27,6 +29,14 @@ fi
 work=$(mktemp -d "$root/build/ziran/$suite-native.XXXXXX")
 stage=$(mktemp -d "$taiji/usr/glenda/tmp/t9-$suite.XXXXXX")
 guest_stage=/usr/glenda/tmp/${stage##*/}
+# QEMU otherwise reserves a 1 GB translation buffer even for these small
+# one-CPU fixtures. Keep the test VM within its explicit memory budget.
+cat > "$work/qemu" <<'QEMU'
+#!/bin/sh
+exec "$T9_PLAN9_QEMU" -accel tcg,tb-size=32 "$@"
+QEMU
+chmod 700 "$work/qemu"
+qemu_binary=${QEMU:-qemu-system-x86_64}
 cleanup() {
     if test -f "$work/native-plan9.log"; then
         cp "$work/native-plan9.log" "$root/build/ziran/$suite-native-plan9.log"
@@ -76,6 +86,7 @@ log=$work/native-plan9.log
 timeout=${T9_PLAN9_TIMEOUT:-120}
 setsid --wait env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY Q9_BOOT_TIMEOUT="$timeout" Q9_TMPDIR="$work" \
     Q9_MEM="${T9_PLAN9_MEMORY:-256M}" Q9_SMP=1 Q9_CHECKPOINT=0 Q9_BUILD_DESKTOP=0 \
+    T9_PLAN9_QEMU="$qemu_binary" QEMU="$work/qemu" \
     "$taiji/q9" --raw tty-run "$command" >"$log" 2>&1 &
 vm_pid=$!
 stop_vm() {

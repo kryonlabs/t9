@@ -1,0 +1,204 @@
+Sessions :: #import "app_session";
+Store :: #import "app_session_store";
+Pane :: #import "terminal_pane_session";
+Engine :: #import "terminal";
+Types :: #import "terminal_pane_profile_types";
+Text :: #import "std/byte_text_linux";
+Host :: #import "terminal_clipboard_host";
+Launch :: #import "app_launch_options";
+#if #defined(PLAN9) {
+    File :: #import "std/file_plan9";
+} else {
+    File :: #import "std/file_linux";
+}
+
+#scope_file
+libc :: #system_library "c";
+#if #defined(PLAN9) {
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+} else {
+    Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)(milliseconds * 1000)) }
+}
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Value :: (bytes: []u8) -> string { return Text.TextFromCString(*bytes[0]) }
+WriteFile :: (path: string, bytes: []u8) -> bool {
+    file := File.OpenReplace(path)
+    if !file.valid { return false }
+    ok := File.Write(file, bytes) == bytes.count
+    return File.CloseFile(file) && ok
+}
+CheckTitles :: () -> bool {
+    session: Sessions.Session
+    Sessions.Init(*session)
+    if Sessions.Title(null) != "" || Sessions.Title(*session) != "terminal" { return false }
+    if Sessions.DisplayDirectory("/home/test", "/home/test") != "~" ||
+        Sessions.DisplayDirectory("/home/test/Projects/tools", "/home/test") != "Projects/tools" ||
+        Sessions.DisplayDirectory("/home/tester/tools", "/home/test") != "tools" ||
+        Sessions.DisplayDirectory("/tmp/tools/", "") != "/tmp/tools/" { return false }
+    Sessions.CopyText(session.cwd[:], "/home/test/Projects")
+    title: [128]u8
+    Sessions.DefaultTitleFor(*session, "/home/test", "owner", "host", title[:])
+    if Value(title[:]) != "Terminal - owner@host Projects" { return false }
+    Sessions.DefaultTitleFor(*session, "", "", "", title[:])
+    if Value(title[:]) != "Terminal - user@localhost Projects" { return false }
+    Sessions.CopyText(session.command[:], "/usr/bin/top")
+    Sessions.DefaultTitleFor(*session, "", "", "", title[:])
+    if Value(title[:]) != "top" { return false }
+    Sessions.CopyText(session.terminal.title[:], "shell activity")
+    Sessions.SyncMetadata(*session)
+    if Sessions.Title(*session) != "shell activity" { return false }
+    Sessions.SyncMetadata(*session, Types.TERMINAL_PANE_TITLE_PREPEND)
+    if Sessions.Title(*session) != "shell activity - top" { return false }
+    Sessions.SyncMetadata(*session, Types.TERMINAL_PANE_TITLE_APPEND)
+    if Sessions.Title(*session) != "top - shell activity" { return false }
+    Sessions.SyncMetadata(*session, Types.TERMINAL_PANE_TITLE_IGNORE)
+    if Sessions.Title(*session) != "top" { return false }
+    Sessions.CopyText(session.terminal.title[:], "owner@host:/tmp/tools")
+    Sessions.SyncMetadata(*session)
+    if Sessions.Title(*session) != "Terminal - owner@host tools" { return false }
+    Sessions.SetTitle(*session, "Manual / title")
+    Sessions.CopyText(session.terminal.current_directory[:], "/tmp/new")
+    Sessions.SyncMetadata(*session)
+    if Sessions.Title(*session) != "Manual / title" || Value(session.cwd[:]) != "/tmp/new" { return false }
+    Sessions.RestoreTitle(*session, "/tmp/restored", false)
+    if session.title_override || Sessions.Title(*session) != "restored" { return false }
+    one: [1]u8
+    if Pane.FormatTerminalPaneSessionTitle(*one[0], 1, null, null) != 0 || one[0] != 0 { return false }
+    if Pane.FormatTerminalPaneSessionTitle(*title[0], 3, null, null) != 2 || Value(title[:]) != "te" { return false }
+    Sessions.Close(*session)
+    return true
+}
+CheckStore :: () -> bool {
+    sessions: [2]Sessions.Session
+    for tab: 0..1 { Sessions.Init(*sessions[tab]) }
+    defer Sessions.Close(*sessions[0])
+    defer Sessions.Close(*sessions[1])
+    Sessions.CopyText(sessions[0].cwd[:], "/tmp/one\ttab")
+    Sessions.CopyText(sessions[0].shell[:], "/bin/sh")
+    Sessions.CopyText(sessions[0].command[:], "printf 'a\\b'\nnext")
+    Sessions.SetTitle(*sessions[0], "Manual\tTitle")
+    sessions[0].scroll_offset = 42
+    Sessions.CopyText(sessions[1].cwd[:], "/tmp/two")
+    Sessions.CopyText(sessions[1].shell[:], "/bin/sh")
+    sessions[1].scroll_offset = 7
+    // This encoded record is larger than a file-read chunk.
+    for index: cast(s32)0..cast(s32)1022 {
+        sessions[1].cwd[index] = 9
+        sessions[1].command[index] = 10
+    }
+    for index: cast(s32)0..cast(s32)510 { sessions[1].shell[index] = 92 }
+    if !Store.SaveFile(sessions[:], 1, "session-fixture/tabs") { return false }
+    defer File.RemoveFile("session-fixture/tabs")
+    records: [2]Pane.TerminalPaneSessionRecord
+    active: s32 = -1
+    if Store.LoadFile(records[:], *active, "session-fixture/tabs") != 2 || active != 1 ||
+        Value(records[0].cwd[:]) != Value(sessions[0].cwd[:]) ||
+        Value(records[0].shell[:]) != "/bin/sh" || Value(records[0].command[:]) != Value(sessions[0].command[:]) ||
+        Value(records[0].title[:]) != "Manual\tTitle" || records[0].title_override != 1 ||
+        records[0].scroll_offset != 42 || records[1].title[0] != 0 ||
+        records[1].title_override != 0 || records[1].scroll_offset != 7 ||
+        Value(records[1].cwd[:]) != Value(sessions[1].cwd[:]) ||
+        Value(records[1].shell[:]) != Value(sessions[1].shell[:]) ||
+        Value(records[1].command[:]) != Value(sessions[1].command[:]) { return false }
+    bytes: [9000]u8
+    legacy_length := Sessions.CopyText(bytes[:], "active=-2\ntab\t/tmp/old\t/bin/sh\tOld Title\t1\told-command").count
+    if !WriteFile("session-fixture/tabs", bytes[0:legacy_length]) ||
+        Store.LoadFile(records[:], *active, "session-fixture/tabs") != 1 || active != -2 ||
+        Value(records[0].title[:]) != "Old Title" || Value(records[0].command[:]) != "old-command" ||
+        records[0].scroll_offset != 0 { return false }
+    // Reject an entire oversized line, then accept the following valid record.
+    for index: cast(s64)0..cast(s64)8499 { bytes[index] = 120 }
+    tail := "\ntab\t/ok\t/bin/sh\tTitle\t0\t\t2147483648\n"
+    for index: cast(s64)0..tail.count - 1 { bytes[8500 + index] = tail[index] }
+    if !WriteFile("session-fixture/tabs", bytes[0:8500 + tail.count]) ||
+        Store.LoadFile(records[:], *active, "session-fixture/tabs") != 1 ||
+        Value(records[0].cwd[:]) != "/ok" || records[0].scroll_offset != 2147483647 { return false }
+    if !Store.SaveFile(sessions[0:0], 99, "session-fixture/tabs") ||
+        Store.LoadFile(records[:], *active, "session-fixture/tabs") != 0 || active != 0 { return false }
+    path: [1024]u8
+    if Store.ResolvePath("/state", "/home/user", false, path[:]) != "/state/t9/session" ||
+        Store.ResolvePath("", "/home/user", false, path[:]) != "/home/user/.local/state/t9/session" ||
+        Store.ResolvePath("/state", "/usr/user", true, path[:]) != "/usr/user/lib/t9/session" ||
+        Store.ResolvePath("", "", false, path[:]) != "" { return false }
+    host_path := Store.Path(path[:])
+    if host_path != "" && (host_path.count < 11 || host_path[host_path.count - 11:host_path.count] != "/t9/session") {
+        return false
+    }
+    number: [64]u8
+    Sessions.CopyText(number[:], "active=-2147483649")
+    if Pane.ParseTerminalPaneSessionActive(*number[0], *active) != 1 || active != -2147483648 { return false }
+    records[0].scroll_offset = -2147483648
+    if Pane.FormatTerminalPaneSessionRecord(*bytes[0], 9000, records[0]) <= 0 ||
+        Pane.ParseTerminalPaneSessionRecord(*bytes[0], *records[1]) != 1 || records[1].scroll_offset != -2147483648 {
+        return false
+    }
+    return true
+}
+CheckProcess :: () -> bool {
+    original: Sessions.Session
+    // Opening a fresh zero-initialized record must not close stdin.
+    shell: string
+    #if #defined(PLAN9) {
+        shell = "/bin/rc"
+    } else {
+        shell = Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("T9_TEST_SHELL")))
+    }
+    if !Sessions.Open(*original, "/", shell, "exec cat", 8, 4, 3000) { return false }
+    moved := original
+    Sessions.Init(*original)
+    defer Sessions.Close(*moved)
+    if !moved.used || moved.terminal.scrollback_limit != 3000 || original.terminal.fd != -1 { return false }
+    cwd: [1024]u8
+    if Sessions.CurrentCwd(*moved, cwd[:]) != "/" { return false }
+    moved.terminal.newline_mode = 1
+    if Engine.terminal_write_text(*moved.terminal, Bytes("session moved\n")) <= 0 { return false }
+    line: [64]u8
+    for attempt: 0..199 {
+        Engine.terminal_poll(*moved.terminal)
+        for row: cast(s32)0..cast(s32)3 {
+            Engine.terminal_line(*moved.terminal, row, *line[0], 64)
+            if Value(line[:]) == "session " || Value(line[:]) == "session" { return true }
+        }
+        Pause(10)
+    }
+    return false
+}
+CheckExecute :: () -> bool {
+    arguments: [3]string = .{"echo", "a b", "c'd"}
+    command: [1024]u8
+    plan9: bool; shell: string
+    #if #defined(PLAN9) {
+        plan9 = true; shell = "/bin/rc"
+    } else {
+        shell = Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("T9_TEST_SHELL")))
+    }
+    if !Launch.JoinExecuteCommand(arguments[:], command[:], plan9) { return false }
+    session: Sessions.Session
+    if !Sessions.Open(*session, "/", shell, Value(command[:]), 80, 4, 100) { return false }
+    defer Sessions.Close(*session)
+    session.terminal.newline_mode = 1
+    line: [128]u8
+    for attempt: 0..199 {
+        Engine.terminal_poll(*session.terminal)
+        for row: cast(s32)0..cast(s32)3 {
+            Engine.terminal_line(*session.terminal, row, *line[0], 128)
+            if Value(line[:]) == "a b c'd" { return true }
+        }
+        Pause(10)
+    }
+    return false
+}
+#scope_export
+#program_export
+main :: () -> s32 {
+    if !CheckTitles() { print("Terminal session titles failed\n"); return 1 }
+    if !CheckStore() { print("Terminal session persistence failed\n"); return 2 }
+    if !CheckProcess() { print("Terminal session process ownership failed\n"); return 3 }
+    if !CheckExecute() { print("Terminal quoted launch command failed\n"); return 4 }
+    return 0
+}

@@ -2,7 +2,6 @@
 #define TERMINAL_PANE_H
 
 #include "kryon.h"
-#include "simple_terminal.h"
 #include "ui_clipboard.generated.h"
 
 #include <stddef.h>
@@ -509,24 +508,6 @@ typedef struct TerminalPaneSessionRecord {
     int scroll_offset;
 } TerminalPaneSessionRecord;
 
-typedef struct TerminalPane {
-    Rectangle bounds;
-    Terminal *terminal;
-    int focused;
-    int font_size;
-    int padding;
-    int show_cursor;
-    int handle_input;
-    TerminalPaneColors colors;
-} TerminalPane;
-
-typedef struct TerminalPaneResult {
-    int focused;
-    int cols;
-    int rows;
-    int wrote_input;
-} TerminalPaneResult;
-
 TerminalPaneColors GetTerminalPaneThemeColors(void);
 TerminalPaneColors ResolveTerminalPaneThemeColors(TerminalPaneColors colors);
 int TerminalPaneColorToRGB(Color color);
@@ -844,8 +825,6 @@ int FormatTerminalPaneSessionRecord(char *out, int out_size,
 int ParseTerminalPaneSessionRecord(const char *line,
                                    TerminalPaneSessionRecord *out);
 int ParseTerminalPaneSessionActive(const char *line, int *active);
-int TerminalPaneHandleInput(Terminal *terminal);
-TerminalPaneResult DrawTerminalPane(TerminalPane pane);
 
 #ifdef __cplusplus
 }

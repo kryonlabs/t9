@@ -1,0 +1,220 @@
+using Geometry :: #import "kryon/geometry";
+Sessions :: #import "kryon/session";
+Tree :: #import "kryon/tree";
+Kinds :: #import "kryon/widget_kind";
+Input :: #import "kryon/tree_input";
+Paint :: #import "kryon/paint_queue";
+Fonts :: #import "kryon/font_metrics";
+Engine :: #import "terminal";
+Keys :: #import "terminal_pane_keys";
+Keyboard :: #import "terminal_keyboard";
+Metrics :: #import "terminal_pane_metrics";
+using Colors :: #import "terminal_pane_profile_colors";
+Render :: #import "terminal_pane_render";
+Numbers :: #import "std/number_text";
+
+TerminalPaneMetrics :: struct {
+    cols: s32
+    rows: s32
+    cell_width: s32
+    line_height: s32
+    content: Rectangle
+}
+
+TerminalPaneScrollIndicator :: struct {
+    viewport: Rectangle
+    scroll_offset: s32
+    font_size: s32
+    colors: TerminalPaneColors
+}
+
+TerminalPane :: struct {
+    key: u64
+    bounds: Rectangle
+    terminal: *Engine.Terminal
+    font_size: s32
+    padding: s32
+    scale: float32
+    focused: bool
+    handle_input: bool
+    show_cursor: bool
+    blink_on: bool
+    colors: TerminalPaneColors
+}
+
+TerminalPaneResult :: struct {
+    focused: bool
+    cols: s32
+    rows: s32
+    wrote_input: s32
+    node: s32
+}
+
+MeasureTerminalPaneContent :: (content: Rectangle, font_size: s32,
+    scale: float32 = 1.0) -> TerminalPaneMetrics {
+    policy := Metrics.TerminalPaneMetricsPolicyFor(scale)
+    font := Metrics.TerminalPaneFontSizeFor(font_size, policy)
+    measured: TerminalPaneMetrics
+    measured.cell_width = Fonts.GlyphWidth("M", font, "")
+    if measured.cell_width < 6 { measured.cell_width = font * 6 / 10 }
+    if measured.cell_width < 1 { measured.cell_width = 1 }
+    measured.line_height = Metrics.TerminalPaneLineHeightFor(
+        Fonts.GlyphLineHeight(font, ""), font, policy)
+    if measured.line_height < 1 { measured.line_height = 1 }
+    measured.content = content
+    if measured.content.width < 0.0 { measured.content.width = 0.0 }
+    if measured.content.height < 0.0 { measured.content.height = 0.0 }
+    measured.cols = Metrics.TerminalPaneClampCols(
+        cast(s32)(measured.content.width / cast(float32)measured.cell_width), Engine.MAX_COLS, policy)
+    measured.rows = Metrics.TerminalPaneClampRows(
+        cast(s32)(measured.content.height / cast(float32)measured.line_height), Engine.MAX_ROWS, policy)
+    return measured
+}
+
+TerminalPaneContentBounds :: (bounds: Rectangle, top_inset: s32,
+    padding: s32, scale: float32 = 1.0) -> Rectangle {
+    policy := Metrics.TerminalPaneMetricsPolicyFor(scale)
+    return Metrics.TerminalPaneContentBoundsFor(bounds, top_inset,
+        Metrics.TerminalPanePaddingFor(padding, policy))
+}
+
+MeasureTerminalPane :: (bounds: Rectangle, font_size: s32, padding: s32,
+    scale: float32 = 1.0) -> TerminalPaneMetrics {
+    return MeasureTerminalPaneContent(TerminalPaneContentBounds(bounds, 0, padding, scale),
+        font_size, scale)
+}
+
+FormatTerminalPaneScrollIndicatorLabel :: (out: *u8, out_size: s32,
+    scroll_offset: s32) -> s32 {
+    if out == null || out_size <= 0 { return 0 }
+    out[0] = 0
+    if scroll_offset <= 0 { return 0 }
+    digits: [16]u8
+    number := Numbers.FormatInteger(cast(s64)scroll_offset, digits[:])
+    if number.count + 6 >= cast(s64)out_size { return 0 }
+    for at: 0..cast(s32)number.count - 1 { out[at] = number[at] }
+    suffix := " lines"
+    for at: 0..5 { out[number.count + at] = suffix[at] }
+    length := cast(s32)number.count + 6
+    out[length] = 0
+    return length
+}
+
+MeasureTerminalPaneScrollIndicator :: (indicator: TerminalPaneScrollIndicator,
+    scale: float32 = 1.0) -> Rectangle {
+    label: [64]u8
+    length := FormatTerminalPaneScrollIndicatorLabel(*label[0], 64, indicator.scroll_offset)
+    if length <= 0 { return Rectangle.{} }
+    metrics := Metrics.TerminalPaneScrollIndicatorMetricsFor(scale)
+    font := indicator.font_size
+    if font <= 0 { font = metrics.font_size }
+    return Metrics.TerminalPaneScrollIndicatorBoundsFor(indicator.viewport,
+        Fonts.GlyphWidth(TextView(label[0:length]), font, ""), metrics)
+}
+
+DrawTerminalPaneScrollIndicator :: (session: Sessions.Session, node: s32,
+    indicator: TerminalPaneScrollIndicator, scale: float32 = 1.0) -> Rectangle {
+    bounds := MeasureTerminalPaneScrollIndicator(indicator, scale)
+    if bounds.width <= 0.0 || bounds.height <= 0.0 { return bounds }
+    label: [64]u8
+    length := FormatTerminalPaneScrollIndicatorLabel(*label[0], 64, indicator.scroll_offset)
+    colors := ResolveTerminalPaneThemeColors(indicator.colors)
+    metrics := Metrics.TerminalPaneScrollIndicatorMetricsFor(scale)
+    font := indicator.font_size
+    if font <= 0 { font = metrics.font_size }
+    Paint.PaintRoundedFill(session, node, bounds, 0.0, 0, colors.scroll_indicator)
+    Paint.PaintRoundedOutline(session, node, bounds, 0.0, 0, 1.0, colors.border)
+    Paint.PaintClippedLabel(session, node, TextView(label[0:length]),
+        cast(s32)bounds.x + metrics.text_x, cast(s32)bounds.y + metrics.text_y,
+        font, colors.scroll_indicator_text, bounds)
+    return bounds
+}
+
+#scope_file
+InputSink :: struct { terminal: *Engine.Terminal; wrote: s32; }
+WriteInput :: (userdata: *void, text: *u8, length: s32) -> s32 {
+    sink := cast(*InputSink)userdata
+    count := Engine.terminal_write(sink.terminal, cast(*void)text, length)
+    if count > 0 { sink.wrote += count }
+    return count
+}
+
+#scope_export
+TerminalPaneHandleInput :: (terminal: *Engine.Terminal, frame: Keys.KeyboardFrame) -> s32 {
+    if terminal == null || terminal.running == 0 { return 0 }
+    sink: InputSink
+    sink.terminal = terminal
+    state: Keys.TerminalPaneInputState
+    input: Keys.TerminalPaneInput
+    input.mode.application_cursor_keys = terminal.application_cursor_keys
+    input.mode.application_keypad = terminal.application_keypad
+    input.mode.modify_other_keys = terminal.modify_other_keys
+    input.write_text = WriteInput
+    input.userdata = cast(*void)(*sink)
+    input.state = *state
+    Keys.PumpTerminalPaneKeyboardInput(input, frame)
+    return sink.wrote
+}
+
+// Embedded panes and the application use the same Terminal state and parser.
+// Input and paint belong to an explicit Kryon frame rather than global polling.
+DrawTerminalPane :: (session: Sessions.Session, pane: TerminalPane) -> TerminalPaneResult {
+    result: TerminalPaneResult
+    result.node = -1
+    if !Sessions.SessionValid(session) || !Tree.TreeIsBuilding(session) { return result }
+    measured := MeasureTerminalPane(pane.bounds, pane.font_size, pane.padding, pane.scale)
+    result.cols = measured.cols
+    result.rows = measured.rows
+    result.focused = pane.focused
+    kind := cast(s32)Kinds.WidgetKind.WidgetKindTextArea
+    previous := Tree.TreePrevious(session, Tree.TreeCurrentParent(session), pane.key, kind)
+    result.node = Tree.TreeSubmitCurrent(session, pane.key, kind, pane.bounds)
+    if result.node < 0 { return result }
+    Tree.TreeSetInteractive(session, result.node, false, false, 0)
+    colors := ResolveTerminalPaneThemeColors(pane.colors)
+    Paint.PaintRoundedFill(session, result.node, pane.bounds, 0.0, 0, colors.background)
+    Paint.PaintRoundedOutline(session, result.node, pane.bounds, 0.0, 0, 1.0, colors.border)
+    pointer := Input.PointerSample(session)
+    if pointer.pressed && Input.TreeHoveredAt(session, previous) {
+        result.focused = true
+    }
+    terminal := pane.terminal
+    if terminal == null { return result }
+    Engine.terminal_resize(terminal, measured.cols, measured.rows)
+    if result.focused && pane.handle_input {
+        keys: [1]s32
+        codepoints: [32]u32
+        frame := Keyboard.CaptureKeyboardFrame(session, keys[:], codepoints[:])
+        result.wrote_input = TerminalPaneHandleInput(terminal, frame)
+    }
+    policy := Metrics.TerminalPaneMetricsPolicyFor(pane.scale)
+    font := Metrics.TerminalPaneFontSizeFor(pane.font_size, policy)
+    row: s32
+    while row < terminal.rows && row < measured.rows {
+        col: s32
+        while col < terminal.cols && col < measured.cols {
+            cell := Engine.terminal_cell(terminal, col, row)
+            if cell != null && (cell.style & Engine.STYLE_WIDE_CONT) == 0 {
+                Render.DrawTerminalPaneGlyphCell(session, result.node, cell.codepoint, cell.combining,
+                    cast(s32)measured.content.x + col * measured.cell_width,
+                    cast(s32)measured.content.y + row * measured.line_height,
+                    font, colors.text, measured.content)
+            }
+            col += 1
+        }
+        row += 1
+    }
+    if result.focused && pane.show_cursor && terminal.cursor_visible != 0 &&
+        (terminal.cursor_blink == 0 || pane.blink_on) &&
+        terminal.cursor_col >= 0 && terminal.cursor_row >= 0 &&
+        terminal.cursor_col < measured.cols && terminal.cursor_row < measured.rows {
+        cursor := Rectangle.{measured.content.x + cast(float32)(terminal.cursor_col * measured.cell_width),
+            measured.content.y + cast(float32)(terminal.cursor_row * measured.line_height),
+            cast(float32)measured.cell_width, cast(float32)measured.line_height}
+        cursor = Geometry.RectangleIntersection(cursor, measured.content)
+        if cursor.width > 0.0 && cursor.height > 0.0 {
+            Paint.PaintRoundedFill(session, result.node, cursor, 0.0, 0, colors.cursor)
+        }
+    }
+    return result
+}

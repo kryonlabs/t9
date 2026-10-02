@@ -1,6 +1,35 @@
 #import "terminal_pane_profile_colors"
 #import "terminal_pane_profile_types"
-#import "terminal_pane_profile_colors_theme"
+Sheet :: #import "kryon/style_sheet";
+Controls :: #import "kryon/control_props";
+
+TestTheme :: () -> bool {
+    rules: Sheet.StyleRules
+    rules.count = 3
+    for at: cast(s32)0..cast(s32)2 {
+        rules.items[at].selector = Sheet.StyleDefaultSelector()
+    }
+    rules.items[0].selector.kind = Sheet.StyleKindApp()
+    rules.items[0].style.fields = cast(u32)Controls.StyleField.StyleBackground
+    rules.items[0].style.background = cast(u32)0x010203ff
+    rules.items[1].selector.kind = Sheet.StyleKindText()
+    rules.items[1].style.fields = cast(u32)Controls.StyleField.StyleForeground
+    rules.items[1].style.foreground = cast(u32)0x040506ff
+    rules.items[2].selector.kind = Sheet.StyleKindLink()
+    rules.items[2].style.fields = cast(u32)Controls.StyleField.StyleForeground
+    rules.items[2].style.foreground = cast(u32)0x070809ff
+    if !Sheet.InstallStyleRules(rules) { return false }
+    colors := GetTerminalPaneThemeColors()
+    if !SameColor(colors.background, 1, 2, 3) || !SameColor(colors.text, 4, 5, 6) ||
+        !SameColor(colors.link, 7, 8, 9) || colors.selection.a != 71 { return false }
+    configured: TerminalPaneColors
+    configured.cursor = Color.{90, 91, 92, 255}
+    configured = ResolveTerminalPaneThemeColors(configured)
+    if !SameColor(configured.cursor, 90, 91, 92) ||
+        !SameColor(configured.background, 1, 2, 3) { return false }
+    empty: Sheet.StyleRules
+    return Sheet.InstallStyleRules(empty)
+}
 
 SameColor :: (value: Color, red: u8, green: u8, blue: u8) -> bool {
     return value.r == red && value.g == green && value.b == blue &&
@@ -9,6 +38,7 @@ SameColor :: (value: Color, red: u8, green: u8, blue: u8) -> bool {
 
 #program_export
 main :: () -> s32 {
+    if !TestTheme() { return 21 }
     palette: TerminalPanePalette
     palette.ansi[1] = Color.{205, 49, 49, 255}
     fallback: Color = Color.{1, 2, 3, 255}

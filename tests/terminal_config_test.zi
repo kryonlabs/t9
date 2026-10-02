@@ -122,6 +122,9 @@ Cases :: () -> s32 {
 #scope_export
 #program_export
 main :: () -> s32 {
+    host_path: [1024]u8
+    actual := Config.Path(host_path[:])
+    if actual != "" && (actual.count < 10 || actual[actual.count - 10:actual.count] != "/t9/config") { return 13 }
     result := Cases()
     if result != 0 { print("Terminal configuration failure %\n", result) }
     else { print("Terminal configuration behavior passed\n") }

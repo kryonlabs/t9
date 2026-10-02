@@ -11,7 +11,10 @@ Number :: #import "std/number_text";
     File :: #import "std/file_linux";
 }
 libc :: #system_library "libc";
-Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    FreeHost :: (value: *void) #foreign libc "free";
+}
 
 Bytes :: (value: string) -> *u8 {
     descriptor := cast(*Text.TextDescriptor)(*value)
@@ -147,10 +150,13 @@ ResolvePath :: (xdg: string, home: string, plan9: bool, output: []u8) -> string 
 
 Path :: (output: []u8) -> string {
     #if #defined(PLAN9) {
-        return ResolvePath("", Text.TextFromCString(Environment(Bytes("home"))), true, output)
+        home := Environment(cast(*s8)Bytes("home"))
+        result := ResolvePath("", Text.TextFromCString(cast(*u8)home), true, output)
+        FreeHost(cast(*void)home)
+        return result
     } else {
-        return ResolvePath(Text.TextFromCString(Environment(Bytes("XDG_CONFIG_HOME"))),
-                           Text.TextFromCString(Environment(Bytes("HOME"))), false, output)
+        return ResolvePath(Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("XDG_CONFIG_HOME"))),
+                           Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("HOME"))), false, output)
     }
 }
 

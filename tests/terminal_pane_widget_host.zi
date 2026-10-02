@@ -1,0 +1,57 @@
+using Drawing :: #import "kryon/drawing_props";
+using Geometry :: #import "kryon/geometry";
+
+texts: s32;
+fills: s32;
+outlines: s32;
+failed: bool;
+last_text: [64]u8;
+last_length: s32;
+
+Reset :: () { texts = 0; fills = 0; outlines = 0; failed = false; last_length = 0 }
+
+#program_export
+MeasureGlyphWidth :: (value: string, font: s32, typeface: string) -> s32 {
+    unused font; unused typeface
+    return cast(s32)value.count * 8
+}
+#program_export
+MeasureGlyphLineHeight :: (font: s32, typeface: string) -> s32 {
+    unused font; unused typeface
+    return 12
+}
+#program_export
+RasterText :: (value: string, x: s32, y: s32, font: s32, color: Color) {
+    unused x; unused y; unused font; unused color
+    texts += 1
+    last_length = cast(s32)value.count
+    if last_length > 64 { last_length = 64 }
+    for at: 0..last_length - 1 { last_text[at] = value[at] }
+}
+#program_export
+RasterTextClipped :: (value: string, x: s32, y: s32, font: s32,
+    color: Color, clip: Rectangle) {
+    if clip.width <= 0.0 || clip.height <= 0.0 { failed = true }
+    RasterText(value, x, y, font, color)
+}
+#program_export
+RasterLine :: (bounds: Rectangle, color: Color) { unused bounds; unused color }
+#program_export
+RasterRoundedRectangle :: (bounds: Rectangle, radius: float32,
+    segments: s32, color: Color) {
+    unused bounds; unused radius; unused segments; unused color
+    fills += 1
+}
+#program_export
+RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,
+    segments: s32, width: float32, color: Color) {
+    unused bounds; unused radius; unused segments; unused width; unused color
+    outlines += 1
+}
+#program_export
+RasterImage :: (path: string, id: u32, source: Rectangle,
+    destination: Rectangle, clip: Rectangle, origin: Vector2,
+    rotation: float32, radius: float32, tint: Color) {
+    unused path; unused id; unused source; unused destination; unused clip
+    unused origin; unused rotation; unused radius; unused tint
+}
