@@ -1,3 +1,5 @@
+#import "terminal_clipboard"
+
 TERMINAL_PANE_SELECTION_CHAR :: 0;
 TERMINAL_PANE_SELECTION_WORD :: 1;
 TERMINAL_PANE_SELECTION_LINE :: 2;
@@ -42,12 +44,6 @@ TerminalPaneSearchController :: struct {
 }
 
 #scope_file
-t9_host :: #system_library "c";
-SetPrimarySelectionFromTextHost :: (
-    text: *u8) -> s32 #foreign t9_host "SetPrimarySelectionFromText";
-CopySelectionTextToClipboardHost :: (clipboard: *void,
-    text: *u8) -> s32 #foreign t9_host "CopySelectionTextToClipboard";
-
 primary_selection_copy_buffer: [262144]u8;
 clipboard_selection_copy_buffer: [262144]u8;
 
@@ -378,9 +374,9 @@ TerminalPaneSelectionUpdatePrimary :: (selection: *TerminalPaneSelection,
     empty[0] = 0
     if TerminalPaneSelectionCollectText(selection, line_text, line_wrapped,
             userdata, *primary_selection_copy_buffer[0], 262144) != 0 {
-        return SetPrimarySelectionFromTextHost(*primary_selection_copy_buffer[0])
+        return SetPrimarySelectionFromText(*primary_selection_copy_buffer[0])
     }
-    return SetPrimarySelectionFromTextHost(*empty[0])
+    return SetPrimarySelectionFromText(*empty[0])
 }
 
 #program_export
@@ -392,7 +388,7 @@ TerminalPaneSelectionCopyToClipboard :: (selection: *TerminalPaneSelection,
             userdata, *clipboard_selection_copy_buffer[0], 262144) == 0 {
         return 0
     }
-    return CopySelectionTextToClipboardHost(clipboard,
+    return CopySelectionTextToClipboard(clipboard,
         *clipboard_selection_copy_buffer[0])
 }
 

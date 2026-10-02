@@ -1,0 +1,173 @@
+#import "terminal_clipboard"
+Host :: #import "terminal_clipboard_host";
+Text :: #import "std/byte_text_linux";
+
+clipboard: ClipboardBuffer;
+moved: ClipboardBuffer;
+output: [8192]u8;
+output_length: s32;
+write_limit: s32 = 8192;
+fail_after: s32 = 8192;
+Writer :: struct { write: ClipboardPasteWriteFn }
+
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+
+Captured :: () -> string { return TextView(output[0:output_length]) }
+
+Reset :: () {
+    output_length = 0
+    write_limit = 8192
+    fail_after = 8192
+}
+
+Append :: (bytes: *u8, used: *s32, text: string) {
+    for index: cast(s64)0..text.count - 1 { bytes[used.*] = text[index]; used.* += 1 }
+    bytes[used.*] = 0
+}
+
+WriteInput :: (userdata: *void, bytes: *u8, count: s32) -> s32 {
+    unused userdata
+    if bytes == null || count <= 0 || output_length >= fail_after { return 0 }
+    size := count
+    if size > write_limit { size = write_limit }
+    if output_length + size > fail_after { size = fail_after - output_length }
+    if output_length + size > 8192 { return 0 }
+    for index: 0..size - 1 { output[output_length] = bytes[index]; output_length += 1 }
+    return size
+}
+
+OSC :: (payload: string) -> s32 {
+    return HandleClipboardOSC52(*clipboard, Bytes(payload), WriteInput, null)
+}
+
+Query :: (payload: string, expected: string) -> bool {
+    Reset()
+    return OSC(payload) == 1 && Captured() == expected
+}
+
+Cases :: () -> s32 {
+    empty_writer: Writer
+    InitClipboardBuffer(*clipboard, null)
+    SetPrimarySelectionFromText(null)
+    Host.HostClipboardReset("")
+    if HandleClipboardOSC52(null, null, empty_writer.write, null) != 0 ||
+       WriteClipboardTextPaste(null, null, 1, empty_writer.write, null) != 0 { return 1 }
+    if OSC("c;aGVsbG8=") != 1 || ClipboardBufferHasPendingWrite(*clipboard) != 1 ||
+       !Query("c;?", "\x1b]52;c;aGVsbG8=\a") { return 2 }
+    if !Query("p;?", "\x1b]52;p;\a") { return 3 }
+    if OSC("p;cHJpbWFyeQ==") != 1 ||
+       !Query("p;?", "\x1b]52;p;cHJpbWFyeQ==\a") ||
+       !Query("c;?", "\x1b]52;c;aGVsbG8=\a") { return 4 }
+    if OSC("cp;Ym90aA==") != 1 || !Query("c;?", "\x1b]52;c;Ym90aA==\a") ||
+       !Query("p;?", "\x1b]52;p;Ym90aA==\a") { return 5 }
+    if OSC("s;c2VsZWN0") != 1 || !Query("s;?", "\x1b]52;s;c2VsZWN0\a") ||
+       !Query("c;?", "\x1b]52;c;c2VsZWN0\a") { return 6 }
+    if OSC("x;ZmFsbGJhY2s=") != 1 ||
+       !Query("c;?", "\x1b]52;c;ZmFsbGJhY2s=\a") { return 7 }
+    // Invalid, noncanonical, embedded-NUL, or oversized writes are atomic.
+    invalid: [9]string = .{"c;%%%%", "c;aGVsbG8", "c;YQ=A", "c;YQ==YQ==", "c;YR==", "c;YWJ=", "c;AA==", "c;YQ==\n", "missing separator"}
+    for index: 0..8 {
+        if OSC(invalid[index]) != 0 || !Query("c;?", "\x1b]52;c;ZmFsbGJhY2s=\a") { return 8 }
+    }
+    oversized: [4100]u8
+    oversized[0] = #char "c"; oversized[1] = #char ";"
+    for index: 2..4097 { oversized[index] = #char "A" }
+    oversized[4098] = 0
+    if HandleClipboardOSC52(*clipboard, *oversized[0], WriteInput, null) != 0 ||
+       !Query("c;?", "\x1b]52;c;ZmFsbGJhY2s=\a") { return 9 }
+    if OSC("c;") != 1 || !Query("c;?", "\x1b]52;c;\a") ||
+       OSC("p;") != 1 || !Query("p;?", "\x1b]52;p;\a") { return 10 }
+    if OSC(";YQ==") != 1 || !Query(";?", "\x1b]52;c;YQ==\a") { return 11 }
+    Reset(); write_limit = 1
+    if OSC("c;?") != 1 || Captured() != "\x1b]52;c;YQ==\a" { return 12 }
+    Reset(); fail_after = 3
+    if OSC("c;?") != 0 { return 13 }
+
+    SetClipboardBufferText(*clipboard, Bytes("shared"))
+    if ClipboardBufferHasPendingWrite(*clipboard) != 0 ||
+       !Query("c;?", "\x1b]52;c;c2hhcmVk\a") { return 14 }
+    // Moving a tab copies only owned bytes and lengths, with no stale views.
+    moved = clipboard
+    SetClipboardBufferText(*clipboard, Bytes("changed"))
+    Reset()
+    if HandleClipboardOSC52(*moved, Bytes("c;?"), WriteInput, null) != 1 ||
+       Captured() != "\x1b]52;c;c2hhcmVk\a" { return 15 }
+
+    Host.HostClipboardReset("external")
+    if SyncClipboardBufferFromHost(*clipboard) != 1 ||
+       Text.TextFromCString(GetClipboardBufferText(*clipboard)) != "external" { return 16 }
+    RequestClipboardBufferWrite(*clipboard, Bytes("pending"))
+    if SyncClipboardBufferFromHost(*clipboard) != 1 ||
+       !Query("c;?", "\x1b]52;c;cGVuZGluZw==\a") { return 17 }
+    Host.reject_write = true
+    if FlushClipboardBufferToHost(*clipboard) != 0 || ClipboardBufferHasPendingWrite(*clipboard) != 1 { return 18 }
+    Host.reject_write = false
+    if FlushClipboardBufferToHost(*clipboard) != 1 || ClipboardBufferHasPendingWrite(*clipboard) != 0 ||
+       Host.HostClipboardText() != "pending" { return 19 }
+    Host.available = false
+    if SyncClipboardBufferFromHost(*clipboard) != 0 ||
+       Text.TextFromCString(GetClipboardBufferText(*clipboard)) != "pending" { return 20 }
+    Host.HostClipboardReset("")
+    if SyncClipboardBufferFromHost(*clipboard) != 1 ||
+       Text.TextFromCString(GetClipboardBufferText(*clipboard)) != "" { return 21 }
+
+    Reset()
+    if WriteClipboardTextPaste(*clipboard, Bytes("paste\ntext"), 1, WriteInput, null) != 1 ||
+       Captured() != "\x1b[200~paste\ntext\x1b[201~" { return 22 }
+    // Raw C1 control bytes are deliberately invalid UTF-8 at this boundary.
+    payload: [300]u8
+    used: s32
+    Append(*payload[0], *used, "safe\x1b[201~after\x1b[31mred\xd0\x80\a")
+    payload[used] = 0x9b; used += 1
+    Append(*payload[0], *used, "32mgreenosc\x1b]2;title\aafteroscdcs\x1bPq~~\x1b\\afterdcsc1osc")
+    payload[used] = 0x9d; used += 1
+    Append(*payload[0], *used, "2;bad\aafterc1oscc1dcs")
+    payload[used] = 0x90; used += 1
+    Append(*payload[0], *used, "q~")
+    payload[used] = 0x9c; used += 1
+    Append(*payload[0], *used, "afterc1dcs")
+    Reset(); write_limit = 2
+    if WriteClipboardTextPaste(*clipboard, *payload[0], 1, WriteInput, null) != 1 ||
+       Captured() != "\x1b[200~safeafterred\xd0\x80greenoscafteroscdcsafterdcsc1oscafterc1oscc1dcsafterc1dcs\x1b[201~" { return 23 }
+    Reset()
+    if WriteClipboardTextPaste(*clipboard, Bytes("a\t\r\nb\a\x1b[0m"), 0, WriteInput, null) != 1 ||
+       Captured() != "a\t\r\nb" { return 24 }
+    Reset()
+    if WriteClipboardTextPaste(*clipboard, Bytes("x\xc2\x9b31my\xc2\x9d2;title\xc2\x9cz"), 0, WriteInput, null) != 1 ||
+       Captured() != "xyz" { return 28 }
+    Reset(); fail_after = 4
+    if WriteClipboardTextPaste(*clipboard, Bytes("hello"), 1, WriteInput, null) != 0 { return 25 }
+    // A paste spans output chunks and short transport writes without losing
+    // text or allowing a split escape sequence to reach the child.
+    large: [5001]u8
+    for index: 0..4999 { large[index] = #char "x" }
+    large[4095] = 27; large[4096] = #char "["
+    large[4097] = #char "3"; large[4098] = #char "1"; large[4099] = #char "m"
+    large[5000] = 0
+    Reset(); write_limit = 11
+    if WriteClipboardTextPaste(*clipboard, *large[0], 1, WriteInput, null) != 1 ||
+       output_length != 5007 || Captured()[0:6] != "\x1b[200~" ||
+       Captured()[5001:5007] != "\x1b[201~" { return 29 }
+    for index: 6..5000 { if output[index] != #char "x" { return 30 } }
+    Host.HostClipboardReset("system")
+    SetPrimarySelectionFromText(Bytes("primary"))
+    Reset()
+    if WriteClipboardSourcePaste(*clipboard, CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD, 0, WriteInput, null) != 1 ||
+       Captured() != "primary" { return 26 }
+    SetPrimarySelectionFromText(null)
+    Reset()
+    if WriteClipboardSourcePaste(*clipboard, CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD, 0, WriteInput, null) != 1 ||
+       Captured() != "system" { return 27 }
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    result := Cases()
+    if result != 0 { print("terminal-clipboard-test-failed: %\n", result) }
+    else { print("terminal-clipboard-test-ok\n") }
+    return result
+}

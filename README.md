@@ -10,12 +10,14 @@ make pane-ziran-test
 make clipboard-plan9-c
 TAIJI_DIR=/path/to/taijiosnet/taiji make keys-plan9-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make osc-plan9-test pty-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make clipboard-plan9-test selection-plan9-test
 ```
 
 These independent clipboard, selection, keyboard, OSC, pane sizing, and Linux
 PTY tests use the locked Ziran toolchain or a canonical local override. The
-clipboard Plan 9 target emits C. Native keyboard, OSC, and PTY gates compile and
-execute source and saved-IR fixtures with actual 8c/8l in a headless Taiji guest
+`clipboard-plan9-c` target emits C. Native keyboard, OSC, metrics, clipboard,
+selection, and PTY gates compile and execute source and saved-IR fixtures
+with actual 8c/8l in a headless Taiji guest
 limited to one CPU, 256 MB, and 120 seconds. They never use the live desktop.
 
 The full `make`, `make run`, `make test`, and `make install` routes retain

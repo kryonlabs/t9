@@ -5,7 +5,8 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 suite=${1:-keys}
 case "$suite" in
-    keys|osc|metrics) module=terminal_pane_${suite}_test ;;
+    keys|osc|metrics|clipboard|selection) module=terminal_pane_${suite}_test ;;
+    protocol) module=terminal_clipboard_test ;;
     pty) module=terminal_pty_plan9_test ;;
     *) echo "Unknown Terminal suite: $suite" >&2; exit 2 ;;
 esac

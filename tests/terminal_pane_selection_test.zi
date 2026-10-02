@@ -1,3 +1,5 @@
+#import "terminal_clipboard"
+Host :: #import "terminal_clipboard_host";
 #import "terminal_pane_selection"
 
 SelectionFixture :: struct {
@@ -6,8 +8,6 @@ SelectionFixture :: struct {
     count: s32
 }
 
-primary_value: [256]u8;
-clipboard_value: [256]u8;
 
 Fill :: (output: *u8, value: string) {
     index: s32 = 0
@@ -18,17 +18,6 @@ Fill :: (output: *u8, value: string) {
     output[index] = 0
 }
 
-CopyText :: (destination: *u8, source: *u8) {
-    index: s32 = 0
-    destination[0] = 0
-    if source == null { return }
-    while source[index] != 0 && index < 255 {
-        destination[index] = source[index]
-        index += 1
-    }
-    destination[index] = 0
-}
-
 Same :: (value: *u8, expected: string) -> bool {
     index: s32 = 0
     while index < cast(s32)expected.count {
@@ -36,19 +25,6 @@ Same :: (value: *u8, expected: string) -> bool {
         index += 1
     }
     return value[index] == 0
-}
-
-#program_export
-SetPrimarySelectionFromText :: (text: *u8) -> s32 {
-    CopyText(*primary_value[0], text)
-    return 1
-}
-
-#program_export
-CopySelectionTextToClipboard :: (clipboard: *void, text: *u8) -> s32 {
-    if clipboard != null || text == null { return 0 }
-    CopyText(*clipboard_value[0], text)
-    return 1
 }
 
 FixtureLineText :: (userdata: *void, row: s32, out: *u8,
@@ -76,6 +52,9 @@ FixtureWrapped :: (userdata: *void, row: s32) -> s32 {
 #program_export
 main :: () -> s32 {
     fixture: SelectionFixture
+    clipboard: ClipboardBuffer
+    InitClipboardBuffer(*clipboard, null)
+    Host.HostClipboardReset("")
     selection: TerminalPaneSelection
     text: [256]u8
     match: TerminalPaneSearchMatch
@@ -120,10 +99,10 @@ main :: () -> s32 {
        !Same(*text[0], "abcdefghijklmnopq") { return 5 }
     if TerminalPaneSelectionUpdatePrimary(*selection, FixtureLineText,
             FixtureWrapped, cast(*void)*fixture) != 1 ||
-       !Same(*primary_value[0], "abcdefghijklmnopq") { return 6 }
+       !Same(GetPrimarySelectionTextValue(), "abcdefghijklmnopq") { return 6 }
     if TerminalPaneSelectionCopyToClipboard(*selection, FixtureLineText,
-            FixtureWrapped, cast(*void)*fixture, null) != 1 ||
-       !Same(*clipboard_value[0], "abcdefghijklmnopq") { return 7 }
+            FixtureWrapped, cast(*void)*fixture, cast(*void)(*clipboard)) != 1 ||
+       !Same(GetClipboardBufferText(*clipboard), "abcdefghijklmnopq") { return 7 }
 
     Fill(*fixture.lines[0][0], "Alpha beta")
     Fill(*fixture.lines[1][0], "gamma ALPHA")

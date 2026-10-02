@@ -5,9 +5,10 @@ migration input only: each one is removed after its behavior has a current
 Ziran implementation and focused hosted/Plan 9 checks. No compatibility
 compiler path, dual product module, or `.kry` restore is part of the target.
 
-Current status: 21 pane modules and both platform process transports are
-Ziran sources; 35 legacy `.kry` inputs and two handwritten C implementations
-remain across the pane, engine, and app boundaries. The current
+Current status: 21 pane modules, clipboard storage/protocol handling, and both
+platform process transports are Ziran sources; 35 legacy `.kry` inputs and
+two handwritten C implementations remain across the pane, engine, and app
+boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
 expressed as Ziran types and explicit foreign/host bindings, then linked to the
 current Ziran-based Kryon library. The migration is complete only when no
@@ -28,7 +29,8 @@ checked as native C/C++ and from saved IR. `make keys-plan9-test` with
 same keyboard fixture from source and saved IR under native Plan 9 8c/8l.
 Raw-buffer pane APIs are native code; portable bundle coverage is not claimed.
 `make clipboard-plan9-c` emits the clipboard fixture's Plan 9 C output;
-native compilation, linking, and execution remain separate checks. The
+`make clipboard-plan9-test selection-plan9-test` compiles and executes the
+selection, clipboard actions, and OSC52/paste fixtures with native 8c/8l. The
 clipboard port keeps primary-selection preference, soft-wrap copying,
 host sync/flush, paste callback routing, and scroll reset behavior.
 
@@ -38,15 +40,14 @@ so these builds are not established by the independent pane checks. Keep
 the existing pipeline until the remaining app/engine/runtime modules move
 to Ziran and current Kryon bindings.
 
-Kapsule's preserved OSC52 adapter changed the old four-argument
-`HandleClipboardOSC52` callback API to its later three-argument form with
-`ClipboardOSC52Write`/`ClipboardPasteWrite` host entrypoints. The transition
-engine still calls the older API. During its migration, retain bounded
-OSC52 queries/writes and paste filtering in t9, and bind clipboard transport
-to current Kryon's `SystemClipboardText`/`SystemClipboardSet`. The pane's
-foreign clipboard-provider names are likewise a transition ABI; hosted
-tests supply them explicitly rather than claiming current Kryon implements
-those legacy entrypoints.
+`terminal_clipboard.zi` owns clipboard bytes, OSC52 queries and writes, and
+paste filtering. It imports `kryon/clipboard` for source selection and pending
+write policy, and `kryon/system_clipboard` for host reads and writes. The pane
+and selection ports call this implementation directly; they no longer declare
+removed Kryon clipboard-provider functions as foreign symbols. Hosted tests
+simulate only Kryon's current three host clipboard operations. Primary text
+is owned inside Terminal; external Linux primary-selection ownership and
+complete application clipboard integration remain whole-application gates.
 
 ## Keyboard input boundary
 
@@ -59,13 +60,23 @@ from held keys so Control input repeats without flooding held snapshots.
 The remaining legacy application must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
-The dependency lock is generated with Ziran package commands against the
-verified published Kryon (`edd5f5f7`) and compiler (`04ee6247`) master commits.
+The dependency lock is generated with Ziran package commands against canonical
+Kryon (`be96f1f7`) and compiler (`33f98116`) master commits. These current
+commits are local; their publication remains necessary for fresh locked builds.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
 locked application builds remain part of the unfinished migration gate.
 
 ## OSC, metrics, and process transports
+
+Clipboard checks now run the product implementation in C/C++ from source and
+saved IR. They preserve independent primary/system values, primary preference,
+pending writes, host retry and fallback, selection copy, and scroll reset.
+OSC52 rejects malformed, noncanonical, oversized and embedded-NUL payloads
+without replacing clipboard state. Paste filtering removes raw and UTF-8 C1
+controls and terminal sequences, preserves ordinary UTF-8 text, and handles
+partial writes. Storage contains bytes and lengths, so moving a tab cannot
+retain a string view into the tab's former address.
 
 `terminal_pane_osc.zi` replaces the old OSC module. Color and palette parsing,
 bounded replies, sanitized title/hyperlink text, title-stack operations, and
@@ -129,6 +140,7 @@ those whole-application gates pass.
 - `src/terminal_pane/terminal_keyboard.zi`
 - `src/terminal_pane/terminal_pane_osc.zi`
 - `src/terminal_pane/terminal_pane_metrics.zi`
+- `src/terminal_clipboard.zi`
 - `src/terminal_pty_linux.zi`
 - `src/terminal_pty_plan9.zi`
 

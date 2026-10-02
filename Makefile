@@ -103,15 +103,6 @@ PANE_SIXEL_TEST_C = $(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_types.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_profile_colors_theme.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel.c \
 	$(PANE_SIXEL_TEST_GEN)/terminal_pane_sixel_test.c
-PANE_SELECTION_TEST_ZIRAN = $(BUILD_DIR)/tests/terminal_pane_selection_ziran_test
-PANE_SELECTION_TEST_ZIRAN_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_selection_ziran
-PANE_SELECTION_TEST_ZIRAN_C = $(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection.c \
-	$(PANE_SELECTION_TEST_ZIRAN_GEN)/terminal_pane_selection_test.c
-PANE_CLIPBOARD_TEST = $(BUILD_DIR)/tests/terminal_pane_clipboard_test
-PANE_CLIPBOARD_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_clipboard
-PANE_CLIPBOARD_TEST_C = $(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_selection.c \
-	$(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_clipboard.c \
-	$(PANE_CLIPBOARD_TEST_GEN)/terminal_pane_clipboard_test.c
 PANE_PROFILE_COLORS_TEST = $(BUILD_DIR)/tests/terminal_pane_profile_colors_test
 PANE_PROFILE_COLORS_TEST_GEN = $(BUILD_DIR)/generated/tests/terminal_pane_profile_colors
 PANE_PROFILE_COLORS_TEST_C = $(PANE_PROFILE_COLORS_TEST_GEN)/terminal_pane_profile_types.c \
@@ -336,26 +327,6 @@ $(PANE_SIXEL_TEST): $(PANE_SIXEL_TEST_C) | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(PANE_SIXEL_TEST_GEN) \
 		$(PANE_SIXEL_TEST_C) -o $@
 
-$(PANE_SELECTION_TEST_ZIRAN_C) &: tests/terminal_pane_selection_test.zi $(PANE_ZI)
-	@mkdir -p $(PANE_SELECTION_TEST_ZIRAN_GEN)
-	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
-		-o $(PANE_SELECTION_TEST_ZIRAN_GEN) tests/terminal_pane_selection_test.zi
-
-$(PANE_SELECTION_TEST_ZIRAN): $(PANE_SELECTION_TEST_ZIRAN_C) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) -I$(PANE_SELECTION_TEST_ZIRAN_GEN) \
-		$(PANE_SELECTION_TEST_ZIRAN_C) -o $@
-
-$(PANE_CLIPBOARD_TEST_C) &: tests/terminal_pane_clipboard_test.zi \
-		src/terminal_pane/terminal_pane_clipboard.zi \
-		src/terminal_pane/terminal_pane_selection.zi
-	@mkdir -p $(PANE_CLIPBOARD_TEST_GEN)
-	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --root tests \
-		-o $(PANE_CLIPBOARD_TEST_GEN) tests/terminal_pane_clipboard_test.zi
-
-$(PANE_CLIPBOARD_TEST): $(PANE_CLIPBOARD_TEST_C) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) -I$(PANE_CLIPBOARD_TEST_GEN) \
-		$(PANE_CLIPBOARD_TEST_C) -o $@
-
 $(PANE_PROFILE_COLORS_TEST_C) &: tests/terminal_pane_profile_colors_test.zi \
 		tests/terminal_pane_profile_colors_theme.zi $(PANE_ZI)
 	@mkdir -p $(PANE_PROFILE_COLORS_TEST_GEN)
@@ -502,12 +473,23 @@ ziran-migration-check:
 
 # Hosted pane tests use isolated clipboard providers and never need the
 # application's legacy Kryon/k2c engine or a desktop display.
-.PHONY: clipboard-test selection-test keys-test keys-plan9-test osc-test osc-plan9-test metrics-test metrics-plan9-test pty-test pty-plan9-test pane-ziran-test clipboard-plan9-c
-clipboard-test: $(PANE_CLIPBOARD_TEST)
-	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
+.PHONY: clipboard-test clipboard-protocol-test clipboard-plan9-test selection-test selection-plan9-test keys-test keys-plan9-test osc-test osc-plan9-test metrics-test metrics-plan9-test pty-test pty-plan9-test pane-ziran-test clipboard-plan9-c
+clipboard-test:
+	sh tests/clipboard_test.sh clipboard
+	sh tests/clipboard_test.sh protocol
 
-selection-test: $(PANE_SELECTION_TEST_ZIRAN)
-	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_SELECTION_TEST_ZIRAN)
+clipboard-protocol-test:
+	sh tests/clipboard_test.sh protocol
+
+clipboard-plan9-test:
+	sh tests/pane_plan9_test.sh clipboard
+	sh tests/pane_plan9_test.sh protocol
+
+selection-test:
+	sh tests/clipboard_test.sh selection
+
+selection-plan9-test:
+	sh tests/pane_plan9_test.sh selection
 
 keys-test:
 	sh tests/keys_test.sh
@@ -544,7 +526,7 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_TEXT_TEST) $(PANE_SGR_TEST) $(PANE_CSI_TEST) \
 	$(PANE_MODES_TEST) $(PANE_MOUSE_TEST) \
 	$(PANE_DCS_TEST) $(PANE_SIXEL_TEST) \
-	$(PANE_SELECTION_TEST_ZIRAN) $(PANE_CLIPBOARD_TEST) \
+	selection-test clipboard-test \
 	$(PANE_PROFILE_COLORS_TEST) $(PANE_SESSION_TEST) \
 	$(PANE_RENDER_TEST) $(PANE_REFLOW_TEST) \
 	$(PANE_PROFILE_PROMPT_TEST) $(PANE_PROFILE_SETTINGS_TEST) \
@@ -559,8 +541,6 @@ test: $(TEST) $(SIMPLE_TEST) $(PANE_SELECTION_TEST) \
 	$(PANE_MOUSE_TEST)
 	$(PANE_DCS_TEST)
 	$(PANE_SIXEL_TEST)
-	$(PANE_SELECTION_TEST_ZIRAN)
-	env -u DISPLAY -u WAYLAND_DISPLAY $(PANE_CLIPBOARD_TEST)
 	$(PANE_PROFILE_COLORS_TEST)
 	$(PANE_SESSION_TEST)
 	$(PANE_RENDER_TEST)

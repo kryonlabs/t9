@@ -4,11 +4,12 @@
 #import "stdio.h"
 #import "string.h"
 
-write_osc52_response :: (userdata: *void, text: const char*) -> i32 #export {
+write_osc52_response :: (userdata: *void, text: const char*,
+size: i32) -> i32 #export {
     terminal: *TerminalState = (TerminalState *)userdata
 
-    if terminal == nil || text == nil { return 0 }
-    return terminal_write_text(terminal, text)
+    if terminal == nil || text == nil || size <= 0 { return 0 }
+    return terminal_write(terminal, text, size)
 }
 
 terminal_default_palette_color :: (index: i32) -> i32 #export {

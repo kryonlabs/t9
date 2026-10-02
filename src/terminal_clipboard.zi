@@ -1,0 +1,334 @@
+// Terminal owns its clipboard bytes, OSC52 protocol, and paste filtering.
+// Kryon supplies clipboard policy and the current platform clipboard API.
+State :: #import "kryon/clipboard";
+System :: #import "kryon/system_clipboard";
+Text :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+
+CLIPBOARD_BUFFER_SIZE :: 262144;
+CLIPBOARD_SOURCE_CLIPBOARD :: 0;
+CLIPBOARD_SOURCE_PRIMARY :: 1;
+CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD :: 2;
+
+ClipboardBuffer :: struct {
+    length: s64
+    pending_write: bool
+    bytes: [CLIPBOARD_BUFFER_SIZE]u8
+}
+
+ClipboardPasteWriteFn :: #type (userdata: *void, text: *u8,
+    size: s32) -> s32 #c_call;
+
+#scope_file
+primary_bytes: [CLIPBOARD_BUFFER_SIZE]u8;
+primary_length: s64;
+
+Raw :: (text: *u8) -> string { return Text.TextFromCString(text) }
+
+Primary :: () -> string { return TextView(primary_bytes[0:primary_length]) }
+
+// Views exist only while an operation runs. A buffer can move with a tab
+// without carrying pointers into its previous address.
+Snapshot :: (buffer: *ClipboardBuffer) -> State.ClipboardState {
+    state: State.ClipboardState
+    if buffer == null { return state }
+    state.system = Raw(*buffer.bytes[0])
+    state.primary = Primary()
+    state.pending_write = buffer.pending_write
+    return state
+}
+
+Store :: (buffer: *ClipboardBuffer, text: string, pending: bool) -> bool {
+    if buffer == null || !CString.CopyCString(text, buffer.bytes[:]) { return false }
+    buffer.length = text.count
+    buffer.pending_write = pending
+    return true
+}
+
+SetPrimary :: (text: string) -> bool {
+    if !CString.CopyCString(text, primary_bytes[:]) { return false }
+    primary_length = text.count
+    return true
+}
+
+WriteAll :: (write_text: ClipboardPasteWriteFn, userdata: *void,
+    bytes: *u8, size: s32) -> bool {
+    if write_text == null || bytes == null || size < 0 { return false }
+    used: s32
+    while used < size {
+        written := write_text(userdata, *bytes[used], size - used)
+        if written <= 0 || written > size - used { return false }
+        used += written
+    }
+    return true
+}
+
+WriteString :: (write_text: ClipboardPasteWriteFn, userdata: *void,
+    text: string) -> bool {
+    descriptor := cast(*Text.TextDescriptor)(*text)
+    return WriteAll(write_text, userdata, descriptor.data, cast(s32)text.count)
+}
+
+Base64Value :: (byte: u8) -> s32 {
+    if byte >= #char "A" && byte <= #char "Z" { return cast(s32)byte - 65 }
+    if byte >= #char "a" && byte <= #char "z" { return cast(s32)byte - 97 + 26 }
+    if byte >= #char "0" && byte <= #char "9" { return cast(s32)byte - 48 + 52 }
+    if byte == #char "+" { return 62 }
+    if byte == #char "/" { return 63 }
+    return -1
+}
+
+DecodeBase64 :: (text: string, output: []u8) -> s64 {
+    if text.count % 4 != 0 || output.count < 1 { return -1 }
+    used: s64
+    for start: cast(s64)0..text.count / 4 - 1 {
+        at := start * 4
+        a := Base64Value(text[at]); b := Base64Value(text[at + 1])
+        c := Base64Value(text[at + 2]); d := Base64Value(text[at + 3])
+        pad_c := text[at + 2] == #char "="
+        pad_d := text[at + 3] == #char "="
+        if a < 0 || b < 0 || (c < 0 && !pad_c) || (d < 0 && !pad_d) { return -1 }
+        if pad_c && !pad_d { return -1 }
+        if (pad_c || pad_d) && at + 4 != text.count { return -1 }
+        if pad_c && (b & 15) != 0 { return -1 }
+        if pad_d && !pad_c && (c & 3) != 0 { return -1 }
+        count: s64 = 3
+        if pad_c { count = 1 } else if pad_d { count = 2 }
+        if used + count >= output.count { return -1 }
+        output[used] = cast(u8)((a << 2) | (b >> 4))
+        if count > 1 { output[used + 1] = cast(u8)((b << 4) | (c >> 2)) }
+        if count > 2 { output[used + 2] = cast(u8)((c << 6) | d) }
+        for index: used..used + count - 1 { if output[index] == 0 { return -1 } }
+        used += count
+    }
+    output[used] = 0
+    return used
+}
+
+EncodeBase64 :: (text: string, output: []u8) -> s64 {
+    alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    required := ((text.count + 2) / 3) * 4
+    if required >= output.count { return -1 }
+    used: s64
+    for group: cast(s64)0..(text.count + 2) / 3 - 1 {
+        at := group * 3
+        a := cast(u32)text[at]
+        b: u32; c: u32
+        if at + 1 < text.count { b = cast(u32)text[at + 1] }
+        if at + 2 < text.count { c = cast(u32)text[at + 2] }
+        output[used] = alphabet[a >> 2]
+        output[used + 1] = alphabet[((a & 3) << 4) | (b >> 4)]
+        output[used + 2] = #char "="; output[used + 3] = #char "="
+        if at + 1 < text.count { output[used + 2] = alphabet[((b & 15) << 2) | (c >> 6)] }
+        if at + 2 < text.count { output[used + 3] = alphabet[c & 63] }
+        used += 4
+    }
+    output[used] = 0
+    return used
+}
+
+#scope_export
+#program_export
+InitClipboardBuffer :: (buffer: *ClipboardBuffer, text: *u8) {
+    if buffer == null { return }
+    buffer.length = 0
+    buffer.pending_write = false
+    buffer.bytes[0] = 0
+    Store(buffer, Raw(text), false)
+}
+
+#program_export
+SetClipboardBufferText :: (buffer: *ClipboardBuffer, text: *u8) -> s32 {
+    return cast(s32)Store(buffer, Raw(text), false)
+}
+
+#program_export
+RequestClipboardBufferWrite :: (buffer: *ClipboardBuffer, text: *u8) -> s32 {
+    return cast(s32)Store(buffer, Raw(text), true)
+}
+
+#program_export
+GetClipboardBufferText :: (buffer: *ClipboardBuffer) -> *u8 {
+    if buffer == null { return null }
+    return *buffer.bytes[0]
+}
+
+#program_export
+ClipboardBufferHasPendingWrite :: (buffer: *ClipboardBuffer) -> s32 {
+    if buffer == null { return 0 }
+    return cast(s32)State.ClipboardPendingWrite(Snapshot(buffer)).available
+}
+
+#program_export
+SetPrimarySelectionFromText :: (text: *u8) -> s32 {
+    return cast(s32)SetPrimary(Raw(text))
+}
+
+#program_export
+GetPrimarySelectionTextValue :: () -> *u8 { return *primary_bytes[0] }
+
+#program_export
+CopySelectionTextToClipboard :: (buffer: *void, text: *u8) -> s32 {
+    if buffer == null || text == null || text[0] == 0 { return 0 }
+    clipboard := cast(*ClipboardBuffer)buffer
+    if !Store(clipboard, Raw(text), true) || !SetPrimary(Raw(text)) { return 0 }
+    // Keep a pending write when a host is unavailable; the local copy is valid.
+    FlushClipboardBufferToHost(clipboard)
+    return 1
+}
+
+#program_export
+SyncClipboardBufferFromHost :: (buffer: *ClipboardBuffer) -> s32 {
+    if buffer == null || !System.SystemClipboardAvailable() { return 0 }
+    if !buffer.pending_write {
+        {
+            text := System.SystemClipboardText(buffer.bytes[0:CLIPBOARD_BUFFER_SIZE - 1])
+            buffer.length = text.count
+        }
+        buffer.bytes[buffer.length] = 0
+    }
+    return 1
+}
+
+#program_export
+FlushClipboardBufferToHost :: (buffer: *ClipboardBuffer) -> s32 {
+    if buffer == null { return 0 }
+    pending := State.ClipboardPendingWrite(Snapshot(buffer))
+    if !pending.available || !System.SystemClipboardSet(pending.text) { return 0 }
+    buffer.pending_write = false
+    return 1
+}
+
+#program_export
+ClipboardSourceHasText :: (source: s32) -> s32 {
+    if source == CLIPBOARD_SOURCE_PRIMARY { return cast(s32)(primary_length > 0) }
+    if source == CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD && primary_length > 0 { return 1 }
+    return cast(s32)System.SystemClipboardHasText()
+}
+
+#program_export
+WriteClipboardTextPaste :: (buffer: *ClipboardBuffer, text: *u8,
+    bracketed: s32, write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
+    if buffer == null || text == null || text[0] == 0 || write_text == null { return 0 }
+    // Strip terminal control sequences before surrounding a paste with the
+    // bracket protocol. Continuation bytes inside UTF-8 remain text bytes.
+    value := Raw(text)
+    output: [4096]u8
+    used: s32
+    state: s32
+    utf8: s32
+    skip: bool
+    if bracketed != 0 && !WriteString(write_text, userdata, "\x1b[200~") { return 0 }
+    for index: cast(s64)0..value.count - 1 {
+        if skip { skip = false; continue }
+        byte := value[index]
+        // UTF-8 C1 codepoints are controls too. Treat them like the raw C1
+        // bytes, while preserving continuation bytes of ordinary text.
+        if byte == 0xc2 && index + 1 < value.count &&
+           value[index + 1] >= 0x80 && value[index + 1] <= 0x9f {
+            byte = value[index + 1]
+            skip = true
+        }
+        if state == 1 {
+            if byte == #char "[" { state = 2 }
+            else if byte == #char "]" || byte == #char "P" || byte == #char "X" || byte == #char "^" || byte == #char "_" { state = 3 }
+            else { state = 0 }
+            continue
+        }
+        if state == 2 { if byte >= 0x40 && byte <= 0x7e { state = 0 }; continue }
+        if state == 3 {
+            if byte == 7 || byte == 0x9c { state = 0 }
+            else if byte == 27 { state = 4 }
+            continue
+        }
+        if state == 4 {
+            if byte == #char "\\" || byte == 7 || byte == 0x9c { state = 0 }
+            else if byte != 27 { state = 3 }
+            continue
+        }
+        if utf8 > 0 && byte >= 0x80 && byte <= 0xbf { utf8 -= 1 }
+        else {
+            utf8 = 0
+            if byte == 27 { state = 1; continue }
+            if byte == 0x9b { state = 2; continue }
+            if byte == 0x90 || byte == 0x9d || byte == 0x98 || byte == 0x9e || byte == 0x9f { state = 3; continue }
+            if (byte < 32 && byte != 9 && byte != 10 && byte != 13) || (byte >= 0x7f && byte <= 0x9f) { continue }
+            if byte >= 0xc2 && byte <= 0xdf { utf8 = 1 }
+            else if byte >= 0xe0 && byte <= 0xef { utf8 = 2 }
+            else if byte >= 0xf0 && byte <= 0xf4 { utf8 = 3 }
+        }
+        output[used] = byte; used += 1
+        if used == 4096 {
+            if !WriteAll(write_text, userdata, *output[0], used) { return 0 }
+            used = 0
+        }
+    }
+    complete := WriteAll(write_text, userdata, *output[0], used)
+    if bracketed != 0 && !WriteString(write_text, userdata, "\x1b[201~") { return 0 }
+    return cast(s32)complete
+}
+
+#program_export
+WriteClipboardSourcePaste :: (buffer: *ClipboardBuffer, source: s32,
+    bracketed: s32, write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
+    if buffer == null { return 0 }
+    if source != CLIPBOARD_SOURCE_PRIMARY &&
+       !(source == CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD && primary_length > 0) {
+        SyncClipboardBufferFromHost(buffer)
+    }
+    text := State.ClipboardRead(Snapshot(buffer), cast(State.ClipboardSource)source).text
+    descriptor := cast(*Text.TextDescriptor)(*text)
+    return WriteClipboardTextPaste(buffer, descriptor.data, bracketed, write_text, userdata)
+}
+
+// Payload begins after "52;". Queries write a bounded protocol response;
+// writes stage the system clipboard and update primary selection separately.
+#program_export
+HandleClipboardOSC52 :: (buffer: *ClipboardBuffer, payload: *u8,
+    write_text: ClipboardPasteWriteFn, userdata: *void) -> s32 {
+    if buffer == null || payload == null { return 0 }
+    value := Raw(payload)
+    if value.count > 4096 { return 0 }
+    separator: s64 = -1
+    for index: cast(s64)0..value.count - 1 { if value[index] == #char ";" { separator = index; break } }
+    if separator < 0 { return 0 }
+    targets := value[0:separator]
+    data := value[separator + 1:]
+    primary: bool; system: bool
+    for index: cast(s64)0..targets.count - 1 {
+        if targets[index] == #char "p" { primary = true }
+        else if targets[index] == #char "c" || targets[index] == #char "s" { system = true }
+    }
+    if !primary && !system { system = true }
+    if data == "?" {
+        response: [4096]u8
+        source := cast(State.ClipboardSource)CLIPBOARD_SOURCE_CLIPBOARD
+        if primary && !system { source = cast(State.ClipboardSource)CLIPBOARD_SOURCE_PRIMARY }
+        content := State.ClipboardRead(Snapshot(buffer), source).text
+        if targets.count > 32 { return 0 }
+        used: s64 = 5
+        prefix := "\x1b]52;"
+        for index: 0..4 { response[index] = prefix[index] }
+        if targets.count == 0 { response[used] = #char "c"; used += 1 }
+        else {
+            for index: cast(s64)0..targets.count - 1 {
+                byte := targets[index]
+                if byte < 32 || byte >= 127 { return 0 }
+                response[used] = byte; used += 1
+            }
+        }
+        response[used] = #char ";"; used += 1
+        length := EncodeBase64(content, response[used:4095])
+        if length < 0 { return 0 }
+        used += length
+        response[used] = 7; used += 1
+        return cast(s32)WriteAll(write_text, userdata, *response[0], cast(s32)used)
+    }
+    decoded: [4096]u8
+    length := DecodeBase64(data, decoded[:])
+    if length < 0 { return 0 }
+    text := TextView(decoded[0:length])
+    if system && !Store(buffer, text, true) { return 0 }
+    if primary && !SetPrimary(text) { return 0 }
+    return 1
+}

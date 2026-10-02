@@ -1,0 +1,41 @@
+// A current Kryon host fixture. Only platform I/O is simulated; all Terminal
+// clipboard policy, protocol handling and paste filtering are real code.
+stored: [262144]u8;
+stored_length: s64;
+available: bool = true;
+reject_write: bool;
+read_count: s32;
+write_count: s32;
+
+HostClipboardReset :: (text: string) {
+    for index: cast(s64)0..text.count - 1 { stored[index] = text[index] }
+    stored_length = text.count
+    available = true
+    reject_write = false
+    read_count = 0
+    write_count = 0
+}
+
+HostClipboardText :: () -> string { return TextView(stored[0:stored_length]) }
+
+#program_export
+SystemClipboardOpenHost :: () -> s32 {
+    read_count += 1
+    if !available { return -1 }
+    return cast(s32)stored_length
+}
+
+#program_export
+SystemClipboardByteHost :: (index: s32) -> s32 {
+    if !available || index < 0 || cast(s64)index >= stored_length { return -1 }
+    return cast(s32)stored[index]
+}
+
+#program_export
+SystemClipboardWriteHost :: (text: string) -> bool {
+    if !available || reject_write || text.count >= stored.count { return false }
+    for index: cast(s64)0..text.count - 1 { stored[index] = text[index] }
+    stored_length = text.count
+    write_count += 1
+    return true
+}

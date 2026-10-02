@@ -1,3 +1,4 @@
+#import "terminal_clipboard"
 #import "terminal_pane_selection"
 
 TERMINAL_PANE_CLIPBOARD_PASTE_TEXT :: 0;
@@ -16,14 +17,6 @@ TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PRIMARY :: 5;
 TERMINAL_PANE_CLIPBOARD_COMMAND_PASTE_PREFERRED :: 6;
 TERMINAL_PANE_CLIPBOARD_COMMAND_SYNC_FROM_HOST :: 7;
 TERMINAL_PANE_CLIPBOARD_COMMAND_FLUSH_TO_HOST :: 8;
-
-CLIPBOARD_SOURCE_CLIPBOARD :: 0;
-CLIPBOARD_SOURCE_PRIMARY :: 1;
-CLIPBOARD_SOURCE_PRIMARY_OR_CLIPBOARD :: 2;
-
-ClipboardBuffer :: struct {}
-ClipboardPasteWriteFn :: #type (userdata: *void, text: *u8,
-    size: s32) -> s32 #c_call;
 
 TerminalPaneClipboard :: struct {
     clipboard: *ClipboardBuffer
@@ -52,19 +45,6 @@ TerminalPaneClipboardActions :: struct {
     selection: TerminalPaneClipboardController
     session: TerminalPaneClipboardController
 }
-
-#scope_file
-kryon :: #system_library "c";
-WriteClipboardTextPasteHost :: (clipboard: *ClipboardBuffer,
-    text: *u8, bracketed: s32, write_text: ClipboardPasteWriteFn,
-    userdata: *void) -> s32 #foreign kryon "WriteClipboardTextPaste";
-WriteClipboardSourcePasteHost :: (clipboard: *ClipboardBuffer,
-    source: s32, bracketed: s32, write_text: ClipboardPasteWriteFn,
-    userdata: *void) -> s32 #foreign kryon "WriteClipboardSourcePaste";
-ClipboardSourceHasTextHost :: (
-    source: s32) -> s32 #foreign kryon "ClipboardSourceHasText";
-SyncClipboardBufferFromHostHost :: (clipboard: *ClipboardBuffer) -> s32 #foreign kryon "SyncClipboardBufferFromHost";
-FlushClipboardBufferToHostHost :: (clipboard: *ClipboardBuffer) -> s32 #foreign kryon "FlushClipboardBufferToHost";
 
 #scope_export
 
@@ -103,7 +83,7 @@ TerminalPaneClipboardPasteText :: (clipboard: TerminalPaneClipboard,
     value: *u8) -> s32 {
     if clipboard.clipboard == null || clipboard.write_text == null ||
        value == null || value[0] == 0 { return 0 }
-    return WriteClipboardTextPasteHost(clipboard.clipboard, value,
+    return WriteClipboardTextPaste(clipboard.clipboard, value,
         clipboard.bracketed_paste, clipboard.write_text, clipboard.userdata)
 }
 
@@ -111,7 +91,7 @@ TerminalPaneClipboardPasteText :: (clipboard: TerminalPaneClipboard,
 TerminalPaneClipboardPasteSource :: (clipboard: TerminalPaneClipboard,
     source: s32) -> s32 {
     if clipboard.clipboard == null || clipboard.write_text == null { return 0 }
-    return WriteClipboardSourcePasteHost(clipboard.clipboard, source,
+    return WriteClipboardSourcePaste(clipboard.clipboard, source,
         clipboard.bracketed_paste, clipboard.write_text, clipboard.userdata)
 }
 
@@ -138,7 +118,7 @@ TerminalPaneClipboardPastePreferred :: (
 
 #program_export
 TerminalPaneClipboardSourceHasText :: (source: s32) -> s32 {
-    return ClipboardSourceHasTextHost(source)
+    return ClipboardSourceHasText(source)
 }
 
 #program_export
@@ -150,14 +130,14 @@ TerminalPaneClipboardPrimarySelectionAvailable :: () -> s32 {
 TerminalPaneClipboardSyncFromHost :: (
     clipboard: TerminalPaneClipboard) -> s32 {
     if clipboard.clipboard == null { return 0 }
-    return SyncClipboardBufferFromHostHost(clipboard.clipboard)
+    return SyncClipboardBufferFromHost(clipboard.clipboard)
 }
 
 #program_export
 TerminalPaneClipboardFlushToHost :: (
     clipboard: TerminalPaneClipboard) -> s32 {
     if clipboard.clipboard == null { return 0 }
-    return FlushClipboardBufferToHostHost(clipboard.clipboard)
+    return FlushClipboardBufferToHost(clipboard.clipboard)
 }
 
 #program_export
