@@ -1,0 +1,39 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Clipboard :: #import "app_clipboard";
+Commands :: #import "app_commands";
+Frames :: #import "kryon/session";
+using UI :: #import "kryon/Widgets";
+
+PastePrimary :: 2005;
+
+#scope_export
+Draw :: (frame: Frames.Session, app: *State.State, persist: bool = true) {
+    if app == null || !app.context_menu_open { return }
+    active := Sessions.Active(app)
+    if active == null { app.context_menu_open = false; return }
+    items: [11]ContextMenuItem
+    items[0] = .{cast(s32)Commands.Command.NewTab, "New Tab    Ctrl+Shift+T", false, false}
+    items[1] = .{cast(s32)Commands.Command.CloseTab, "Close Tab    Ctrl+Shift+W", app.session_count <= 1, false}
+    items[2].separator = true
+    items[3] = .{cast(s32)Commands.Command.Copy, "Copy    Ctrl+Shift+C", app.selection.active == 0, false}
+    items[4] = .{cast(s32)Commands.Command.Paste, "Paste    Ctrl+Shift+V", false, false}
+    items[5] = .{PastePrimary, "Paste Primary", !Clipboard.PrimaryAvailable(), false}
+    items[6] = .{cast(s32)Commands.Command.SelectAll, "Select All    Ctrl+Shift+A", false, false}
+    items[7].separator = true
+    items[8] = .{cast(s32)Commands.Command.Find, "Find    Ctrl+Shift+F", false, false}
+    items[9] = .{cast(s32)Commands.Command.FindNext, "Find Next    Ctrl+Shift+G", false, false}
+    items[10] = .{cast(s32)Commands.Command.FindPrevious, "Find Previous    Ctrl+Shift+B", false, false}
+    props: ContextMenuProps
+    props.key = cast(u64)1300; props.open = app.context_menu_open
+    props.x = cast(float32)app.context_menu_x; props.y = cast(float32)app.context_menu_y
+    props.escape = KeyboardTake(frame) == KeyEscape
+    // An overlay owns this frame's text, including keys it does not handle.
+    ignored: [128]u8
+    TypedTextTake(frame, ignored[:])
+    result := ContextMenu(frame, props, items[:])
+    app.context_menu_open = result.open
+    if result.activated_id == PastePrimary { Clipboard.PastePrimary(app, active) }
+    else if result.activated_id > 0 { Commands.Execute(app, cast(Commands.Command)result.activated_id, persist) }
+}

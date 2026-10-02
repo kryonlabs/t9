@@ -1,0 +1,130 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Clipboard :: #import "app_clipboard";
+Profile :: #import "app_profile";
+Search :: #import "app_search";
+Config :: #import "app_config";
+Engine :: #import "terminal";
+Keys :: #import "terminal_pane_keys";
+
+#scope_export
+Command :: enum s32 {
+    None :: 0
+    NewTab :: 1001
+    CloseTab :: 1002
+    Quit :: 1003
+    Copy :: 1004
+    Paste :: 1005
+    SelectAll :: 1006
+    FontIncrease :: 1007
+    FontDecrease :: 1008
+    FontReset :: 1009
+    NextTab :: 1010
+    PreviousTab :: 1011
+    Find :: 1012
+    FindNext :: 1013
+    FindPrevious :: 1014
+    ProfileShell :: 1015
+    ProfileCwd :: 1016
+    ProfileFontFile :: 1017
+    ProfileFontSize :: 1018
+    ProfileScrollback :: 1019
+    ProfileForeground :: 1020
+    ProfileBackground :: 1021
+    ProfileCursorColor :: 1022
+    ProfileSelectionForeground :: 1023
+    ProfileSelectionBackground :: 1024
+    ProfileDynamicTitleMode :: 1025
+    ProfileBackspaceBinding :: 1026
+    ProfileDeleteBinding :: 1027
+    ProfileAmbiguousWidth :: 1028
+    ProfileAllowBold :: 1029
+    ProfileUnlimitedScrollback :: 1030
+    ProfileAutoHideMouse :: 1031
+    ProfileMiddleClickCloseTab :: 1032
+    ProfileAlwaysShowTabs :: 1033
+    ProfileDisableMenuMnemonics :: 1034
+    ProfileDisableMenuShortcut :: 1035
+    ProfileDisableHelpShortcut :: 1036
+    ProfileBackgroundOpacity :: 1037
+    ProfileBackgroundImage :: 1038
+    CursorBlock :: 1039
+    CursorUnderline :: 1040
+    CursorBar :: 1041
+    About :: 1042
+}
+
+SetFontSize :: (app: *State.State, value: s32, persist: bool = true) {
+    if app == null { return }
+    limits := Config.Limits()
+    if value < limits.min_font_size { value = limits.min_font_size }
+    if value > limits.max_font_size { value = limits.max_font_size }
+    app.config.font_size = value
+    if persist { Config.Save(*app.config) }
+}
+
+Execute :: (app: *State.State, command: Command, persist: bool = true) -> bool {
+    if app == null { return false }
+    session := Sessions.Active(app)
+    if command == Command.NewTab { Sessions.Open(app) }
+    else if command == Command.CloseTab { Sessions.Close(app, app.active) }
+    else if command == Command.Quit { app.quit_requested = true }
+    else if command == Command.Copy { Clipboard.CopySelection(app) }
+    else if command == Command.Paste { Clipboard.PasteClipboard(session) }
+    else if command == Command.SelectAll { Clipboard.SelectAll(app) }
+    else if command == Command.FontIncrease { SetFontSize(app, app.config.font_size + 1, persist) }
+    else if command == Command.FontDecrease { SetFontSize(app, app.config.font_size - 1, persist) }
+    else if command == Command.FontReset { SetFontSize(app, Config.Limits().default_font_size, persist) }
+    else if command == Command.NextTab {
+        if app.session_count > 0 { Sessions.SetActive(app, (app.active + 1) % app.session_count) }
+    } else if command == Command.PreviousTab {
+        if app.session_count > 0 { Sessions.SetActive(app, (app.active + app.session_count - 1) % app.session_count) }
+    } else if command == Command.Find { Search.Focus(app) }
+    else if command == Command.FindNext || command == Command.FindPrevious {
+        if app.search_text[0] == 0 { Search.Focus(app) }
+        else { Search.FindDirection(app, ifx command == Command.FindNext then 1 else -1) }
+    } else if cast(s32)command >= cast(s32)Command.ProfileShell && cast(s32)command <= cast(s32)Command.ProfileBackgroundImage {
+        // The stable command IDs follow the canonical profile prompt kinds.
+        Profile.OpenPrompt(app, cast(s32)command - cast(s32)Command.ProfileShell + 1)
+    } else if command == Command.CursorBlock || command == Command.CursorUnderline || command == Command.CursorBar {
+        app.config.cursor_style = Engine.TERMINAL_CURSOR_BLOCK
+        if command == Command.CursorUnderline { app.config.cursor_style = Engine.TERMINAL_CURSOR_UNDERLINE }
+        if command == Command.CursorBar { app.config.cursor_style = Engine.TERMINAL_CURSOR_BAR }
+        if persist { Config.Save(*app.config) }
+    } else if command == Command.About { app.about_visible = true }
+    else { return false }
+    return true
+}
+
+HandleShortcut :: (app: *State.State, key: s32, modifiers: s32, persist: bool = true) -> bool {
+    if Sessions.Active(app) == null { return false }
+    if key >= #char "a" && key <= #char "z" { key -= 32 }
+    control := (modifiers & Keys.TERMINAL_PANE_MOD_CTRL) != 0
+    shift := (modifiers & Keys.TERMINAL_PANE_MOD_SHIFT) != 0
+    alt := (modifiers & Keys.TERMINAL_PANE_MOD_ALT) != 0
+    if alt {
+        for index: cast(s32)0..app.session_count - 1 {
+            if key == #char "1" + index || key == 321 + index { Sessions.SetActive(app, index); return true }
+        }
+    }
+    command := Command.None
+    if control && shift && key == #char "T" { command = Command.NewTab }
+    else if control && shift && key == #char "W" { command = Command.CloseTab }
+    else if control && ((shift && key == 258) || key == 266) { command = Command.PreviousTab }
+    else if control && (key == 258 || key == 267) { command = Command.NextTab }
+    else if control && (key == #char "=" || key == 334) { command = Command.FontIncrease }
+    else if control && (key == #char "-" || key == 333) { command = Command.FontDecrease }
+    else if control && (key == #char "0" || key == 320) { command = Command.FontReset }
+    else if control && key == 260 { command = Command.Copy }
+    else if shift && key == 260 { command = Command.Paste }
+    else if control && shift && key == #char "C" { command = Command.Copy }
+    else if control && shift && key == #char "V" { command = Command.Paste }
+    else if control && shift && key == #char "A" { command = Command.SelectAll }
+    else if control && shift && key == #char "F" { command = Command.Find }
+    else if control && shift && key == #char "G" { command = Command.FindNext }
+    else if control && shift && key == #char "B" { command = Command.FindPrevious }
+    else if control && shift && key == #char "Q" { command = Command.Quit }
+    if command == Command.None { return false }
+    return Execute(app, command, persist)
+}

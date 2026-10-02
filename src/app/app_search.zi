@@ -1,0 +1,51 @@
+#scope_module
+State :: #import "app_state";
+Sessions :: #import "app_sessions";
+Engine :: #import "terminal";
+Pane :: #import "terminal_pane_selection";
+Dialog :: #import "app_dialog";
+Text :: #import "std/text_buffer";
+using UI :: #import "kryon/Widgets";
+Frames :: #import "kryon/session";
+
+#scope_export
+Focus :: (app: *State.State) {
+    if app == null { return }
+    app.search_visible = true; app.search_focused = true
+    app.search_cursor = cast(s32)Text.TextUntilNul(app.search_text[:]).count
+    app.search_anchor = app.search_cursor; app.search_scroll_x = 0
+}
+FindDirection :: (app: *State.State, direction: s32) -> bool {
+    session := Sessions.Active(app)
+    if app == null || session == null || app.search_text[0] == 0 { return false }
+    search := Engine.terminal_search_controller(*session.terminal, *app.selection,
+        app.visible_rows, app.first_visible_row, *session.scroll_offset)
+    return Pane.TerminalPaneSearchFindNext(search, *app.search_text[0], direction, null) != 0
+}
+Find :: (app: *State.State) -> bool {
+    session := Sessions.Active(app)
+    if app == null || session == null || app.search_text[0] == 0 { return false }
+    search := Engine.terminal_search_controller(*session.terminal, *app.selection,
+        app.visible_rows, app.first_visible_row, *session.scroll_offset)
+    return Pane.TerminalPaneSearchFindInitial(search, *app.search_text[0], null) != 0
+}
+Draw :: (session: Frames.Session, app: *State.State) {
+    if app == null || !app.search_visible { return }
+    key := UI.KeyboardTake(session)
+    modifiers := UI.KeyboardModifiers(session)
+    if (modifiers & UI.KeyModifierControl) != 0 && (modifiers & UI.KeyModifierShift) != 0 {
+        if key == #char "G" { FindDirection(app, 1); app.search_focused = true }
+        else if key == #char "B" { FindDirection(app, -1); app.search_focused = true }
+    }
+    typed: [128]u8
+    input := UI.TextFieldInputFor(key, modifiers, UI.TypedTextTake(session, typed[:]))
+    result := Dialog.Draw(session, cast(u64)9200, "Find", "Find", app.search_text[:],
+        *app.search_cursor, *app.search_anchor, *app.search_scroll_x, *app.search_focused, input, app.scale)
+    if result == 1 {
+        app.search_visible = false; app.search_focused = false
+    } else if result == 2 {
+        if app.selection.active != 0 { FindDirection(app, -1) }
+        else { Find(app) }
+        app.search_visible = true; app.search_focused = true
+    }
+}

@@ -84,6 +84,7 @@ OpenPrompt :: (app: *State.State, kind: s32) {
         else if formatted == 0 { Prompt.FormatTerminalPaneProfilePromptValue(*app.profile_text[0], 1024, *app.config, kind) }
     }
     app.profile_cursor = cast(s32)Text.TextFromCString(*app.profile_text[0]).count
+    app.profile_anchor = app.profile_cursor; app.profile_scroll_x = 0
 }
 PromptTitle :: (kind: s32) -> string { return Text.TextFromCString(Prompt.TerminalPaneProfilePromptTitle(kind)) }
 ApplyPrompt :: (app: *State.State, persist: bool = true) -> PromptChange {

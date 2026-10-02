@@ -1,0 +1,76 @@
+#scope_module
+using UI :: #import "kryon/Widgets";
+Sessions :: #import "kryon/session";
+Fields :: #import "kryon/text_input_props";
+Text :: #import "std/text_buffer";
+
+#scope_export
+// Kryon owns editing policy; Terminal owns the prompt's bounded storage.
+ApplyEdit :: (output: []u8, edit: Fields.TextFieldEdit) -> bool {
+    if !edit.changed || output.count <= 0 || output.count > 1024 { return false }
+    value := Text.TextUntilNul(output)
+    if value.count == 0 && output[0] != 0 { return false }
+    if edit.start < 0 || edit.end < edit.start || cast(s64)edit.end > value.count { return false }
+    after := value.count - cast(s64)(edit.end - edit.start) + edit.replacement.count
+    if after >= output.count || after < 0 { return false }
+    next: [1024]u8
+    used: s64
+    for index: cast(s64)0..cast(s64)edit.start - 1 { next[used] = value[index]; used += 1 }
+    for index: cast(s64)0..edit.replacement.count - 1 {
+        if edit.replacement[index] == 0 { return false }
+        next[used] = edit.replacement[index]; used += 1
+    }
+    for index: cast(s64)edit.end..value.count - 1 { next[used] = value[index]; used += 1 }
+    next[used] = 0
+    for index: cast(s64)0..used { output[index] = next[index] }
+    return true
+}
+
+// Zero means no action, one Cancel, two the affirmative action.
+Draw :: (session: Sessions.Session, key: u64, title: string, action: string,
+    output: []u8, cursor: *s32, anchor: *s32, scroll_x: *s32,
+    focused: *bool, input: Fields.TextFieldInput, scale: float32 = 1.0) -> s32 {
+    if output.count <= 0 || output.count > 1024 || cursor == null || anchor == null ||
+        scroll_x == null || focused == null { return 0 }
+    if scale <= 0.0 { scale = 1.0 }
+    frame_props: ModalFrameProps
+    frame_props.key = key; frame_props.title = title
+    frame_props.width = cast(s32)(420.0 * scale); frame_props.height = cast(s32)(160.0 * scale)
+    frame_props.scale = scale
+    frame_props.has_right_action = true; frame_props.right_label = "Close"
+    frame := ModalFrame(session, frame_props)
+    if frame.dismissed || frame.right_clicked { return 1 }
+    if !frame.opened { return 0 }
+    field: TextFieldProps
+    field.key = key + cast(u64)1; field.focus_id = cast(s32)(key + cast(u64)1)
+    field.bounds = frame.layout.content
+    field.bounds.height = 32.0 * scale
+    field.value = Text.TextUntilNul(output)
+    field.cursor = cursor.*; field.anchor = anchor.*; field.scroll_x = scroll_x.*
+    field.focused = focused.*; field.max_bytes = cast(s32)output.count - 1
+    field.scale = scale; field.input = input
+    result := TextField(session, field)
+    changed := ApplyEdit(output, result.edit)
+    if !result.edit.changed || changed {
+        cursor.* = result.cursor; anchor.* = result.anchor; scroll_x.* = result.scroll_x
+    }
+    focused.* = result.focused
+    cancel: ButtonProps
+    cancel.key = key + cast(u64)2; cancel.label = "Cancel"
+    cancel.bounds = frame.layout.content
+    cancel.bounds.width = 100.0 * scale; cancel.bounds.height = 32.0 * scale
+    cancel.bounds.y += frame.layout.content.height - cancel.bounds.height
+    cancel.bounds.x += frame.layout.content.width - cancel.bounds.width * 2.0 - 12.0 * scale
+    cancel.emphasis = ButtonEmphasis.ButtonEmphasisSoft
+    cancel_clicked := Button(session, cancel) != 0
+    confirm := cancel
+    confirm.key = key + cast(u64)3; confirm.label = action
+    confirm.bounds.x += cancel.bounds.width + 12.0 * scale
+    confirm.emphasis = ButtonEmphasis.ButtonEmphasisFilled
+    confirm.tone = ButtonTone.ButtonToneAccent
+    confirm_clicked := Button(session, confirm) != 0
+    End(session)
+    if result.escaped || cancel_clicked { return 1 }
+    if result.committed || confirm_clicked { return 2 }
+    return 0
+}

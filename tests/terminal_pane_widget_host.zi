@@ -49,6 +49,10 @@ RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,
     outlines += 1
 }
 #program_export
+ImageWidth :: (path: string) -> s32 { unused path; return 0 }
+#program_export
+ImageHeight :: (path: string) -> s32 { unused path; return 0 }
+#program_export
 RasterImage :: (path: string, id: u32, source: Rectangle,
     destination: Rectangle, clip: Rectangle, origin: Vector2,
     rotation: float32, radius: float32, tint: Color) {

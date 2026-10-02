@@ -35,11 +35,15 @@ State :: struct {
     about_visible: bool
     rename_index: s32
     rename_cursor: s32
+    rename_text_anchor: s32
+    rename_scroll_x: s32
     rename_focused: bool
     rename_anchor: Rectangle
     rename_text: [128]u8
     search_visible: bool
     search_cursor: s32
+    search_anchor: s32
+    search_scroll_x: s32
     search_focused: bool
     search_text: [128]u8
     mouse_report_col: s32
@@ -63,6 +67,8 @@ State :: struct {
     last_mouse_y: s32
     profile_prompt: s32
     profile_cursor: s32
+    profile_anchor: s32
+    profile_scroll_x: s32
     profile_focused: bool
     profile_text: [1024]u8
     window_title: [160]u8

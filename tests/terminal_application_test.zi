@@ -16,6 +16,17 @@ using Drawing :: #import "kryon/drawing_props";
 Text :: #import "std/byte_text_linux";
 Host :: #import "terminal_clipboard_host";
 PaintHost :: #import "terminal_pane_widget_host";
+Commands :: #import "app_commands";
+Search :: #import "app_search";
+Dialog :: #import "app_dialog";
+Keys :: #import "terminal_pane_keys";
+UISessions :: #import "kryon/session";
+Frame :: #import "kryon/Frame";
+Input :: #import "kryon/tree_input";
+using Geometry :: #import "kryon/geometry";
+Fields :: #import "kryon/text_input_props";
+Context :: #import "app_context_menu";
+Tree :: #import "kryon/tree";
 #if #defined(PLAN9) {
     File :: #import "std/file_plan9";
 } else {
@@ -262,6 +273,206 @@ CheckSessions :: () -> bool {
     app.session_count = 1
     return true
 }
+CheckCommandsAndSearch :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    if Commands.Execute(null, Commands.Command.Quit, false) ||
+        Commands.Execute(app, cast(Commands.Command)9999, false) ||
+        Commands.HandleShortcut(app, #char "T", Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_SHIFT, false) {
+        return Failure("Commands without an active tab")
+    }
+    app.session_count = 2; app.active = 0
+    terminal := *app.sessions[0].terminal
+    Engine.terminal_resize(terminal, 20, 4)
+    sample := "first needle\r\nsecond needle"
+    Engine.terminal_feed(terminal, cast(*void)Bytes(sample), cast(s32)sample.count)
+    app.visible_rows = 4
+    limits := Config.Limits()
+    Commands.SetFontSize(app, 100000, false)
+    if app.config.font_size != limits.max_font_size { return Failure("Command font maximum") }
+    Commands.Execute(app, Commands.Command.FontIncrease, false)
+    if app.config.font_size != limits.max_font_size { return Failure("Command font increase limit") }
+    Commands.SetFontSize(app, -100, false)
+    Commands.Execute(app, Commands.Command.FontDecrease, false)
+    if app.config.font_size != limits.min_font_size { return Failure("Command font minimum") }
+    Commands.Execute(app, Commands.Command.FontReset, false)
+    if app.config.font_size != limits.default_font_size { return Failure("Command font reset") }
+    if !Commands.HandleShortcut(app, 258, Keys.TERMINAL_PANE_MOD_CTRL, false) || app.active != 1 ||
+        !Commands.HandleShortcut(app, 258, Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_SHIFT, false) || app.active != 0 ||
+        !Commands.HandleShortcut(app, #char "2", Keys.TERMINAL_PANE_MOD_ALT, false) || app.active != 1 ||
+        !Commands.HandleShortcut(app, 321, Keys.TERMINAL_PANE_MOD_ALT, false) || app.active != 0 ||
+        Commands.HandleShortcut(app, #char "C", 0, false) { return Failure("Tab and ordinary-key shortcuts") }
+    for kind: cast(s32)1..cast(s32)24 {
+        if !Commands.Execute(app, cast(Commands.Command)(1014 + kind), false) ||
+            app.profile_prompt != kind || app.profile_anchor != app.profile_cursor {
+            return Failure("Profile command routing")
+        }
+    }
+    app.profile_prompt = 0
+    Commands.Execute(app, Commands.Command.CursorUnderline, false)
+    if app.config.cursor_style != Engine.TERMINAL_CURSOR_UNDERLINE { return Failure("Cursor command") }
+    Commands.Execute(app, Commands.Command.About, false)
+    if !app.about_visible { return Failure("About command") }
+    Session.CopyText(app.search_text[:], "needle")
+    if !Search.Find(app) || app.selection.start_row != 1 || app.selection.start_col != 7 ||
+        !Search.FindDirection(app, 1) || app.selection.start_row != 0 || app.selection.start_col != 6 ||
+        !Search.FindDirection(app, -1) || app.selection.start_row != 1 { return Failure("Search direction and wrap") }
+    if !Commands.HandleShortcut(app, #char "F", Keys.TERMINAL_PANE_MOD_CTRL | Keys.TERMINAL_PANE_MOD_SHIFT, false) ||
+        !app.search_visible || !app.search_focused || app.search_cursor != 6 || app.search_anchor != 6 {
+        return Failure("Search shortcut focus")
+    }
+    Session.CopyText(app.search_text[:], "absent")
+    if Search.Find(app) || Search.FindDirection(app, 1) || Search.Find(null) { return Failure("Missing search match") }
+    if !Commands.Execute(app, Commands.Command.NewTab, false) || app.session_count != 3 || app.active != 2 ||
+        !app.sessions[2].used { return Failure("New-tab command") }
+    Commands.Execute(app, Commands.Command.CloseTab, false)
+    if app.session_count != 2 || app.active != 1 || app.sessions[2].terminal.fd != -1 { return Failure("Close-tab command") }
+    Commands.Execute(app, Commands.Command.Quit, false)
+    return app.quit_requested
+}
+DrawSearch :: (session: UISessions.Session, app: *State.State) -> bool {
+    PaintHost.Reset()
+    if cast(s32)Frame.BeginFrame(session, cast(u64)1, Rectangle.{0.0, 0.0, 800.0, 600.0}) != 0 { return false }
+    Search.Draw(session, app)
+    return cast(s32)Frame.EndFrame(session) == 0 && !PaintHost.failed && (!app.search_visible || PaintHost.texts > 0)
+}
+CheckSearchDialog :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    app.session_count = 1; app.active = 0
+    session := UISessions.SessionOpen()
+    if !UISessions.SessionValid(session) { return false }
+    defer Frame.CloseSession(session)
+    Search.Focus(app)
+    Input.TypedCodepointSend(session, 0x4e00)
+    if !DrawSearch(session, app) || Value(app.search_text[:]) != "一" || app.search_cursor != 3 {
+        return Failure("Search dialog Unicode input")
+    }
+    Input.KeyboardSend(session, Input.KeyLeft)
+    if !DrawSearch(session, app) || app.search_cursor != 0 || app.search_anchor != 0 { return Failure("Search dialog cursor") }
+    Input.TypedCodepointSend(session, #char "x")
+    if !DrawSearch(session, app) || Value(app.search_text[:]) != "x一" { return Failure("Search dialog insertion") }
+    Host.HostClipboardReset("replacement")
+    Input.KeyboardModifiersSend(session, Input.KeyModifierControl)
+    Input.KeyboardSend(session, #char "A")
+    if !DrawSearch(session, app) { return false }
+    Input.KeyboardSend(session, #char "V")
+    if !DrawSearch(session, app) || Value(app.search_text[:]) != "replacement" { return Failure("Search dialog clipboard paste") }
+    Input.KeyboardSend(session, #char "A")
+    if !DrawSearch(session, app) { return false }
+    oversized: [200]u8
+    for index: cast(s32)0..cast(s32)199 { oversized[index] = #char "z" }
+    Host.HostClipboardReset(TextView(oversized[:]))
+    Input.KeyboardSend(session, #char "V")
+    if !DrawSearch(session, app) || Value(app.search_text[:]) != "replacement" { return Failure("Search dialog paste bounds") }
+    Input.KeyboardModifiersSend(session, 0)
+    Input.KeyboardSend(session, Input.KeyEnter)
+    if !DrawSearch(session, app) || !app.search_visible || !app.search_focused { return Failure("Search dialog Find action") }
+    Input.KeyboardSend(session, Input.KeyEscape)
+    if !DrawSearch(session, app) || app.search_visible || app.search_focused { return Failure("Search dialog Escape") }
+    Search.Focus(app)
+    if !DrawSearch(session, app) || !ClickKey(session, cast(u64)9203) ||
+        !DrawSearch(session, app) || !app.search_visible || !app.search_focused {
+        return Failure("Search dialog labeled Find button")
+    }
+    if !ClickKey(session, cast(u64)9202) || !DrawSearch(session, app) || app.search_visible || app.search_focused {
+        return Failure("Search dialog labeled Cancel button")
+    }
+    Search.Focus(app)
+    if !DrawSearch(session, app) { return false }
+    Click(session, 20.0, 20.0)
+    if !DrawSearch(session, app) || app.search_visible || app.search_focused {
+        return Failure("Search dialog outside dismissal")
+    }
+    return true
+}
+CheckPromptStorage :: () -> bool {
+    output: [8]u8
+    Session.CopyText(output[:], "abcd")
+    edit: Fields.TextFieldEdit
+    edit.changed = true; edit.start = 1; edit.end = 2
+    edit.replacement = Value(output[:])[0:3]
+    if !Dialog.ApplyEdit(output[:], edit) || Value(output[:]) != "aabccd" { return Failure("Borrowed prompt edit") }
+    edit.start = 9
+    if Dialog.ApplyEdit(output[:], edit) || Value(output[:]) != "aabccd" { return Failure("Invalid prompt range") }
+    edit.start = 0; edit.end = 0; edit.replacement = "01234567"
+    if Dialog.ApplyEdit(output[:], edit) || Value(output[:]) != "aabccd" { return Failure("Oversized prompt edit") }
+    edit.replacement = "x\0y"
+    if Dialog.ApplyEdit(output[:], edit) || Value(output[:]) != "aabccd" { return Failure("NUL prompt edit") }
+    return true
+}
+
+DrawContext :: (frame: UISessions.Session, app: *State.State) -> bool {
+    PaintHost.Reset()
+    if cast(s32)Frame.BeginFrame(frame, cast(u64)1, Rectangle.{0.0, 0.0, 800.0, 600.0}) != 0 { return false }
+    Context.Draw(frame, app, false)
+    return cast(s32)Frame.EndFrame(frame) == 0 && !PaintHost.failed
+}
+Click :: (frame: UISessions.Session, x: float32, y: float32) {
+    Input.TreePointerUpdate(frame, Input.PointerFrame.{x, y, true, true, true})
+}
+ClickKey :: (frame: UISessions.Session, key: u64) -> bool {
+    for index: 0..Tree.TreeCount(frame) - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.key == key {
+            Click(frame, node.bounds.x + node.bounds.width * 0.5, node.bounds.y + node.bounds.height * 0.5)
+            return true
+        }
+    }
+    return false
+}
+CheckContextMenu :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    frame := UISessions.SessionOpen()
+    if !UISessions.SessionValid(frame) { return false }
+    defer Frame.CloseSession(frame)
+    app.context_menu_open = true
+    if !DrawContext(frame, app) || app.context_menu_open { return Failure("Context menu without a tab") }
+    app.session_count = 1; app.active = 0
+    app.context_menu_x = 20; app.context_menu_y = 20; app.context_menu_open = true
+    if !DrawContext(frame, app) { return false }
+    Click(frame, 40.0, 63.0)
+    if !DrawContext(frame, app) || !app.context_menu_open || app.session_count != 1 {
+        return Failure("Context menu disabled last-tab close")
+    }
+    Host.HostClipboardReset("keep clipboard")
+    Click(frame, 40.0, 98.0)
+    if !DrawContext(frame, app) || !app.context_menu_open || Host.HostClipboardText() != "keep clipboard" {
+        return Failure("Context menu disabled copy")
+    }
+    Input.TypedCodepointSend(frame, #char "x")
+    Input.KeyboardSend(frame, Input.KeyEscape)
+    if !DrawContext(frame, app) || app.context_menu_open || Input.TypedCodepointTake(frame) != 0 {
+        return Failure("Context menu Escape and text ownership")
+    }
+    app.context_menu_open = true
+    if !DrawContext(frame, app) { return false }
+    Click(frame, 40.0, 37.0)
+    if !DrawContext(frame, app) || app.context_menu_open || app.session_count != 2 || app.active != 1 {
+        return Failure("Context menu new tab")
+    }
+    app.context_menu_open = true
+    if !DrawContext(frame, app) { return false }
+    Click(frame, 40.0, 63.0)
+    if !DrawContext(frame, app) || app.context_menu_open || app.session_count != 1 {
+        return Failure("Context menu close tab")
+    }
+    app.context_menu_open = true
+    if !DrawContext(frame, app) { return false }
+    Click(frame, 700.0, 500.0)
+    if !DrawContext(frame, app) || app.context_menu_open { return Failure("Context menu outside dismissal") }
+    app.context_menu_open = true
+    if !DrawContext(frame, app) { return false }
+    Click(frame, 40.0, 210.0)
+    if !DrawContext(frame, app) || app.context_menu_open || !app.search_visible || !app.search_focused {
+        return Failure("Context menu Find command")
+    }
+    return true
+}
 
 #scope_export
 #program_export
@@ -270,5 +481,9 @@ main :: () -> s32 {
     if !CheckStateAndProfile() { print("Terminal application state/profile failed\n"); return 2 }
     if !CheckSelectionAndClipboard() { print("Terminal application selection/clipboard failed\n"); return 3 }
     if !CheckSessions() { print("Terminal application session ownership failed\n"); return 4 }
+    if !CheckCommandsAndSearch() { print("Terminal application command/search policy failed\n"); return 5 }
+    if !CheckSearchDialog() { print("Terminal application search dialog failed\n"); return 6 }
+    if !CheckPromptStorage() { print("Terminal application prompt storage failed\n"); return 7 }
+    if !CheckContextMenu() { print("Terminal application context menu failed\n"); return 8 }
     return 0
 }

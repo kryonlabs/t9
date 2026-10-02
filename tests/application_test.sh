@@ -29,4 +29,4 @@ for form in source saved; do
         "$work/$form-cpp"/*.cpp -o "$work/$form-cpp/run"
     (cd "$work/$form-cpp" && T9_TEST_SHELL="$work/shell" timeout --kill-after=2s 15s ./run)
 done
-echo 'Terminal application source and saved IR passed C/C++ state, profile, clipboard and real tab ownership checks'
+echo 'Terminal application source and saved IR passed C/C++ state, profile, clipboard, tab ownership, commands, search/dialog and context-menu checks'

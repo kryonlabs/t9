@@ -9,8 +9,9 @@ Current status: maintained Ziran sources include the pane modules,
 clipboard storage/protocol handling, both platform process transports, and
 the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
-tab lifecycle, selection/clipboard routing, palette and profile changes.
-There are eight legacy `.kry`
+tab lifecycle, selection/clipboard routing, palette and profile changes,
+commands, search dialogs and the context menu.
+There are five legacy `.kry`
 inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -67,7 +68,7 @@ The remaining legacy application must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`ef4e7058`) and compiler (`86b3148`) master commits. These current
+Kryon (`f7d0e1c0`) and compiler (`86b3148`) master commits. These current
 commits are local; their publication remains necessary for fresh locked builds.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -227,7 +228,29 @@ with actual native 8c/8l execution. Fixtures use controlled shells and keep
 files inside their disposable generated-output folders. These checks do not
 yet establish the full graphical application or its Rill host.
 
-The next source boundary is application input, commands and the graphical
+## Commands, search and context menu
+
+`app_commands.zi` owns command dispatch and physical-key shortcut policy,
+including tab navigation, font bounds, profile prompts and cursor choices.
+`app_search.zi` uses the canonical engine search controller and current Kryon
+sessions and text fields. Search retains wraparound and direction, Unicode
+editing, clipboard paste, capacity limits and focus. `app_dialog.zi` owns only
+the prompt's bounded storage and composition; Kryon owns text editing. The
+dialog presents labeled Cancel/Find actions, and its close icon dismisses it.
+
+`app_context_menu.zi` composes current Kryon context-menu widgets and routes
+their activations through the same commands and clipboard controllers. Last-tab
+close, copy without a selection and unavailable primary paste remain disabled.
+Menus retain outside-click and Escape dismissal and consume their typed input
+so an overlay cannot leave text queued for the terminal.
+
+`make application-test application-plan9-test` covers source and saved-IR
+C/C++ and native Plan 9 8c/8l execution, including actual retained-tree clicks
+on dialog and menu actions, disabled rows and outside dismissal. The three
+corresponding `.kry` implementations are removed. These checks do not yet
+establish the graphical application, its application input boundary, or Rill.
+
+The next source boundary is application input, the menu bar and the graphical
 view. Migrate their consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
@@ -273,6 +296,10 @@ those whole-application gates pass.
 - `src/app/app_palette.zi`
 - `src/app/app_profile.zi`
 - `src/app/app_chrome.zi`
+- `src/app/app_commands.zi`
+- `src/app/app_search.zi`
+- `src/app/app_dialog.zi`
+- `src/app/app_context_menu.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.
