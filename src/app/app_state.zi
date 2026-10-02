@@ -7,6 +7,7 @@ Sessions :: #import "app_session";
 Selection :: #import "terminal_pane_selection";
 Mouse :: #import "terminal_pane_mouse";
 Keys :: #import "terminal_pane_keys";
+Menus :: #import "kryon/menu_props";
 
 #scope_file
 libc :: #system_library "c";
@@ -29,7 +30,7 @@ State :: struct {
     cell_w: s32
     line_h: s32
     scale: float32
-    top_menu_index: s32
+    menu: Menus.MenuState
     tab_scroll: s32
     quit_requested: bool
     window_focused: bool
@@ -80,7 +81,7 @@ Init :: (app: *State) {
     FillHost(cast(*void)app, 0, cast(usize)size_of(State))
     Config.Defaults(*app.config); Launch.Defaults(*app.launch); Colors.Defaults(*app.palette)
     for tab: cast(s32)0..cast(s32)7 { Sessions.Init(*app.sessions[tab]) }
-    app.active = -1; app.rename_index = -1; app.top_menu_index = -1
+    app.active = -1; app.rename_index = -1; Menus.MenuStateInit(*app.menu)
     app.mouse_report_col = -1; app.mouse_report_row = -1
     app.mouse_report_x = -1; app.mouse_report_y = -1
     app.mouse_report_button = Mouse.TERMINAL_PANE_MOUSE_RELEASE

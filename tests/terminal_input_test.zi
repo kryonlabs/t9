@@ -2,6 +2,8 @@ State :: #import "app_state";
 Sessions :: #import "app_sessions";
 Session :: #import "app_session";
 Input :: #import "app_input";
+Menu :: #import "app_menu";
+Menus :: #import "kryon/menu_props";
 Engine :: #import "terminal";
 Keys :: #import "terminal_pane_keys";
 Types :: #import "terminal_pane_profile_types";
@@ -281,6 +283,33 @@ CheckCapture :: () -> bool {
     return true
 }
 
+CheckMenuShortcuts :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    if !Open(app) { return Failure("Menu input transport") }
+    terminal := *app.sessions[0].terminal
+    Pause(30)
+    if SendKey(app, 299).wrote != 0 || !app.menu.focused || !NoBytes(terminal) { return Failure("F10 was sent to the terminal") }
+    if SendKey(app, UI.KeyDown).wrote != 0 || !NoBytes(terminal) { return Failure("Menu navigation was sent to the terminal") }
+    Menus.MenuStateInit(*app.menu)
+    app.config.disable_menu_shortcut = 1
+    if SendKey(app, 299).wrote <= 0 || app.menu.focused || !Observe(terminal, "\x1b[21~") { return Failure("Disabled F10 terminal input") }
+    keys: [1]s32 = .{#char "F"}; typed: [1]u32 = .{#char "f"}
+    frame := Device(); frame.keyboard.keys = keys[:]; frame.keyboard.codepoints = typed[:]; frame.keyboard.mods = Keys.TERMINAL_PANE_MOD_ALT
+    if Input.Handle(app, frame, false).wrote != 0 || app.menu.open_index != 0 || !NoBytes(terminal) {
+        return Failure("Menu mnemonic leaked physical or typed text")
+    }
+    Menus.MenuStateInit(*app.menu)
+    app.config.disable_menu_mnemonics = 1
+    if Input.Handle(app, frame, false).wrote <= 0 || !Observe(terminal, "\x1bf") { return Failure("Disabled mnemonic terminal input") }
+    if SendKey(app, 290).wrote != 0 || !app.about_visible || !NoBytes(terminal) { return Failure("F1 Help was sent to the terminal") }
+    app.about_visible = false; app.config.disable_help_shortcut = 1
+    if SendKey(app, 290).wrote <= 0 || !Observe(terminal, "\x1bOP") { return Failure("Disabled F1 terminal input") }
+    app.launch.show_menubar = false; app.config.disable_menu_shortcut = 0
+    return SendKey(app, 299).wrote > 0 && !app.menu.focused && Observe(terminal, "\x1b[21~")
+}
+
 #scope_export
 #program_export
 main :: () -> s32 {
@@ -288,5 +317,6 @@ main :: () -> s32 {
     if !CheckPointerProtocols() { return 2 }
     if !CheckSelectionAndScroll() { return 3 }
     if !CheckCapture() { return 4 }
+    if !CheckMenuShortcuts() { return 5 }
     return 0
 }

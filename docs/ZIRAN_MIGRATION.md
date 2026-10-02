@@ -10,8 +10,8 @@ clipboard storage/protocol handling, both platform process transports, and
 the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
 tab lifecycle, selection/clipboard routing, palette and profile changes,
-commands, search dialogs, the context menu and application input routing.
-There are four legacy `.kry`
+commands, search dialogs, the context menu, application input routing and the
+menu bar. There are three legacy `.kry`
 inputs and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
@@ -68,8 +68,8 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`f7d0e1c0`) and compiler (`86b3148`) master commits. These current
-commits are local; their publication remains necessary for fresh locked builds.
+Kryon (`aa7b7ec7`) and compiler (`86b3148`) master commits. The Kryon dependency
+is published; the complete fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
 locked application builds remain part of the unfinished migration gate.
@@ -270,8 +270,33 @@ decisions. Complete hosts must also distinguish fresh and repeated device keys;
 the protocol fixture verifies that distinction at the explicit frame boundary.
 These module checks do not certify the remaining graphical host or live OS input.
 
-The next source boundary is the menu bar and the graphical
-view. Migrate their consumers to these current modules, then migrate app
+## Application menu bar
+
+`app_menu.zi` composes Kryon's current session-based `Menu`. The six original
+groups retain their commands, accelerators, separators, profile settings and
+Cursor Style submenu. A single retained `MenuState` owns navigation; neither
+the application nor Kryon retains pointers to the frame's item arrays.
+Tall menus scroll so every setting remains accessible. Menu rendering,
+pointer capture, nested navigation and disabled-item policy belong to Kryon;
+Terminal routes activations through its existing command controller.
+
+F10 focuses the menu without sending terminal bytes, Alt access keys open
+their group, and F1 transfers focus to About. Their configuration switches
+restore those keys to terminal input. Repeated F10 events are consumed without
+toggling focus. Hosts pass the key's fresh/repeated status when composing
+the menu; the remaining whole-application host gates must verify OS events.
+
+`make application-test input-test` checks source/saved-IR C and C++ behavior,
+including retained-tree clicks, cursor choices, tab lifecycle, Find, long-menu
+scrolling and actual terminal bytes. `make application-plan9-test
+input-plan9-test` checks the same fixtures with native Plan 9 8c/8l execution.
+Kryon's generic menu also passes C/C++/Go and portable source/saved-IR checks.
+The legacy menu implementation is removed; its old header remains migration
+input for the graphical view. These gates do not establish complete graphical
+application or Rill builds.
+
+The next source boundary is the graphical view.
+Migrate its consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
 release gates. Independent module checks remain separate evidence until
@@ -321,6 +346,7 @@ those whole-application gates pass.
 - `src/app/app_dialog.zi`
 - `src/app/app_context_menu.zi`
 - `src/app/app_input.zi`
+- `src/app/app_menu.zi`
 
 `tests/ziran_migration_test.sh` rejects the obsolete rewrite document and any
 future module restored alongside its `.zi` replacement.

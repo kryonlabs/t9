@@ -26,6 +26,8 @@ Input :: #import "kryon/tree_input";
 using Geometry :: #import "kryon/geometry";
 Fields :: #import "kryon/text_input_props";
 Context :: #import "app_context_menu";
+Menu :: #import "app_menu";
+Widgets :: #import "kryon/Widgets";
 Tree :: #import "kryon/tree";
 #if #defined(PLAN9) {
     File :: #import "std/file_plan9";
@@ -109,7 +111,7 @@ CheckStateAndProfile :: () -> bool {
     if app == null { return false }
     defer State.Dispose(app)
     if app.active != -1 || app.rename_index != -1 || app.session_count != 0 ||
-        app.top_menu_index != -1 || app.mouse_report_col != -1 || app.mouse_report_row != -1 ||
+        app.menu.open_index != -1 || app.menu.focused || app.mouse_report_col != -1 || app.mouse_report_row != -1 ||
         app.mouse_report_x != -1 || app.mouse_report_y != -1 || app.mouse_report_button != 3 ||
         app.selection_click_row != -1 || app.selection_click_col != -1 ||
         !app.window_focused || app.scale != 1.0 || Sessions.Active(app) != null { return Failure("Initial application state") }
@@ -474,6 +476,91 @@ CheckContextMenu :: () -> bool {
     return true
 }
 
+DrawMenu :: (frame: UISessions.Session, app: *State.State, fresh: bool = true) -> bool {
+    PaintHost.Reset()
+    if cast(s32)Frame.BeginFrame(frame, cast(u64)1, Rectangle.{0.0, 0.0, 800.0, 600.0}) != 0 { return false }
+    Menu.Draw(frame, app, Rectangle.{0.0, 0.0, 800.0, 34.0}, false, fresh)
+    return cast(s32)Frame.EndFrame(frame) == 0 && !PaintHost.failed
+}
+MenuRow :: (app: *State.State, depth: s32, index: s32) -> u64 {
+    return Widgets.MenuRowKey(Widgets.MenuPanelKey(cast(u64)1200, *app.menu, depth), index)
+}
+CheckMenuBar :: () -> bool {
+    app := Application()
+    if app == null { return false }
+    defer State.Dispose(app)
+    app.session_count = 1; app.active = 0
+    frame := UISessions.SessionOpen()
+    if !UISessions.SessionValid(frame) { return false }
+    defer Frame.CloseSession(frame)
+    if !DrawMenu(frame, app) || PaintHost.texts != 6 || app.menu.open_index != -1 { return Failure("Six menu groups") }
+    font := app.config.font_size
+    if !ClickKey(frame, Widgets.MenuGroupKey(cast(u64)1200, 2)) || !DrawMenu(frame, app) || app.menu.open_index != 2 {
+        return Failure("Menu bar pointer opens View")
+    }
+    Input.TypedCodepointSend(frame, #char "x")
+    if !ClickKey(frame, MenuRow(app, 0, 0)) || !DrawMenu(frame, app) ||
+        app.config.font_size != font + 1 || app.menu.open_index != -1 || Input.TypedCodepointTake(frame) != 0 {
+        return Failure("Menu bar zoom command and text ownership")
+    }
+    if !Menu.HandleShortcut(app, 299, 0) || !app.menu.focused || !DrawMenu(frame, app) { return Failure("F10 menu focus") }
+    Input.KeyboardSend(frame, 299)
+    if !DrawMenu(frame, app, false) || !app.menu.focused { return Failure("Repeated F10 retains menu focus") }
+    Input.KeyboardSend(frame, Input.KeyDown)
+    if !DrawMenu(frame, app) || app.menu.open_index != 2 { return Failure("Focused menu opens with Down") }
+    Input.KeyboardSend(frame, Input.KeyRight)
+    if !DrawMenu(frame, app) || app.menu.open_index != 3 { return Failure("Menu group keyboard navigation") }
+    Input.KeyboardSend(frame, Input.KeyEnd)
+    if !DrawMenu(frame, app) || app.menu.selected[0] != 28 || app.menu.scroll[0] <= 0 { return Failure("Long Terminal menu remains reachable") }
+    Input.KeyboardSend(frame, Input.KeyEnter)
+    if !DrawMenu(frame, app) || app.profile_prompt != Types.TERMINAL_PANE_PROFILE_PROMPT_BACKGROUND_IMAGE || app.menu.focused {
+        return Failure("Last Terminal menu profile command")
+    }
+    app.profile_prompt = 0; app.profile_focused = false
+    if !Menu.HandleShortcut(app, #char "T", Keys.TERMINAL_PANE_MOD_ALT) { return Failure("Terminal menu mnemonic") }
+    app.menu.selected[0] = 13; app.menu.reveal = true
+    Input.KeyboardSend(frame, Input.KeyRight)
+    if !DrawMenu(frame, app) || app.menu.depth != 1 { return Failure("Cursor Style submenu") }
+    Input.KeyboardSend(frame, Input.KeyDown); if !DrawMenu(frame, app) { return false }
+    Input.KeyboardSend(frame, Input.KeyDown); if !DrawMenu(frame, app) { return false }
+    Input.KeyboardSend(frame, Input.KeyEnter)
+    if !DrawMenu(frame, app) || app.config.cursor_style != Engine.TERMINAL_CURSOR_BAR || app.menu.open_index != -1 {
+        return Failure("Cursor Style radio command")
+    }
+    if !Menu.HandleShortcut(app, #char "F", Keys.TERMINAL_PANE_MOD_ALT) || !DrawMenu(frame, app) ||
+        !ClickKey(frame, MenuRow(app, 0, 0)) || !DrawMenu(frame, app) || app.session_count != 2 || app.active != 1 {
+        return Failure("Menu New Tab lifecycle command")
+    }
+    if !ClickKey(frame, Widgets.MenuGroupKey(cast(u64)1200, 4)) || !DrawMenu(frame, app) ||
+        !ClickKey(frame, MenuRow(app, 0, 4)) || !DrawMenu(frame, app) || app.active != 0 {
+        return Failure("Menu Previous Tab command")
+    }
+    if !ClickKey(frame, Widgets.MenuGroupKey(cast(u64)1200, 1)) || !DrawMenu(frame, app) ||
+        !ClickKey(frame, MenuRow(app, 0, 4)) || !DrawMenu(frame, app) || !app.search_visible || !app.search_focused {
+        return Failure("Menu Find command")
+    }
+    app.search_visible = false; app.search_focused = false
+    if !ClickKey(frame, Widgets.MenuGroupKey(cast(u64)1200, 5)) || !DrawMenu(frame, app) ||
+        !ClickKey(frame, MenuRow(app, 0, 0)) || !DrawMenu(frame, app) || !app.about_visible { return Failure("Menu About command") }
+    app.about_visible = false
+    if !ClickKey(frame, Widgets.MenuGroupKey(cast(u64)1200, 0)) || !DrawMenu(frame, app) { return false }
+    Click(frame, 790.0, 590.0)
+    if !DrawMenu(frame, app) || app.menu.open_index != -1 || app.menu.focused { return Failure("Menu outside dismissal") }
+    if !Menu.HandleShortcut(app, #char "F", Keys.TERMINAL_PANE_MOD_ALT) || !DrawMenu(frame, app) { return false }
+    Input.KeyboardSend(frame, 290)
+    if !DrawMenu(frame, app) || !app.about_visible || app.menu.open_index != -1 || app.menu.focused {
+        return Failure("Help transfers input ownership from the menu")
+    }
+    app.about_visible = false
+    app.config.disable_menu_shortcut = 1; app.config.disable_menu_mnemonics = 1; app.config.disable_help_shortcut = 1
+    if Menu.HandleShortcut(app, 299, 0) || Menu.HandleShortcut(app, #char "F", Keys.TERMINAL_PANE_MOD_ALT) ||
+        Menu.HandleShortcut(app, 290, 0) { return Failure("Disabled menu/help shortcuts") }
+    app.launch.show_menubar = false
+    if !DrawMenu(frame, app) || PaintHost.texts != 0 || app.menu.open_index != -1 { return Failure("Hidden menu bar") }
+    app.config.disable_help_shortcut = 0
+    return Menu.HandleShortcut(app, 290, 0) && app.about_visible
+}
+
 #scope_export
 #program_export
 main :: () -> s32 {
@@ -485,5 +572,6 @@ main :: () -> s32 {
     if !CheckSearchDialog() { print("Terminal application search dialog failed\n"); return 6 }
     if !CheckPromptStorage() { print("Terminal application prompt storage failed\n"); return 7 }
     if !CheckContextMenu() { print("Terminal application context menu failed\n"); return 8 }
+    if !CheckMenuBar() { print("Terminal application menu bar failed\n"); return 9 }
     return 0
 }

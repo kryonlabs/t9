@@ -5,6 +5,7 @@ Session :: #import "app_session";
 Selection :: #import "app_selection";
 Clipboard :: #import "app_clipboard";
 Commands :: #import "app_commands";
+Menu :: #import "app_menu";
 Engine :: #import "terminal";
 Keys :: #import "terminal_pane_keys";
 Mouse :: #import "terminal_pane_mouse";
@@ -38,7 +39,7 @@ Result :: struct {
 }
 ModalActive :: (app: *State.State) -> bool {
     return app != null && (app.about_visible || app.rename_index >= 0 ||
-        app.search_visible || app.profile_prompt != 0 || app.context_menu_open || app.top_menu_index >= 0)
+        app.search_visible || app.profile_prompt != 0 || app.context_menu_open || app.menu.open_index >= 0 || app.menu.focused)
 }
 // Capture only when the application owns keyboard input; dialogs and menus
 // consume the session's events themselves while they are open.
@@ -218,6 +219,7 @@ Write :: (userdata: *void, value: *u8, length: s32) -> s32 {
 }
 FilterKey :: (userdata: *void, key: s32, mods: s32) -> s32 {
     sink := cast(*Sink)userdata
+    if Menu.HandleShortcut(sink.app, key, mods, Contains(sink.keys, key)) { return 1 }
     if Commands.HandleShortcut(sink.app, key, mods, sink.persist, Contains(sink.keys, key)) { return 1 }
     session := Sessions.Active(sink.app)
     if session != null && (mods & Keys.TERMINAL_PANE_MOD_SHIFT) != 0 {
