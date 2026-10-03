@@ -18,7 +18,7 @@ The parser benchmark also runs the same implementation from Ziran; the obsolete
 C fixtures and their mock old Kryon host have been retired.
 Linux standalone builds use current Kryon frames and Raylib/SDL2; the native
 entrypoint uses current Libdraw. Rill's actual host integration, native
-whole-application graphics and retained font fallback behavior remain
+whole-application graphics and complete graphical font fallback checks remain
 unfinished. The migration is complete only when these behavior gates and all
 Linux, Rill, native Plan 9, installation and release routes are verified.
 
@@ -69,7 +69,7 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`88b59a18`) and compiler (`83e25588`) master commits. The complete
+Kryon (`6c1b1dd2`) and compiler (`793cdb47`) master commits. The complete
 fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -368,6 +368,18 @@ These checks do not establish native graphical input/rendering, broad glyph
 fallback, Rill's actual embedded integration or fresh locked release builds.
 Finish those gates before claiming the full migration complete. The `.zi` application is the
 single maintained implementation while this remaining work proceeds.
+
+Linux font fallback now uses Kryon's installed outline-font matching and
+retained TrueType/OpenType collection sources. Missing CJK and supplementary
+characters use the same glyph sources and advances for measurement and
+painting; queued text is flushed before replacing an atlas. Kryon's
+`make raylib-typeface-test` passes real font decoding, collection bounds and
+checksums, mixed-script routing and disposal in C/C++ from source and saved IR.
+Only texture allocation and graphics submission are replaced in that check.
+The Linux Terminal executable also builds against these canonical sources and
+passes its CLI routes. Actual private-display captures and native Plan 9 font
+behavior remain unverified: the sandbox cannot create Xvfb sockets, and the
+full system disk prevents automatic approval review for the isolated tests.
 
 `make standalone-plan9-graphics-test` now prepares the complete executable
 from source and saved IR and compares captures from an empty terminal and a
