@@ -3,6 +3,7 @@ Render :: #import "terminal_pane_render";
 Colors :: #import "terminal_pane_profile_colors";
 Engine :: #import "terminal";
 Text :: #import "std/byte_text_linux";
+using Drawing :: #import "kryon/drawing_props";
 using Geometry :: #import "kryon/geometry";
 Sessions :: #import "kryon/session";
 Tree :: #import "kryon/tree";
@@ -79,11 +80,71 @@ TestGrid :: (session: Sessions.Session) -> bool {
     return ok
 }
 
+Captured :: struct { bytes: [16]u8; count: s32; }
+Capture :: (userdata: *void, text: *u8, length: s32) -> s32 {
+    captured := cast(*Captured)userdata
+    for at: 0..length - 1 { if captured.count < 16 { captured.bytes[captured.count] = text[at]; captured.count += 1 } }
+    return length
+}
+Same :: (color: Color, r: s32, g: s32, b: s32) -> bool {
+    return cast(s32)color.r == r && cast(s32)color.g == g && cast(s32)color.b == b
+}
+
+// Cell colors, history rows and a host-owned input writer for panes that
+// mirror a process the host does not run itself.
+TestMirror :: (session: Sessions.Session) -> bool {
+    bounds := Rectangle.{0.0, 0.0, 68.0, 68.0}
+    terminal: Engine.Terminal
+    Engine.terminal_init(*terminal)
+    pane: Pane.TerminalPane
+    pane.key = cast(u64)3; pane.bounds = bounds; pane.font_size = 14; pane.padding = 2
+    pane.terminal = *terminal
+    Begin(session, bounds)
+    unused Pane.DrawTerminalPane(session, pane)
+    if !Finish(session) { return false }
+    Feed(*terminal, "\x1b[31;44mR\x1b[0m")
+    Begin(session, bounds)
+    unused Pane.DrawTerminalPane(session, pane)
+    if !Finish(session) || Host.fills != 2 || !Same(Host.last_fill_color, 36, 114, 200) ||
+        !Same(Host.last_text_color, 205, 49, 49) {
+        print("Terminal cell colors fills % fill %,%,% text %,%,%\n", Host.fills,
+            Host.last_fill_color.r, Host.last_fill_color.g, Host.last_fill_color.b,
+            Host.last_text_color.r, Host.last_text_color.g, Host.last_text_color.b)
+        return false
+    }
+    Feed(*terminal, "\r\n2\r\n3\r\n4\r\n5\r\n6")
+    pane.scroll_offset = 2
+    Begin(session, bounds)
+    unused Pane.DrawTerminalPane(session, pane)
+    if Paint.PendingPaintAt(session, 3).value != "R" || !Finish(session) {
+        print("Terminal history row [%]\n", Paint.PendingPaintAt(session, 3).value)
+        return false
+    }
+    pane.scroll_offset = 0
+    Begin(session, bounds)
+    unused Pane.DrawTerminalPane(session, pane)
+    if Paint.PendingPaintAt(session, 2).value != "3" || !Finish(session) { return false }
+    captured: Captured
+    pane.focused = true; pane.handle_input = true
+    pane.write_input = Capture; pane.input_userdata = cast(*void)(*captured)
+    Input.TreePointerUpdate(session, Input.PointerFrame.{})
+    Input.TypedCodepointSend(session, 937)
+    Begin(session, bounds)
+    result := Pane.DrawTerminalPane(session, pane)
+    if result.wrote_input != 2 || captured.count != 2 || TextView(captured.bytes[0:2]) != "Ω" || !Finish(session) {
+        print("Terminal host input wrote % captured %\n", result.wrote_input, captured.count)
+        return false
+    }
+    Engine.terminal_close(*terminal)
+    return true
+}
+
 #scope_export
 #program_export
 main :: () -> s32 {
     session := Sessions.SessionOpen()
     if !TestGrid(session) { return 1 }
+    if !TestMirror(session) { return 17 }
     bounds := Rectangle.{0.0, 0.0, 68.0, 68.0}
     pane: Pane.TerminalPane
     pane.key = cast(u64)2; pane.bounds = bounds

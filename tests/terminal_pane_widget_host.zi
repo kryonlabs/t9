@@ -7,6 +7,8 @@ outlines: s32;
 failed: bool;
 last_text: [64]u8;
 last_length: s32;
+last_text_color: Color;
+last_fill_color: Color;
 
 Reset :: () { texts = 0; fills = 0; outlines = 0; failed = false; last_length = 0 }
 
@@ -22,8 +24,8 @@ MeasureGlyphLineHeight :: (font: s32, typeface: string) -> s32 {
 }
 #program_export
 RasterText :: (value: string, x: s32, y: s32, font: s32, color: Color) {
-    unused x; unused y; unused font; unused color
-    texts += 1
+    unused x; unused y; unused font
+    texts += 1; last_text_color = color
     last_length = cast(s32)value.count
     if last_length > 64 { last_length = 64 }
     for at: 0..last_length - 1 { last_text[at] = value[at] }
@@ -39,8 +41,8 @@ RasterLine :: (bounds: Rectangle, color: Color) { unused bounds; unused color }
 #program_export
 RasterRoundedRectangle :: (bounds: Rectangle, radius: float32,
     segments: s32, color: Color) {
-    unused bounds; unused radius; unused segments; unused color
-    fills += 1
+    unused bounds; unused radius; unused segments
+    fills += 1; last_fill_color = color
 }
 #program_export
 RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,

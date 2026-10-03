@@ -40,6 +40,12 @@ TerminalPane :: struct {
     show_cursor: bool
     blink_on: bool
     colors: TerminalPaneColors
+    // Rows scrolled back into the Terminal's history; 0 shows the live screen.
+    scroll_offset: s32
+    // A host that relays keys to a process it does not own (a remote
+    // session) receives the encoded bytes here instead of the Terminal's PTY.
+    write_input: Keys.TerminalPaneInputWriteFn
+    input_userdata: *void
 }
 
 TerminalPaneResult :: struct {
@@ -138,6 +144,13 @@ WriteInput :: (userdata: *void, text: *u8, length: s32) -> s32 {
     if count > 0 { sink.wrote += count }
     return count
 }
+HostSink :: struct { write: Keys.TerminalPaneInputWriteFn; userdata: *void; wrote: s32; }
+WriteHost :: (userdata: *void, text: *u8, length: s32) -> s32 {
+    sink := cast(*HostSink)userdata
+    count := sink.write(sink.userdata, text, length)
+    if count > 0 { sink.wrote += count }
+    return count
+}
 
 #scope_export
 TerminalPaneHandleInput :: (terminal: *Engine.Terminal, frame: Keys.KeyboardFrame) -> s32 {
@@ -156,6 +169,62 @@ TerminalPaneHandleInput :: (terminal: *Engine.Terminal, frame: Keys.KeyboardFram
     return sink.wrote
 }
 
+// Encodes a keyboard frame with the Terminal's current key modes and hands
+// the bytes to the host's writer.
+TerminalPaneHandleInputTo :: (terminal: *Engine.Terminal, frame: Keys.KeyboardFrame,
+    write_input: Keys.TerminalPaneInputWriteFn, userdata: *void) -> s32 {
+    if terminal == null || write_input == null { return 0 }
+    sink: HostSink
+    sink.write = write_input; sink.userdata = userdata
+    state: Keys.TerminalPaneInputState
+    input: Keys.TerminalPaneInput
+    input.mode.application_cursor_keys = terminal.application_cursor_keys
+    input.mode.application_keypad = terminal.application_keypad
+    input.mode.modify_other_keys = terminal.modify_other_keys
+    input.write_text = WriteHost
+    input.userdata = cast(*void)(*sink)
+    input.state = *state
+    Keys.PumpTerminalPaneKeyboardInput(input, frame)
+    return sink.wrote
+}
+
+#scope_file
+CellColor :: (terminal: *Engine.Terminal, value: s32, fallback: Color) -> Color {
+    return ResolveTerminalPaneColorWithOverrides(null, *terminal.palette_overrides[0], value, fallback)
+}
+Mix :: (from: Color, to: Color, amount: float32) -> Color {
+    return Color.{
+        cast(u8)(cast(float32)from.r + (cast(float32)to.r - cast(float32)from.r) * amount),
+        cast(u8)(cast(float32)from.g + (cast(float32)to.g - cast(float32)from.g) * amount),
+        cast(u8)(cast(float32)from.b + (cast(float32)to.b - cast(float32)from.b) * amount),
+        from.a}
+}
+DrawCell :: (session: Sessions.Session, node: s32, terminal: *Engine.Terminal,
+    cell: *Engine.Cell, colors: TerminalPaneColors, font: s32,
+    measured: TerminalPaneMetrics, col: s32, row: s32, blink_on: bool) {
+    foreground := CellColor(terminal, cell.fg, colors.text)
+    background := CellColor(terminal, cell.bg, colors.background)
+    if (cell.style & Engine.STYLE_INVERSE) != 0 {
+        swap := foreground; foreground = background; background = swap
+    }
+    if (cell.style & Engine.STYLE_FAINT) != 0 { foreground = Mix(foreground, background, 0.45) }
+    bounds := Rectangle.{measured.content.x + cast(float32)(col * measured.cell_width),
+        measured.content.y + cast(float32)(row * measured.line_height),
+        cast(float32)measured.cell_width, cast(float32)measured.line_height}
+    if cell.bg != Engine.COLOR_DEFAULT || (cell.style & Engine.STYLE_INVERSE) != 0 {
+        fill := Geometry.RectangleIntersection(bounds, measured.content)
+        if fill.width > 0.0 && fill.height > 0.0 { Paint.PaintRoundedFill(session, node, fill, 0.0, 0, background) }
+    }
+    if (cell.style & Engine.STYLE_CONCEAL) != 0 || ((cell.style & Engine.STYLE_BLINK) != 0 && !blink_on) { return }
+    Render.DrawTerminalPaneGlyphCell(session, node, cell.codepoint, cell.combining,
+        cast(s32)bounds.x, cast(s32)bounds.y, font, foreground, measured.content)
+    if (cell.style & Engine.STYLE_UNDERLINE) != 0 {
+        line := Geometry.RectangleIntersection(Rectangle.{bounds.x, bounds.y + bounds.height - 2.0, bounds.width, 1.0}, measured.content)
+        if line.width > 0.0 && line.height > 0.0 { Paint.PaintRoundedFill(session, node, line, 0.0, 0, CellColor(terminal, cell.underline, foreground)) }
+    }
+}
+
+#scope_export
 // Embedded panes and the application use the same Terminal state and parser.
 // Input and paint belong to an explicit Kryon frame rather than global polling.
 DrawTerminalPane :: (session: Sessions.Session, pane: TerminalPane) -> TerminalPaneResult {
@@ -185,26 +254,30 @@ DrawTerminalPane :: (session: Sessions.Session, pane: TerminalPane) -> TerminalP
         keys: [1]s32
         codepoints: [32]u32
         frame := Keyboard.CaptureKeyboardFrame(session, keys[:], codepoints[:])
-        result.wrote_input = TerminalPaneHandleInput(terminal, frame)
+        if pane.write_input != null {
+            result.wrote_input = TerminalPaneHandleInputTo(terminal, frame, pane.write_input, pane.input_userdata)
+        } else { result.wrote_input = TerminalPaneHandleInput(terminal, frame) }
     }
     policy := Metrics.TerminalPaneMetricsPolicyFor(pane.scale)
     font := Metrics.TerminalPaneFontSizeFor(pane.font_size, policy)
+    // Cells keep their own colors and styles; default cells use the theme.
+    back := pane.scroll_offset; if back < 0 { back = 0 }
+    first := Engine.terminal_visible_line_count(terminal) - terminal.rows - back
+    if first < 0 { first = 0 }
     row: s32
     while row < terminal.rows && row < measured.rows {
         col: s32
         while col < terminal.cols && col < measured.cols {
-            cell := Engine.terminal_cell(terminal, col, row)
+            cell := Engine.terminal_visible_cell(terminal, col, first + row)
             if cell != null && (cell.style & Engine.STYLE_WIDE_CONT) == 0 {
-                Render.DrawTerminalPaneGlyphCell(session, result.node, cell.codepoint, cell.combining,
-                    cast(s32)measured.content.x + col * measured.cell_width,
-                    cast(s32)measured.content.y + row * measured.line_height,
-                    font, colors.text, measured.content)
+                DrawCell(session, result.node, terminal, cell, colors, font, measured,
+                    col, row, pane.blink_on)
             }
             col += 1
         }
         row += 1
     }
-    if result.focused && pane.show_cursor && terminal.cursor_visible != 0 &&
+    if back == 0 && result.focused && pane.show_cursor && terminal.cursor_visible != 0 &&
         (terminal.cursor_blink == 0 || pane.blink_on) &&
         terminal.cursor_col >= 0 && terminal.cursor_row >= 0 &&
         terminal.cursor_col < measured.cols && terminal.cursor_row < measured.rows {
