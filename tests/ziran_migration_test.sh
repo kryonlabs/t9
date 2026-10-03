@@ -7,6 +7,10 @@ if [ -e docs/KRY_REWRITE_PLAN.md ]; then
 fi
 
 status=0
+if rg --files src -g '*.kry' -g '*.c' -g '*.cpp' -g '*.h' -g '*.hpp' | rg -q .; then
+    echo 'Terminal product source and native declarations must come from Ziran' >&2
+    status=1
+fi
 for source in $(rg --files src -g '*.zi' | LC_ALL=C sort); do
     for extension in kry c; do
         legacy="${source%.zi}.$extension"
@@ -32,4 +36,14 @@ if rg --files src/engine -g '*.kry' -g '*.c' | rg -q .; then
     echo 'Terminal engine implementations must use the loaded Ziran modules' >&2
     status=1
 fi
+if [ -e benchmarks/parser_replay.c ]; then
+    echo 'Parser replay must use the maintained Ziran Terminal implementation' >&2
+    status=1
+fi
+for legacy in tests/terminal_test.c tests/process_test.c tests/terminal_pane_selection_test.c; do
+    if [ -e "$legacy" ]; then
+        echo "Retired old-Kryon fixture must not return: $legacy" >&2
+        status=1
+    fi
+done
 exit "$status"

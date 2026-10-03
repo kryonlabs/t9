@@ -1,4 +1,5 @@
 build/
+/dist/
 /backup/
 /ziran.local.toml
 *.o

@@ -1,46 +1,35 @@
-# ktrem Terminal Benchmarks
+# Terminal benchmarks
 
-Benchmarks run GUI terminals under Xvfb by default so they do not open windows
-on the user's active desktop. The harness prefers the local build at
-`build/<platform>-<arch>/bin/ktrem`; set `KTREM_BENCH_KTREM_BIN=/path` to
-benchmark another binary. Set `KTREM_BENCH_USE_REAL_DISPLAY=1` only when an
-interactive desktop run is intentional.
+`make parser-replay` compiles `parser_replay.zi` against the maintained Terminal
+engine and runs all 13 historical parser, search and resize workloads. It needs
+no display. `make parser-replay-test` checks the original payload row/byte totals
+with reduced source and saved-IR runs in C and C++.
 
-```sh
-benchmarks/run-terminal-benchmarks.sh
-```
-
-Pass a second argument to test a different active-output FPS cap for ktrem
-while keeping idle FPS unchanged. Pass a third argument to test a different
-bounded PTY drain burst in milliseconds. Pass a fourth argument for repeated
-runs. Pass a fifth argument to restrict the workload list:
+GUI benchmarks always create their own Xvfb display, remove inherited desktop
+and session variables, and use a controlled child shell. Window lookup requires
+the launched process's PID. The default binary is the canonical local
+`build/linux-<arch>/bin/t9`; `T9_BENCH_BIN` selects another explicit binary.
+Results are disposable under `build/benchmarks/results/` by default.
 
 ```sh
-benchmarks/run-terminal-benchmarks.sh /tmp/ktrem-bench 500
-benchmarks/run-terminal-benchmarks.sh /tmp/ktrem-bench 1000 8 3
-benchmarks/run-terminal-benchmarks.sh /tmp/ktrem-bench 1000 12 3 dense_sgr
-benchmarks/run-terminal-benchmarks.sh /tmp/ktrem-bench 1000 8 3 "paste_burst hyperlink_grid search_corpus"
+make all
+KTREM_BENCH_TERMINALS=t9 benchmarks/run-terminal-benchmarks.sh
+benchmarks/run-terminal-benchmarks.sh /tmp/t9-bench 60 0 1 startup
+benchmarks/run-terminal-benchmarks.sh /tmp/t9-bench 60 0 1 live_resize
 ```
 
-The externally driven live-resize workload uses X window control through
-`xdotool`. If the automatic wrapper cannot find the resize target under a
-particular Xvfb setup, run the explicit virtual-display form:
+Arguments select output directory, active FPS, PTY burst milliseconds, number
+of runs and workload list. Existing `KTREM_BENCH_*` tuning variables remain
+accepted for historical scripts. Every failed workload is recorded and causes
+a nonzero exit; timings are observations of that run, not proof of parity.
 
-```sh
-env XDG_RUNTIME_DIR=/tmp/ktrem-runtime KTREM_BENCH_IN_VIRTUAL_DISPLAY=1 \
-  xvfb-run -a -s '-screen 0 1280x800x24' \
-  sh benchmarks/run-terminal-benchmarks.sh /tmp/ktrem-live-resize 1000 8 3 live_resize
-```
+The clipboard workload uses a private Tk clipboard owner and the terminal's
+paste accelerator. The find workload verifies that input returns to the child
+after the dialog closes. Neither harness uses the owner's desktop or shell
+startup files.
 
-The externally driven clipboard workload uses a Tk clipboard owner and
-`xdotool`. By default the harness sends a held `Ctrl+Shift+V`, matching the
-standard terminal paste accelerator and giving ktrem and xfce4-terminal the
-same synthetic shortcut. Override with
-`KTREM_BENCH_PASTE_ACCEL=shift_insert`, `ctrl_shift_v`, or `ctrl_shift_V`
-when debugging shortcut handling.
-
-The harness appends summary records with min/average/max elapsed time per
-terminal and workload.
+The August 2026 results below describe the previous implementation and remain
+historical evidence. They do not measure the current Ziran application.
 
 ## Latest Isolated Result
 

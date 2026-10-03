@@ -1,0 +1,223 @@
+// Replay the historical parser workloads through the maintained Terminal.
+// Only host clipboard I/O is simulated; parsing, history, search and reflow
+// use the same modules as the application.
+#import "terminal";
+ClipboardHost :: #import "terminal_clipboard_host";
+Text :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+Clock :: #import "std/timer_linux";
+
+#scope_file
+libc :: #system_library "c";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+Exit :: (status: s32) #foreign libc "exit";
+Require :: (condition: bool) {
+    if !condition { print("Terminal replay failed\n"); Exit(1) }
+}
+divisor: s32 = 1;
+bytes: s64;
+
+Line :: struct { data: [512]u8; used: s64; }
+Put :: (line: *Line, value: string) -> bool {
+    if line.used + value.count >= line.data.count { return false }
+    for index: cast(s64)0..value.count - 1 { line.data[line.used + index] = value[index] }
+    line.used += value.count
+    line.data[line.used] = 0
+    return true
+}
+Integer :: (line: *Line, value: s32, width: s32, hexadecimal: bool) -> bool {
+    digits: [24]u8
+    if !hexadecimal {
+        value_text := Number.FormatInteger(cast(s64)value, digits[:])
+        for index: cast(s64)value_text.count..cast(s64)width - 1 {
+            if !Put(line, "0") { return false }
+        }
+        return Put(line, value_text)
+    }
+    alphabet := "0123456789abcdef"
+    used: s32 = 24
+    remaining := value
+    while remaining > 0 || used == 24 {
+        used -= 1; digits[used] = alphabet[remaining % 16]; remaining /= 16
+    }
+    for index: 24 - used..width - 1 { if !Put(line, "0") { return false } }
+    return Put(line, TextView(digits[used:24]))
+}
+Format :: (format: string, a: s32 = 0, b: s32 = 0, c: s32 = 0,
+    d: s32 = 0, e: s32 = 0, f: s32 = 0, g: s32 = 0, replacement: string = "") -> Line {
+    values: [7]s32 = .{a, b, c, d, e, f, g}
+    result: Line
+    cursor: s64; argument: s64
+    while cursor < format.count {
+        if format[cursor] != 37 {
+            Require(Put(*result, format[cursor:cursor + 1]))
+            cursor += 1; continue
+        }
+        cursor += 1
+        width: s32
+        while cursor < format.count && format[cursor] >= 48 && format[cursor] <= 57 {
+            width = width * 10 + cast(s32)(format[cursor] - 48); cursor += 1
+        }
+        Require(cursor < format.count)
+        if format[cursor] == 115 { Require(Put(*result, replacement)) }
+        else {
+            Require(argument < values.count && (format[cursor] == 100 || format[cursor] == 120))
+            Require(Integer(*result, values[argument], width, format[cursor] == 120))
+            argument += 1
+        }
+        cursor += 1
+    }
+    return result
+}
+Feed :: (terminal: *Terminal, value: string) {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    terminal_feed(terminal, cast(*void)descriptor.data, cast(s32)value.count)
+    bytes += value.count
+}
+FeedLine :: (terminal: *Terminal, line: Line) { Feed(terminal, TextView(line.data[0:line.used])) }
+Reset :: (terminal: *Terminal) {
+    terminal_close(terminal); terminal_init(terminal); terminal_resize(terminal, 100, 32)
+    bytes = 0
+}
+Count :: (full: s32) -> s32 {
+    count := full / divisor
+    return ifx count > 0 then count else 1
+}
+Emit :: (name: string, started: s64, lines: s32) {
+    elapsed := Clock.MonotonicMilliseconds() - started
+    Require(started >= 0 && elapsed >= 0)
+    print("{\"bench\":\"parser_replay\",\"workload\":\"%\",\"elapsed_ms\":%,\"lines\":%,\"bytes\":%}\n",
+        name, elapsed, lines, bytes)
+}
+Replay :: (terminal: *Terminal, name: string, full: s32) {
+    Reset(terminal)
+    started := Clock.MonotonicMilliseconds(); count := Count(full)
+    for index: 1..count {
+        i := cast(s32)index
+        if name == "ansi_flood" {
+            FeedLine(terminal, Format("\x1b[%dm%06d\x1b[0m \x1b[%dmcolored terminal throughput sample\x1b[0m abcdefghijklmnopqrstuvwxyz 0123456789\n",
+                30 + i % 8, i, 90 + i % 8))
+        } else if name == "unicode_table" {
+            FeedLine(terminal, Format("│ %06d │ Kryon Λambda │ ktrem ✓ │ width 測試 │ box ──┼── │\n", i))
+        } else if name == "dense_sgr" {
+            FeedLine(terminal, Format("\x1b[1;3%dm%05d\x1b[0m \x1b[4;38;5;%dmunder\x1b[0m \x1b[48;5;%dm block \x1b[0m \x1b[3mitalic\x1b[0m \x1b[9mstrike\x1b[0m \x1b[53mover\x1b[55m truecolor \x1b[38;2;%d;%d;%dmrgb\x1b[0m\n",
+                i % 8, i, 16 + i % 216, 232 + i % 24, i % 255, i * 3 % 255, i * 7 % 255))
+        } else if name == "wrap_reflow" {
+            FeedLine(terminal, Format("wrap-%05d abcdefghijklmnopqrstuvwxyz0123456789 / terminal reflow candidate / ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 / kryon ktrem xfce compatibility width sample 測試✓Λ │ ──┼── end\n", i))
+        } else if name == "scrollback_flood" {
+            FeedLine(terminal, Format("scrollback %05d abcdefghijklmnopqrstuvwxyz 0123456789 ktrem Kryon\n", i))
+        } else if name == "paste_burst" {
+            FeedLine(terminal, Format("paste-%05d abcdefghijklmnopqrstuvwxyz0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 symbols │┼─✓Λ測試 repeated-paste-payload-for-terminal-input-path\n", i))
+        } else if name == "hyperlink_grid" {
+            FeedLine(terminal, Format("link-%05d \x1b]8;id=item-%05d;https://ktrem.kryonlabs.com/item/%05d\x1b\\ktrem benchmark link %05d\x1b]8;;\x1b\\ status=%03d path=/tmp/ktrem/%05d\n",
+                i, i, i, i, i % 200, i))
+        } else { Require(false) }
+    }
+    Emit(name, started, count)
+}
+Alternate :: (terminal: *Terminal) {
+    Reset(terminal)
+    started := Clock.MonotonicMilliseconds(); frames := Count(180)
+    Feed(terminal, "\x1b[?1049h")
+    for frame: 1..frames {
+        Feed(terminal, "\x1b[H")
+        for row: 1..28 {
+            FeedLine(terminal, Format("frame %03d row %02d ▁▂▃▄▅▆▇█ kryon terminal redraw path █▇▆▅▄▃▂▁\n",
+                cast(s32)frame, cast(s32)row))
+        }
+    }
+    Feed(terminal, "\x1b[?1049l")
+    Emit("alternate_redraw", started, frames * 28)
+}
+CursorMatrix :: (terminal: *Terminal) {
+    Reset(terminal)
+    started := Clock.MonotonicMilliseconds(); frames := Count(240)
+    Feed(terminal, "\x1b[?1049h\x1b[2J")
+    for frame: 1..frames {
+        for cell: 1..120 {
+            row := 1 + (cell + frame) % 28; col := 1 + (cell * 7 + frame) % 84
+            color := 31 + (cell + frame) % 7
+            FeedLine(terminal, Format("\x1b[%d;%dH\x1b[%dm%02x\x1b[0m",
+                cast(s32)row, cast(s32)col, cast(s32)color, cast(s32)(cell % 255)))
+        }
+    }
+    Feed(terminal, "\x1b[?1049l")
+    Emit("cursor_matrix", started, frames * 120)
+}
+Corpus :: (terminal: *Terminal) -> s32 {
+    lines := Count(18000)
+    for index: 1..lines {
+        i := cast(s32)index
+        marker := "background"
+        if i % 9 == 0 { marker = "needle-critical" }
+        else if i % 9 == 1 { marker = "NeedleMixed" }
+        FeedLine(terminal, Format("search-%05d %s package=core module=terminal result=%05d text=abcdefghijklmnopqrstuvwxyz\n",
+            i, i * 17, 0, 0, 0, 0, 0, marker))
+    }
+    return lines
+}
+Search :: (terminal: *Terminal) {
+    Reset(terminal)
+    started := Clock.MonotonicMilliseconds()
+    lines := Corpus(terminal)
+    Emit("search_corpus", started, lines)
+    Reset(terminal); Corpus(terminal)
+    started = Clock.MonotonicMilliseconds()
+    searches := Count(500)
+    match: SearchMatch
+    for i: 0..searches - 1 {
+        needle := ifx i % 2 == 0 then "needle" else "NeedleMixed"
+        descriptor := cast(*Text.TextDescriptor)(*needle)
+        terminal_find_visible(terminal, descriptor.data, cast(s32)(i % 32), 0,
+            ifx i % 3 == 0 then -1 else 1, 1, *match)
+    }
+    Emit("search_visible", started, searches)
+}
+Resize :: (terminal: *Terminal) {
+    Reset(terminal); terminal_set_scrollback_limit(terminal, 20000)
+    lines := Count(5000); cycles := Count(120)
+    for i: 1..lines {
+        FeedLine(terminal, Format("resize-%05d abcdefghijklmnopqrstuvwxyz0123456789 / reflow benchmark text with mixed width 測試✓Λ │ ──┼── / ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 end\n", cast(s32)i))
+    }
+    started := Clock.MonotonicMilliseconds()
+    widths: [6]s32 = .{64, 120, 80, 132, 72, 100}
+    for i: 0..cycles - 1 { terminal_resize(terminal, widths[i % 6], 32) }
+    Emit("resize_reflow", started, cycles)
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    // Reduced runs verify all workloads without turning tests into benchmarks.
+    setting := "T9_BENCH_DIVISOR"
+    descriptor := cast(*Text.TextDescriptor)(*setting)
+    value := Text.TextFromCString(Environment(descriptor.data))
+    if value != "" {
+        parsed: s32
+        for i: cast(s64)0..value.count - 1 {
+            if value[i] < 48 || value[i] > 57 || parsed > 10000 { return 2 }
+            parsed = parsed * 10 + cast(s32)(value[i] - 48)
+        }
+        if parsed < 1 || parsed > 10000 { return 2 }
+        divisor = parsed
+    }
+    terminal: Terminal
+    terminal_init(*terminal)
+    defer terminal_close(*terminal)
+    Reset(*terminal)
+    started := Clock.MonotonicMilliseconds()
+    Feed(*terminal, "ktrem benchmark startup\n")
+    Emit("startup", started, 1)
+    Replay(*terminal, "ansi_flood", 18000)
+    Replay(*terminal, "unicode_table", 6000)
+    Alternate(*terminal)
+    Replay(*terminal, "dense_sgr", 9000)
+    Replay(*terminal, "wrap_reflow", 7000)
+    Replay(*terminal, "scrollback_flood", 50000)
+    CursorMatrix(*terminal)
+    Replay(*terminal, "paste_burst", 12000)
+    Replay(*terminal, "hyperlink_grid", 7000)
+    Search(*terminal)
+    Resize(*terminal)
+    return 0
+}

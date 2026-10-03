@@ -2,9 +2,9 @@
   "format": 1,
   "packages": [
     {
-      "commit": "5073c3f26c62169ad8db99bd32996c223373c0e6",
+      "commit": "a752b9767b2e44b6c41aad6cfcfb0fe196290cc2",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p0a762877fd0425c7",
+      "id": "p292dc6297cca7af2",
       "name": "kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
@@ -20,11 +20,11 @@
     }
   ],
   "root": {
-    "dependencies": {"kryon": "p0a762877fd0425c7"},
+    "dependencies": {"kryon": "p292dc6297cca7af2"},
     "name": "t9"
   },
   "toolchain": {
-    "commit": "3c8239bd257dee0e1a996d9daf747a7c48937f76",
+    "commit": "83e2558860b46b196175bb8a0342326017316e4f",
     "ref": "master",
     "url": "https://github.com/ziranlang/ziran.git"
   }

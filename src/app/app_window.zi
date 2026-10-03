@@ -1,0 +1,318 @@
+// OS device facts and owned-window operations. Terminal behavior is in app_host.
+#scope_module
+Host :: #import "app_host";
+Launch :: #import "app_launch_options";
+Profile :: #import "terminal_pane_profile_types";
+Input :: #import "app_input";
+Frames :: #import "kryon/session";
+Device :: #import "kryon/tree_input";
+Text :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+Geometry :: #import "kryon/geometry";
+libc :: #system_library "c";
+Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+#if #defined(PLAN9) {
+    Runtime :: #import "kryon/Libdraw";
+    Files :: #import "std/file_plan9";
+    Clock :: #import "std/date_time_plan9";
+    ReleaseEnvironment :: (value: *void) #foreign libc "free";
+    Sleep :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+    ResetCursor :: (fd: s32, data: *void, count: isize) -> isize #foreign libc "write";
+} else {
+    Runtime :: #import "kryon/Raylib";
+    Files :: #import "std/file_linux";
+    Clock :: #import "std/timer_linux";
+    raylib :: #system_library "raylib";
+    sdl :: #system_library "SDL2";
+    SetTraceLevel :: (level: s32) #foreign raylib "SetTraceLogLevel";
+    Maximize :: () #foreign raylib "MaximizeWindow";
+    Fullscreen :: () #foreign raylib "ToggleFullscreen";
+    SetWindowSize :: (width: s32, height: s32) #foreign raylib "SetWindowSize";
+    SetWindowPosition :: (x: s32, y: s32) #foreign raylib "SetWindowPosition";
+    CurrentMonitor :: () -> s32 #foreign raylib "GetCurrentMonitor";
+    MonitorWidth :: (monitor: s32) -> s32 #foreign raylib "GetMonitorWidth";
+    MonitorHeight :: (monitor: s32) -> s32 #foreign raylib "GetMonitorHeight";
+    MonitorPosition :: (monitor: s32) -> Geometry.Vector2 #foreign raylib "GetMonitorPosition";
+    ShowCursor :: () #foreign raylib "ShowCursor";
+    HideCursor :: () #foreign raylib "HideCursor";
+    OpenURL :: (value: *u8) -> s32 #foreign sdl "SDL_OpenURL";
+    VideoError :: () -> *u8 #foreign sdl "SDL_GetError";
+}
+
+EnvironmentText :: (name: string, output: []u8) -> string {
+    key: [64]u8
+    if !CString.CopyCString(name, key[:]) { return "" }
+    value := Environment(cast(*s8)(*key[0]))
+    #if #defined(PLAN9) {
+        defer ReleaseEnvironment(cast(*void)value)
+    }
+    if value == null { return "" }
+    if !CString.CopyCString(Text.TextFromCString(cast(*u8)value), output) { return "" }
+    return Text.TextFromCString(*output[0])
+}
+
+Number :: (name: string, fallback: s32, maximum: s32) -> s32 {
+    bytes: [64]u8
+    value := EnvironmentText(name, bytes[:])
+    if value == "" { return fallback }
+    number: s32
+    for index: cast(s64)0..value.count - 1 {
+        if value[index] < 48 || value[index] > 57 { return fallback }
+        digit := cast(s32)(value[index] - 48)
+        if number > (maximum - digit) / 10 { return fallback }
+        number = number * 10 + digit
+        if number > maximum { return fallback }
+    }
+    return number
+}
+
+#scope_export
+ByteView :: (value: string) -> []u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return Text.BytesFromPointer(descriptor.data, cast(u64)value.count)
+}
+Now :: () -> float64 {
+    #if #defined(PLAN9) {
+        return cast(float64)Clock.UnixMilliseconds() / 1000.0
+    } else {
+        return cast(float64)Clock.MonotonicMilliseconds() / 1000.0
+    }
+}
+Width :: (launch: *Launch.LaunchOptions) -> s32 {
+    if launch != null && launch.geometry_cols > 0 { return launch.geometry_cols * 10 + 20 }
+    return 980
+}
+Height :: (launch: *Launch.LaunchOptions) -> s32 {
+    if launch != null && launch.drop_down { return 420 }
+    if launch != null && launch.geometry_rows > 0 { return launch.geometry_rows * 20 + 78 }
+    return 660
+}
+IdleRate :: () -> s32 {
+    #if #defined(PLAN9) {
+        fallback: s32 = 30
+    } else {
+        fallback: s32 = 60
+    }
+    return Number("KTREM_TARGET_FPS", fallback, 1000)
+}
+ActiveRate :: (idle: s32) -> s32 {
+    #if #defined(PLAN9) {
+        fallback := ifx idle < 60 then 60 else idle
+    } else {
+        fallback := ifx idle < 1000 then 1000 else idle
+    }
+    rate := Number("KTREM_ACTIVE_FPS", fallback, 1000)
+    if rate > 0 && rate < idle { rate = idle }
+    return rate
+}
+BurstMilliseconds :: () -> s32 {
+    #if #defined(PLAN9) {
+        fallback: s32 = 0
+    } else {
+        fallback: s32 = 8
+    }
+    return Number("KTREM_PTY_BURST_MS", fallback, 20)
+}
+Rate :: (fps: s32) {
+    #if #defined(PLAN9) {
+        if fps > 0 { Sleep(ifx fps > 1000 then 1 else 1000 / fps) }
+    } else {
+        Runtime.RaylibFrameRate(fps)
+    }
+}
+ForwardToRill :: () -> bool {
+    #if #defined(PLAN9) {
+        names: [3]string = .{"rillctl", "RILLCTL", "RILL_COMMAND_FILE"}
+        path: [1024]u8
+        for index: 0..2 {
+            value := EnvironmentText(names[index], path[:])
+            if value == "" { continue }
+            file := Files.OpenWrite(value)
+            if !file.valid { return false }
+            request := "open t9\n"
+            size := Files.FileSize(file)
+            if size < 0 { size = 0 }
+            written := Files.WriteAt(file, ByteView(request), size)
+            closed := Files.CloseFile(file)
+            return written == request.count && closed
+        }
+    }
+    return false
+}
+Title :: (title: string) -> bool {
+    #if #defined(PLAN9) {
+        file := Files.OpenWrite("/dev/label")
+        if !file.valid { return false }
+        written := Files.Write(file, ByteView(title))
+        closed := Files.CloseFile(file)
+        return written == title.count && closed
+    } else {
+        return Runtime.RaylibSetTitle(title)
+    }
+}
+Open :: (launch: *Launch.LaunchOptions) -> bool {
+    #if #defined(PLAN9) {
+        graphics := Files.OpenRead("/dev/draw/new")
+        if !graphics.valid { return false }
+        Files.CloseFile(graphics)
+        mouse := Files.OpenRead("/dev/mouse")
+        if !mouse.valid { return false }
+        Files.CloseFile(mouse)
+        ok := Runtime.OpenLibdrawSized(Width(launch), Height(launch))
+        if ok { Title("Terminal") }
+        return ok
+    } else {
+        flags: u32 = cast(u32)4
+        if launch.drop_down { flags |= cast(u32)(8 | 4096 | 256) }
+        else if !launch.show_borders { flags |= cast(u32)8 }
+        SetTraceLevel(4)
+        if !Runtime.OpenRaylib(Width(launch), Height(launch), "Terminal", flags) {
+            failure := Text.TextFromCString(VideoError())
+            if failure != "" {
+                diagnostic: Files.FileHandle = .{2, true}
+                Files.Write(diagnostic, ByteView(failure))
+                Files.Write(diagnostic, ByteView("\n"))
+            }
+            return false
+        }
+        Runtime.RaylibExitKey(0)
+        if launch.drop_down {
+            monitor := CurrentMonitor()
+            width := MonitorWidth(monitor); height := MonitorHeight(monitor)
+            if width <= 0 { width = Width(launch) }
+            if height > 0 { height = height * 45 / 100 } else { height = 420 }
+            if height < 280 { height = 280 }
+            if height > 720 { height = 720 }
+            origin := MonitorPosition(monitor)
+            SetWindowSize(width, height)
+            SetWindowPosition(cast(s32)origin.x, cast(s32)origin.y)
+        } else {
+            if launch.maximize { Maximize() }
+            if launch.fullscreen { Fullscreen() }
+        }
+        return true
+    }
+}
+Close :: () {
+    #if #defined(PLAN9) {
+        Runtime.CloseLibdraw()
+    }
+    else {
+        ShowCursor(); Runtime.CloseRaylib()
+    }
+}
+LoadFont :: (config: *Profile.TerminalPaneProfileSettings) -> bool {
+    #if #defined(PLAN9) {
+        unused config; return true
+    }
+    else {
+        path := Text.TextFromCString(*config.terminal_font[0])
+        if path != "" && Runtime.LoadTypefaceFile("Terminal", path, null, 0) {
+            return Runtime.SelectTypeface("Terminal")
+        }
+        paths: [3]string = .{"/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf"}
+        for index: 0..2 {
+            if Runtime.LoadTypefaceFile("Terminal", paths[index], null, 0) {
+                return Runtime.SelectTypeface("Terminal")
+            }
+        }
+        return false
+    }
+}
+Poll :: () -> bool {
+    #if #defined(PLAN9) {
+        return Runtime.PollLibdraw()
+    }
+    else {
+        return Runtime.PollRaylib()
+    }
+}
+Bounds :: () -> Geometry.Rectangle {
+    #if #defined(PLAN9) {
+        return Runtime.LibdrawViewport()
+    }
+    else {
+        return Runtime.RaylibViewport()
+    }
+}
+Begin :: () {
+    #if #defined(PLAN9) {
+        Runtime.BeginLibdrawFrame()
+    }
+    else {
+        Runtime.BeginRaylibFrame()
+    }
+}
+End :: () -> bool {
+    #if #defined(PLAN9) {
+        return Runtime.EndLibdrawFrame()
+    }
+    else {
+        return Runtime.EndRaylibFrame()
+    }
+}
+CaptureRequested :: () -> bool { return Runtime.CaptureRequested() }
+Capture :: () -> bool { return Runtime.CaptureConfigured() }
+Sample :: (session: Frames.Session, now: float64, down: []s32) -> Host.DeviceFrame {
+    result: Host.DeviceFrame
+    result.now = now; result.key_fresh = true
+    pointer := Runtime.PollPointer()
+    Device.TreePointerUpdate(session, pointer)
+    Device.TreeSecondaryPointerUpdate(session, Runtime.PollSecondaryPointer())
+    #if #defined(PLAN9) {
+        result.focused = true
+        Device.PointerWheelSend(session, pointer.x, pointer.y, Runtime.LibdrawWheelMove())
+        Device.KeyboardModifiersSend(session, Runtime.LibdrawKeyboardModifiers())
+        Device.KeyboardSend(session, Runtime.LibdrawPressedKey())
+        codepoint := Runtime.LibdrawTypedCodepoint()
+        if codepoint > 0 { Device.TypedCodepointSend(session, codepoint) }
+    } else {
+        result.focused = Runtime.RaylibFocused()
+        middle := Runtime.PollMiddlePointer()
+        result.middle = .{middle.down, middle.pressed, middle.released}
+        Device.PointerWheelSend(session, pointer.x, pointer.y, Runtime.RaylibWheelMove())
+        Device.KeyboardModifiersSend(session, Runtime.RaylibModifiers())
+        key := Runtime.RaylibPressedKey()
+        if key == 0 { key = Runtime.RaylibRepeatedKey(); result.key_fresh = false }
+        if key != 0 { Device.KeyboardSend(session, key) }
+        count: s32
+        for held: 1..511 {
+            if Runtime.RaylibKeyDown(cast(s32)held) && count < down.count {
+                down[count] = cast(s32)held; count += 1
+            }
+        }
+        result.down = down[0:count]
+        codepoint := Runtime.RaylibTypedCodepoint()
+        while codepoint > 0 {
+            Device.TypedCodepointSend(session, codepoint)
+            codepoint = Runtime.RaylibTypedCodepoint()
+        }
+    }
+    return result
+}
+Apply :: (result: Input.Result) {
+    #if #defined(PLAN9) {
+        if result.cursor_changed {
+            file := Files.OpenWrite("/dev/cursor")
+            if file.valid {
+                if result.cursor_hidden {
+                    empty: [72]u8
+                    Files.Write(file, empty[:])
+                } else {
+                    ResetCursor(file.fd, null, 0)
+                }
+                Files.CloseFile(file)
+            }
+        }
+    } else {
+        if result.cursor_changed {
+            if result.cursor_hidden { HideCursor() } else { ShowCursor() }
+        }
+        if result.hyperlink != "" {
+            bytes: [2048]u8
+            if CString.CopyCString(result.hyperlink, bytes[:]) { OpenURL(*bytes[0]) }
+        }
+    }
+}

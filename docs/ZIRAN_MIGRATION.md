@@ -11,14 +11,16 @@ the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
 tab lifecycle, selection/clipboard routing, palette and profile changes,
 commands, search dialogs, the context menu, application input routing and the
-menu bar, graphical view and shared application host. There is one legacy
-`.kry` input and one handwritten C implementation remaining at the app
-boundaries. The current
-boundary is the legacy C-header/K2C API. Remaining modules must be
-expressed as Ziran types and explicit foreign/host bindings, then linked to the
-current Ziran-based Kryon library. The migration is complete only when no
-`.kry` product source remains and Linux, Rill, and native Plan 9 builds use the
-same `.zi` implementation.
+menu bar, graphical view, shared application host and standalone OS entrypoint.
+No `.kry`, handwritten C product implementation or handwritten native header
+remains. Native declarations are generated from the maintained Ziran modules.
+The parser benchmark also runs the same implementation from Ziran; the obsolete
+C fixtures and their mock old Kryon host have been retired.
+Linux standalone builds use current Kryon frames and Raylib/SDL2; the native
+entrypoint uses current Libdraw. Rill's actual host integration, native
+whole-application graphics and retained font fallback behavior remain
+unfinished. The migration is complete only when these behavior gates and all
+Linux, Rill, native Plan 9, installation and release routes are verified.
 
 ## Build boundary and consolidation
 
@@ -41,11 +43,10 @@ selection, clipboard actions, and OSC52/paste fixtures with native 8c/8l. The
 clipboard port keeps primary-selection preference, soft-wrap copying,
 host sync/flush, paste callback routing, and scroll reset behavior.
 
-Full application, Rill host, and whole-application Plan 9 builds still use
-legacy application sources and Kryon C headers. Current Kryon no longer exposes that API,
-so these builds are not established by the independent pane checks. Keep
-the existing application pipeline until the remaining app/runtime modules move
-to Ziran and current Kryon bindings.
+The standalone application now uses only the current `.zi` implementation.
+Rill's legacy desktop entrypoint still calls the removed Kryon C host API and
+must migrate to the package's `t9/app_host` export. Independent pane checks do
+not certify that integration or a native whole-application graphical session.
 
 `terminal_clipboard.zi` owns clipboard bytes, OSC52 queries and writes, and
 paste filtering. It imports `kryon/clipboard` for source selection and pending
@@ -68,8 +69,8 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`5073c3f2`) and compiler (`3c8239b`) master commits. The Kryon dependency
-is published; the complete fresh locked application build remains unverified.
+Kryon (`a752b976`) and compiler (`83e25588`) master commits. The complete
+fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
 locked application builds remain part of the unfinished migration gate.
@@ -120,8 +121,7 @@ checks do not certify the remaining legacy application or Rill integration.
 `src/terminal.zi` owns `Terminal`, `Cell`, graphics, and search records and loads
 the 16 migrated engine modules plus native storage/report helpers. The old
 engine `.kry` implementations are removed. Native headers are generated from
-these Ziran declarations; old handwritten headers are migration inputs for
-the remaining application consumers and must be removed with those consumers.
+these Ziran declarations. There is no second handwritten native interface.
 
 `make terminal-test` executes the actual parser, screen, scrollback, resize,
 search, graphics, title/color/clipboard protocols, terminal reports, keyboard,
@@ -291,8 +291,8 @@ including retained-tree clicks, cursor choices, tab lifecycle, Find, long-menu
 scrolling and actual terminal bytes. `make application-plan9-test
 input-plan9-test` checks the same fixtures with native Plan 9 8c/8l execution.
 Kryon's generic menu also passes C/C++/Go and portable source/saved-IR checks.
-The legacy menu implementation is removed; its old header remains migration
-input for the graphical view. These gates do not establish complete graphical
+The legacy menu implementation and handwritten header are removed. These
+gates do not establish complete graphical
 application or Rill builds.
 
 ## Application graphical view
@@ -344,17 +344,53 @@ clipboard updates, exit and hold behavior, middle-click positions, saved
 sessions and restored child I/O. These checks do not establish the standalone
 OS host, Rill's actual embedded integration or installation/release routes.
 
-The next source boundary is the standalone OS host and Rill integration.
-Migrate their consumers to these current modules, then migrate app
-entrypoints to Kryon sessions and frames, remove k2c and the remaining C
-product files, and establish complete Linux/Plan 9, Rill, installation, and
-release gates. Independent module checks remain separate evidence until
-those whole-application gates pass.
+## Standalone OS host
+
+`app_main.zi` owns the Linux and native Plan 9 entrypoints and runs the shared
+Terminal lifecycle. `app_window.zi` gathers OS input and manages only its own
+window, fonts, title, cursor and configured capture. Linux uses current Kryon
+Raylib over SDL2; native Plan 9 uses current Libdraw and libthread. Geometry,
+window flags, held/repeated keyboard events, frame rates, font configuration,
+CLI routes and native forwarding to Rill retain their explicit host boundary.
+The legacy entrypoint and C entry shim are removed, and the Makefile no longer
+invokes k2c or the removed Kryon C library build.
+
+`make standalone-test` verifies the actual executable in C and C++ from source
+and saved IR on private Xvfb displays. It covers CLI routes, a rendered frame,
+real child input, held-key suppression, Control repeats, menu ownership and
+owned-window closing. `make install-test` verifies a disposable staged install.
+`make standalone-plan9-test` compiles and links the complete executable with
+actual native 8c/8l, then exercises its CLI and Rill forwarding from both forms.
+The native gate uses one CPU, 256 MB RAM, a 32 MB translation buffer and a
+120-second limit, with desktop boot disabled.
+
+These checks do not establish native graphical input/rendering, broad glyph
+fallback, Rill's actual embedded integration or fresh locked release builds.
+Finish those gates before claiming the full migration complete. The `.zi` application is the
+single maintained implementation while this remaining work proceeds.
+
+## Native interfaces and parser benchmarks
+
+The old handwritten headers and unbuilt combined C fixtures are removed.
+Their current behavior checks live in `terminal_engine_test.zi`,
+`terminal_pty_linux_test.zi`, the pane fixtures and the application,
+configuration, launch, session, input, view and host fixtures. Each consumes
+the maintained product modules rather than a mock legacy UI library.
+
+`make parser-replay` runs all 13 historical parser workloads against that same
+engine. `make parser-replay-test` executes reduced runs in C and C++ from source
+and saved IR. Golden row and byte counts were derived from the original C
+payloads before retiring it; they verify Unicode, padding, hex formatting and
+control sequences without treating benchmark timings as performance claims.
+No display or owner shell startup is needed. Native output is disposable under
+`build/ziran/`, and execution has a 30-second limit.
 
 ## Completed modules
 
 - `src/app/app_terminal_view.zi`
 - `src/app/app_host.zi`
+- `src/app/app_main.zi`
+- `src/app/app_window.zi`
 
 - `src/terminal_pane/terminal_pane_text.zi`
 - `src/terminal_pane/terminal_pane_sgr.zi`

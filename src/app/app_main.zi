@@ -1,0 +1,128 @@
+// Both OS entrypoints run the canonical Ziran Terminal host and frame.
+#scope_module
+Host :: #import "app_host";
+Window :: #import "app_window";
+Launch :: #import "app_launch_options";
+Frames :: #import "kryon/session";
+Frame :: #import "kryon/Frame";
+Bytes :: #import "std/byte_text_linux";
+#if #defined(PLAN9) {
+    Files :: #import "std/file_plan9";
+} else {
+    Files :: #import "std/file_linux";
+}
+libc :: #system_library "c";
+Allocate :: (count: usize, size: usize) -> *void #foreign libc "calloc";
+Release :: (memory: *void) #foreign libc "free";
+ArgumentView :: struct { data: *string; count: s64; }
+
+Error :: (message: string, status: s32 = 1) -> s32 {
+    file: Files.FileHandle = .{2, true}
+    Files.Write(file, Window.ByteView(message))
+    Files.Write(file, Window.ByteView("\n"))
+    return status
+}
+Run :: (arguments: []string) -> s32 {
+    host: Host.Host
+    defer Host.Close(*host)
+    error: [256]u8
+    parsed := Host.Prepare(*host, arguments, error[:])
+    if parsed == Launch.ParseResult.ParseHelp { Launch.PrintUsage(); return 0 }
+    if parsed == Launch.ParseResult.ParseVersion { Launch.PrintVersion(); return 0 }
+    if parsed == Launch.ParseResult.ParseColorTable { Launch.PrintColorTable(); return 0 }
+    if parsed != Launch.ParseResult.ParseOk {
+        return Error(Bytes.TextFromCString(*error[0]), 2)
+    }
+    if Window.ForwardToRill() { return 0 }
+    if !Window.Open(*host.app.launch) {
+        Window.Close()
+        return Error("t9: could not open the graphics window")
+    }
+    defer Window.Close()
+    Window.LoadFont(*host.app.config)
+    idle := Window.IdleRate(); active := Window.ActiveRate(idle)
+    host.burst_ms = Window.BurstMilliseconds()
+    start := Window.Now()
+    if !Host.Start(*host, Window.Bounds(), start) { return Error("t9: could not start Terminal") }
+    session := Frames.SessionOpen()
+    if !Frames.SessionValid(session) { return Error("t9: could not open a UI session") }
+    defer Frame.CloseSession(session)
+    Window.Title(Host.Title(*host))
+    capture := Window.CaptureRequested()
+    while Window.Poll() {
+        now := Window.Now()
+        polled := Host.Poll(*host, now)
+        if polled.title_changed { Window.Title(Host.Title(*host)) }
+        if polled.quit { break }
+        Window.Begin()
+        bounds := Window.Bounds()
+        down: [512]s32
+        device := Window.Sample(session, now, down[:])
+        if cast(s32)Frame.BeginFrame(session, cast(u64)1, bounds) != 0 {
+            Window.End()
+            return Error("t9: could not begin a UI frame")
+        }
+        result := Host.Draw(*host, session, bounds, device)
+        if cast(s32)Frame.EndFrame(session) != 0 {
+            Window.End()
+            return Error("t9: could not draw the UI frame")
+        }
+        Window.Apply(result.input)
+        if result.font_changed { Window.LoadFont(*host.app.config) }
+        if result.title_changed { Window.Title(Host.Title(*host)) }
+        captured: bool
+        if capture && now - start >= 0.1 { captured = Window.Capture() }
+        if !Window.End() { return Error("t9: could not present the UI frame") }
+        if capture && now - start >= 0.1 {
+            if captured { return 0 }
+            return Error("t9: could not save the window capture")
+        }
+        if result.quit { break }
+        Window.Rate(ifx now < host.fast_poll_until then active else idle)
+    }
+    return 0
+}
+Main :: (argc: s32, argv: **s8) -> s32 {
+    if argc <= 0 || argv == null { return Error("t9: missing process arguments", 2) }
+    data := cast(*string)Allocate(cast(usize)argc, cast(usize)size_of(string))
+    if data == null { return Error("t9: could not allocate process arguments") }
+    defer Release(cast(*void)data)
+    for index: 0..argc - 1 { data[index] = Bytes.TextFromCString(cast(*u8)argv[index]) }
+    arguments: []string
+    view := cast(*ArgumentView)(*arguments)
+    view.data = data; view.count = cast(s64)argc
+    return Run(arguments)
+}
+#scope_export
+#if #defined(PLAN9) {
+    thread_library :: #system_library "thread";
+    ThreadStart :: #type (value: *void) #c_call;
+    ThreadCreate :: (start: ThreadStart, value: *void, stack: u32) -> s32 #foreign thread_library "threadcreate";
+    ThreadExits :: (status: *s8) #foreign thread_library "threadexits";
+    ThreadExitsAll :: (status: *s8) #foreign thread_library "threadexitsall";
+    process_argc: s32;
+    process_argv: **s8;
+    #program_export
+    ApplicationThread :: (value: *void) {
+        unused value
+        if Main(process_argc, process_argv) == 0 { ThreadExitsAll(null) }
+        else {
+            status := "Terminal failed"
+            descriptor := cast(*Bytes.TextDescriptor)(*status)
+            ThreadExitsAll(cast(*s8)descriptor.data)
+        }
+    }
+    #program_export
+    threadmain :: (argc: s32, argv: **s8) {
+        process_argc = argc; process_argv = argv
+        if ThreadCreate(ApplicationThread, null, 1048576) < 0 {
+            status := "Could not start Terminal"
+            descriptor := cast(*Bytes.TextDescriptor)(*status)
+            ThreadExitsAll(cast(*s8)descriptor.data)
+        }
+        ThreadExits(null)
+    }
+} else {
+    #program_export
+    main :: (argc: s32, argv: **s8) -> s32 { return Main(argc, argv) }
+}

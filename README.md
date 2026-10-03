@@ -6,59 +6,59 @@ rendering, input, and platform integration. The terminal emulator belongs here,
 not in Kryon.
 
 ```sh
+make -j1
+make standalone-window-test
 make pane-ziran-test
-make terminal-native
-make clipboard-plan9-c
-TAIJI_DIR=/path/to/taijiosnet/taiji make keys-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make osc-plan9-test pty-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make clipboard-plan9-test selection-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make terminal-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make config-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make widget-plan9-test
-TAIJI_DIR=/path/to/taijiosnet/taiji make session-plan9-test launch-plan9-test
+make standalone-test install-test
+make install
 ```
 
-These independent engine, configuration, session, launch-option, widget,
-theme/profile, clipboard, selection, keyboard, OSC, pane sizing,
-and Linux PTY tests use the locked Ziran toolchain or a canonical local override. The
-`clipboard-plan9-c` target emits C. Native keyboard, OSC, metrics, clipboard,
-selection, engine, configuration, widget, session, launch-option and PTY gates compile and execute source and saved-IR fixtures
-with actual 8c/8l in a headless Taiji guest
-limited to one CPU, 256 MB, a 32 MB translation buffer, and 120 seconds.
-They never use the live desktop.
+The application, terminal engine, pane and shared application host are
+maintained in Ziran. `make` generates native C from the current `.zi`
+entrypoint and links Kryon's Raylib backend over SDL2. The build needs a C/C++
+compiler, CMake, pkg-config, SDL2 and OpenGL development files. Raylib's source
+is resolved from the Git-backed package lock. Builds default to one job;
+`T9_BUILD_JOBS` may select up to four.
 
-The full `make`, `make run`, `make test`, and `make install` routes retain
-the transition application's legacy Kryon/k2c pipeline. They currently need
-legacy compiler and C-header APIs that current Kryon has removed. Completing
-the application migration is separate from repository consolidation; the
-focused test results do not establish a working full application build.
+`standalone-window-test` runs the actual executable on a private Xvfb display.
+It checks CLI routes, a rendered window, real child-process input, held and
+repeated Control keys, menu input ownership, and closing its own window.
+`standalone-test` repeats these checks for C and C++ from source and saved IR.
+The window tests need Xvfb, xauth, xdotool and xset; they scrub inherited
+session and display variables before creating their private display.
 
-The terminal engine is now Ziran: `src/terminal.zi` owns its typed state and
-loads `src/engine/*.zi`. Its native library target builds `libt9_terminal.a`;
-The embedded widget uses that same engine and current Kryon frames. Sessions,
-saved tabs and command-line options also use Ziran; the remaining application
-consumers still need migration.
+The focused Ziran suites exercise the actual engine, configuration, sessions,
+launch options, application state, input, view, host, widget, clipboard and
+process transports. Native Plan 9 module checks use a headless Taiji guest
+with one CPU, 256 MB RAM, a 32 MB translation buffer and a 120-second limit:
 
-`make install` installs the `t9` command, the Rill host module, and a
-desktop launcher named Terminal.
-The default `PREFIX` is `~/.local`.
+```sh
+TAIJI_DIR=/path/to/taijiosnet/taiji make standalone-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make terminal-plan9-test host-plan9-test
+make plan9-c
+```
 
-The legacy release workflow is in `.github/workflows/release.yml`; it must
-be updated with the full application build during the remaining migration.
-Its intended assets are Linux `tar.gz`, `.deb`, and `.AppImage` packages.
-The remaining
-feature and release-readiness plan is tracked in
-`docs/REMAINING_FEATURE_PLAN.md`.
-t9's maintained source language is Ziran. The migration from the legacy
-`.kry`/k2c stack is tracked in `docs/ZIRAN_MIGRATION.md`; migrated modules are
-removed from the legacy set only after focused hosted and Plan 9 checks pass.
-`make test` includes the engine, pane, and live-process suites when that
-legacy application pipeline is available.
+`plan9-c` emits the complete application for native `mk`/8c/8l. The standalone
+native test builds the real executable and checks its CLI and forwarding to
+Rill from source and saved IR. Native graphics and Rill's actual embedded
+integration remain separate migration gates. Rill can import `t9/app_host`; its integration must own the surrounding frame,
+device input and window operations.
+
+`make install` installs the `t9` command and a desktop launcher named Terminal.
+The default `PREFIX` is `~/.local`; `DESTDIR` supports staged packaging.
+`install-test` checks a disposable staged installation.
+
+The Linux release workflow is in `.github/workflows/release.yml`. Its intended
+assets are `tar.gz`, `.deb`, and `.AppImage` packages. The remaining behavior
+and release-readiness work is tracked in `docs/REMAINING_FEATURE_PLAN.md` and
+`docs/ZIRAN_MIGRATION.md`; passing the standalone checks does not establish a
+complete Rill migration or native Plan 9 graphical session.
 
 Dependencies resolve through `scripts/ziran.sh`, `ziran.toml`, and the
-committed `ziran.lock`. Install Ziran on `PATH` for a locked checkout. The
-wrapper selects the package toolchain; if it has not been built, it prints
-the exact compiler build command.
+command-generated `ziran.lock`. Install Ziran on `PATH` for a locked checkout.
+The wrapper selects the package toolchain; if it has not been built, it prints
+the exact compiler build command. Without local overrides, build and test
+routes require `--locked`.
 
 For local development, create the ignored `ziran.local.toml` with canonical
 organization-root overrides:
@@ -70,10 +70,8 @@ kryon = "../../kryonlabs/kryon"
 ```
 
 Additional source-package overrides, such as Kryon's `raylib` dependency,
-may point to an existing local package checkout. Without local overrides,
-package lookup uses `--locked`. A legacy Kryon build can still be selected
-explicitly with `make ENGINE_DIR=/path/to/compatible/kryon` while the
-remaining modules migrate.
+may point to an existing local package checkout. Local overrides do not
+belong in the manifest or release artifacts.
 
 Run options:
 

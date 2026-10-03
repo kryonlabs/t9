@@ -1,22 +1,33 @@
 < /$objtype/mkfile
 
-# Native Plan 9 build of t9 with the Kryon libdraw backend.
-#
-# The terminal engine, pane, and app modules are authored in .kry and
-# compiled ahead of time on the host (`make kry-c-plan9` in this tree
-# emits 8c-safe C plus the generated-c-files.txt list; Ziran owns the
-# migrated .zi modules). The remaining
-# process transport is Ziran on both platforms. The executable entry
-# shim remains C until the application entrypoint migrates.
-
+# Build Ziran's generated native Plan 9 application with current Kryon Libdraw.
+# Run `make plan9-c` on the host after changing the maintained .zi source.
 TARG=t9
-ROOT=/sys/src/t9
+BIN=/$objtype/bin
+GEN=build/plan9/generated
+LIST=build/plan9/generated-c-files.txt
+HEADERS=`{ls $GEN/*.h}
+OFILES=`{cat $LIST | sed -e 's@\.c$@.'$O'@' -e 's@^@'$GEN'/@'}
+OUT=$O.out
+CFLAGS=-FTVw
 
-# The shared engine/process module uses the Ziran Plan 9 transport.
-gensrc=`{cat $ROOT/build/plan9/generated-c-files.txt}
-appsrc=\
-	src/main.c\
+all:V: check-generated $OUT
 
-APPCPPFLAGS=-I$ROOT/src -I$ROOT/build/plan9/generated/src -I$ROOT/build/plan9/generated
+check-generated:V:
+	if(! test -f $GEN/app_main.c || ! test -f $LIST) {
+		echo 'Missing Terminal native sources; run make plan9-c on the host' >[1=2]
+		exit missing
+	}
+	exit 0
 
-< /sys/src/kryon/mk/plan9-app.mk
+$GEN/%.$O: $GEN/%.c $HEADERS
+	$CC $CFLAGS -I$GEN -o $target -c $GEN/$stem^.c
+
+$OUT: $OFILES
+	$LD -o $target $prereq -ldraw -lmemdraw -lthread -lflate
+
+install:V: all
+	cp $OUT $BIN/$TARG
+
+clean:V:
+	rm -f $GEN/*.[$OS] [$OS].out $TARG

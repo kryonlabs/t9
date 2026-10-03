@@ -1,38 +1,34 @@
 #!/bin/sh
 set -eu
 
-if [ "${KTREM_BENCH_USE_REAL_DISPLAY:-0}" != "1" ] &&
-   [ "${KTREM_BENCH_IN_VIRTUAL_DISPLAY:-0}" != "1" ]; then
-    if command -v xvfb-run >/dev/null 2>&1; then
-        wrapper_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-        wrapper_out_dir="${1:-$wrapper_root/benchmarks/results}"
-        runtime_dir="${KTREM_BENCH_XDG_RUNTIME_DIR:-/tmp/ktrem-runtime}"
-        mkdir -p "$runtime_dir"
-        chmod 700 "$runtime_dir" 2>/dev/null || true
-        set +e
-        env XDG_RUNTIME_DIR="$runtime_dir" \
-            KTREM_BENCH_IN_VIRTUAL_DISPLAY=1 \
-            xvfb-run -a -s "-screen 0 1280x800x24" sh "$0" "$@"
-        status=$?
-        set -e
-        if [ "$status" -ne 0 ]; then
-            latest=$(ls -t "$wrapper_out_dir"/terminal-benchmarks-*.jsonl \
-                2>/dev/null | head -n 1 || true)
-            if [ -n "$latest" ] && grep -q '"payload":' "$latest" &&
-               ! grep -q '"error":' "$latest"; then
-                exit 0
-            fi
-        fi
-        exit "$status"
+if [ "${T9_BENCH_PRIVATE_XVFB:-0}" != "1" ]; then
+    if ! command -v xvfb-run >/dev/null 2>&1; then
+        printf 'xvfb-run is required for isolated GUI benchmarks\n' >&2
+        exit 2
     fi
-    printf 'xvfb-run is required for isolated GUI benchmarks\n' >&2
-    printf 'set KTREM_BENCH_USE_REAL_DISPLAY=1 to use the current display\n' >&2
+    bench_runtime=$(mktemp -d "${TMPDIR:-/tmp}/t9-bench.XXXXXX")
+    trap 'rm -rf "$bench_runtime"' EXIT HUP INT TERM
+    cat > "$bench_runtime/shell" <<'SHELL'
+#!/bin/sh
+exec /bin/sh -c "$2"
+SHELL
+    chmod 700 "$bench_runtime/shell"
+    env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY \
+        -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER -u ENV -u BASH_ENV \
+        XDG_RUNTIME_DIR="$bench_runtime" XDG_CONFIG_HOME="$bench_runtime/config" \
+        XDG_STATE_HOME="$bench_runtime/state" T9_BENCH_SHELL="$bench_runtime/shell" \
+        T9_BENCH_PRIVATE_XVFB=1 LP_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+        xvfb-run -a -s '-screen 0 1280x800x24' sh "$0" "$@"
+    exit "$?"
+fi
+if [ -z "${DISPLAY:-}" ] || [ -z "${XAUTHORITY:-}" ] || [ ! -x "${T9_BENCH_SHELL:-}" ]; then
+    printf 'GUI benchmarks need their private Xvfb wrapper and controlled shell\n' >&2
     exit 2
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 workload_script="$root/benchmarks/workload.sh"
-out_dir="${1:-$root/benchmarks/results}"
+out_dir="${1:-$root/build/benchmarks/results}"
 ktrem_active_fps="${2:-}"
 ktrem_pty_burst_ms="${3:-}"
 bench_runs="${4:-${KTREM_BENCH_RUNS:-1}}"
@@ -40,7 +36,7 @@ selected_workloads="${5:-${KTREM_BENCH_WORKLOADS:-}}"
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 result_file="$out_dir/terminal-benchmarks-$timestamp.jsonl"
 workloads="${selected_workloads:-startup ansi_flood unicode_table alternate_redraw dense_sgr wrap_reflow scrollback_flood cursor_matrix paste_burst hyperlink_grid search_corpus}"
-terminals="${KTREM_BENCH_TERMINALS:-ktrem xfce4-terminal}"
+terminals="${KTREM_BENCH_TERMINALS:-t9 xfce4-terminal}"
 
 arch=$(uname -m 2>/dev/null || printf unknown)
 case "$arch" in
@@ -52,9 +48,9 @@ case "$platform" in
     freebsd) platform=freebsd ;;
     darwin) platform=macos ;;
 esac
-ktrem_bin=${KTREM_BENCH_KTREM_BIN:-$root/build/$platform-$arch/bin/ktrem}
+ktrem_bin=${T9_BENCH_BIN:-${KTREM_BENCH_KTREM_BIN:-$root/build/$platform-$arch/bin/t9}}
 if [ ! -x "$ktrem_bin" ]; then
-    ktrem_bin=$(command -v ktrem || true)
+    ktrem_bin=$(command -v t9 || true)
 fi
 
 mkdir -p "$out_dir"
@@ -77,26 +73,26 @@ fi
 launch_terminal() {
     terminal="$1"
     command="$2"
-    title="${3:-ktrem benchmark}"
+    title="${3:-Terminal benchmark}"
     case "$terminal" in
-        ktrem)
+        t9|ktrem)
             if [ -n "$ktrem_active_fps" ] &&
                [ -n "$ktrem_pty_burst_ms" ]; then
                 env KTREM_ACTIVE_FPS="$ktrem_active_fps" \
                     KTREM_PTY_BURST_MS="$ktrem_pty_burst_ms" \
-                    "$ktrem_bin" --title "$title" --geometry 100x30 \
+                    "$ktrem_bin" --shell "$T9_BENCH_SHELL" --title "$title" --geometry 100x30 \
                     --command "$command" >/dev/null 2>&1 &
             elif [ -n "$ktrem_active_fps" ]; then
                 env KTREM_ACTIVE_FPS="$ktrem_active_fps" \
-                    "$ktrem_bin" --title "$title" --geometry 100x30 \
+                    "$ktrem_bin" --shell "$T9_BENCH_SHELL" --title "$title" --geometry 100x30 \
                     --command "$command" >/dev/null 2>&1 &
             elif [ -n "$ktrem_pty_burst_ms" ]; then
                 env KTREM_PTY_BURST_MS="$ktrem_pty_burst_ms" \
-                    "$ktrem_bin" --title "$title" --geometry 100x30 \
+                    "$ktrem_bin" --shell "$T9_BENCH_SHELL" --title "$title" --geometry 100x30 \
                     --command "$command" \
                     >/dev/null 2>&1 &
             else
-                "$ktrem_bin" --title "$title" --geometry 100x30 \
+                "$ktrem_bin" --shell "$T9_BENCH_SHELL" --title "$title" --geometry 100x30 \
                     --command "$command" >/dev/null 2>&1 &
             fi
             ;;
@@ -119,17 +115,14 @@ find_window_for_process() {
     waited=0
 
     while [ "$waited" -lt "$timeout_s" ]; do
-        window=$(xdotool search --pid "$pid" 2>/dev/null | tail -n 1 || true)
-        if [ -z "$window" ]; then
-            window=$(xdotool search --name "$title" 2>/dev/null | tail -n 1 || true)
-        fi
-        if [ -z "$window" ]; then
-            window=$(xdotool search --onlyvisible --name . 2>/dev/null | tail -n 1 || true)
-        fi
-        if [ -n "$window" ]; then
-            printf '%s\n' "$window"
-            return 0
-        fi
+        for window in $(xdotool search --onlyvisible --pid "$pid" 2>/dev/null || true); do
+            owner=$(xdotool getwindowpid "$window" 2>/dev/null || true)
+            if [ "$owner" = "$pid" ]; then
+                printf '%s\n' "$window"
+                return 0
+            fi
+        done
+        if ! kill -0 "$pid" 2>/dev/null; then return 1; fi
         sleep 1
         waited=$((waited + 1))
     done
@@ -527,10 +520,10 @@ wait_for_result() {
     return 1
 }
 
-printf '# ktrem terminal benchmark run %s\n' "$timestamp" > "$result_file"
+printf '# Terminal benchmark run %s\n' "$timestamp" > "$result_file"
 
 for terminal in $terminals; do
-    if [ "$terminal" = ktrem ]; then
+    if [ "$terminal" = t9 ] || [ "$terminal" = ktrem ]; then
         if [ -z "$ktrem_bin" ] || [ ! -x "$ktrem_bin" ]; then
             printf '{"terminal":"%s","error":"not_found"}\n' "$terminal" \
                 >> "$result_file"
@@ -627,3 +620,4 @@ cat "$summary_tmp" >> "$result_file"
 rm -f "$summary_tmp"
 
 printf '%s\n' "$result_file"
+if rg -q '"error":' "$result_file"; then exit 1; fi
