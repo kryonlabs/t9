@@ -8,19 +8,21 @@ Text :: #import "std/text_buffer";
 // Kryon owns editing policy; Terminal owns the prompt's bounded storage.
 ApplyEdit :: (output: []u8, edit: Fields.TextFieldEdit) -> bool {
     if !edit.changed || output.count <= 0 || output.count > 1024 { return false }
-    value := Text.TextUntilNul(output)
-    if value.count == 0 && output[0] != 0 { return false }
-    if edit.start < 0 || edit.end < edit.start || cast(s64)edit.end > value.count { return false }
-    after := value.count - cast(s64)(edit.end - edit.start) + edit.replacement.count
-    if after >= output.count || after < 0 { return false }
     next: [1024]u8
     used: s64
-    for index: cast(s64)0..cast(s64)edit.start - 1 { next[used] = value[index]; used += 1 }
-    for index: cast(s64)0..edit.replacement.count - 1 {
-        if edit.replacement[index] == 0 { return false }
-        next[used] = edit.replacement[index]; used += 1
+    {
+        value := Text.TextUntilNul(output)
+        if value.count == 0 && output[0] != 0 { return false }
+        if edit.start < 0 || edit.end < edit.start || cast(s64)edit.end > value.count { return false }
+        after := value.count - cast(s64)(edit.end - edit.start) + edit.replacement.count
+        if after >= output.count || after < 0 { return false }
+        for index: cast(s64)0..cast(s64)edit.start - 1 { next[used] = value[index]; used += 1 }
+        for index: cast(s64)0..edit.replacement.count - 1 {
+            if edit.replacement[index] == 0 { return false }
+            next[used] = edit.replacement[index]; used += 1
+        }
+        for index: cast(s64)edit.end..value.count - 1 { next[used] = value[index]; used += 1 }
     }
-    for index: cast(s64)edit.end..value.count - 1 { next[used] = value[index]; used += 1 }
     next[used] = 0
     for index: cast(s64)0..used { output[index] = next[index] }
     return true
@@ -41,20 +43,42 @@ Draw :: (session: Sessions.Session, key: u64, title: string, action: string,
     frame := ModalFrame(session, frame_props)
     if frame.dismissed || frame.right_clicked { return 1 }
     if !frame.opened { return 0 }
-    field: TextFieldProps
-    field.key = key + cast(u64)1; field.focus_id = cast(s32)(key + cast(u64)1)
-    field.bounds = frame.layout.content
-    field.bounds.height = 32.0 * scale
-    field.value = Text.TextUntilNul(output)
-    field.cursor = cursor.*; field.anchor = anchor.*; field.scroll_x = scroll_x.*
-    field.focused = focused.*; field.max_bytes = cast(s32)output.count - 1
-    field.scale = scale; field.input = input
-    result := TextField(session, field)
-    changed := ApplyEdit(output, result.edit)
-    if !result.edit.changed || changed {
-        cursor.* = result.cursor; anchor.* = result.anchor; scroll_x.* = result.scroll_x
+    edit: Fields.TextFieldEdit
+    replacement: [1024]u8
+    replacement_count: s64
+    valid_edit: bool = true
+    next_cursor: s32; next_anchor: s32; next_scroll: s32
+    next_focused: bool; committed: bool; escaped: bool
+    {
+        field: TextFieldProps
+        field.key = key + cast(u64)1; field.focus_id = cast(s32)(key + cast(u64)1)
+        field.bounds = frame.layout.content
+        field.bounds.height = 32.0 * scale
+        field.value = Text.TextUntilNul(output)
+        field.cursor = cursor.*; field.anchor = anchor.*; field.scroll_x = scroll_x.*
+        field.focused = focused.*; field.max_bytes = cast(s32)output.count - 1
+        field.scale = scale; field.input = input
+        result := TextField(session, field)
+        next_cursor = result.cursor; next_anchor = result.anchor; next_scroll = result.scroll_x
+        next_focused = result.focused; committed = result.committed; escaped = result.escaped
+        edit.changed = result.edit.changed; edit.start = result.edit.start; edit.end = result.edit.end
+        replacement_count = result.edit.replacement.count
+        valid_edit = replacement_count <= cast(s64)replacement.count
+        if valid_edit {
+            for index: cast(s64)0..replacement_count - 1 { replacement[index] = result.edit.replacement[index] }
+        }
     }
-    focused.* = result.focused
+    // TextField results can borrow the field value, including clipboard text.
+    // End those views before editing, and lend only the bounded replacement copy.
+    changed: bool
+    if valid_edit {
+        edit.replacement = TextView(replacement[:replacement_count])
+        changed = ApplyEdit(output, edit)
+    }
+    if !edit.changed || changed {
+        cursor.* = next_cursor; anchor.* = next_anchor; scroll_x.* = next_scroll
+    }
+    focused.* = next_focused
     cancel: ButtonProps
     cancel.key = key + cast(u64)2; cancel.label = "Cancel"
     cancel.bounds = frame.layout.content
@@ -70,7 +94,7 @@ Draw :: (session: Sessions.Session, key: u64, title: string, action: string,
     confirm.tone = ButtonTone.ButtonToneAccent
     confirm_clicked := Button(session, confirm) != 0
     End(session)
-    if result.escaped || cancel_clicked { return 1 }
-    if result.committed || confirm_clicked { return 2 }
+    if escaped || cancel_clicked { return 1 }
+    if committed || confirm_clicked { return 2 }
     return 0
 }
