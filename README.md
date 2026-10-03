@@ -74,6 +74,13 @@ enabled only while the terminal owns keyboard focus. Call `terminal_poll` for
 owned children and `terminal_close` when removing a terminal to release its
 buffers and supervised child. Display and window lifecycle stay with the host.
 
+For a remote or otherwise host-managed process, set the pane's `write_input`
+callback and `input_userdata`; keyboard input is encoded by t9 and handed to
+that callback instead of a local PTY. Hosts that capture input themselves can
+call `TerminalPaneHandleInputTo` with a `KeyboardFrame`. Set `scroll_offset`
+to the number of history rows above the live screen (zero follows the live
+screen); cells retain their ANSI colors and styles while drawing history.
+
 The package also exports `t9/terminal_keyboard`, `t9/terminal_pane_keys`,
 `t9/terminal_pane_profile_colors` and `t9/terminal_clipboard` for hosts that
 manage input frames, protocol encoding, colors or clipboard routing directly.
@@ -87,8 +94,10 @@ needed in application code.
 then compiles and runs package-qualified imports in C and C++ from source and
 saved IR. It checks Unicode/ANSI parsing, pane painting through the host's
 Kryon session, keyboard encoding and clipboard storage without a desktop
-display. The consumer has its own module roots, so it cannot accidentally
-import Terminal's private modules through the repository's build roots.
+display. The consumer has its own module roots and checks that Terminal's
+private modules stay unavailable through package-qualified imports.
+`T9_PACKAGE_LOCKED=1 make package-test` checks committed Git packages with
+`--locked` after generating the consumer's dependency lock.
 
 `make install` installs the `t9` command and a desktop launcher named Terminal.
 The default `PREFIX` is `~/.local`; `DESTDIR` supports staged packaging.

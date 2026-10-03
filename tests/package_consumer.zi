@@ -16,6 +16,14 @@ Host :: #import "terminal_pane_widget_host";
 ClipboardHost :: #import "terminal_clipboard_host";
 
 #scope_file
+received: [16]u8;
+received_size: s32;
+Write :: (userdata: *void, bytes: *u8, count: s32) -> s32 {
+    unused userdata
+    if count < 0 || received_size + count > cast(s32)received.count { return 0 }
+    for at: 0..count - 1 { received[received_size + at] = bytes[at] }
+    received_size += count; return count
+}
 Bytes :: (value: string) -> *u8 {
     descriptor := cast(*Text.TextDescriptor)(*value)
     return descriptor.data
@@ -53,6 +61,8 @@ main :: () -> s32 {
     text: [32]u32
     keyboard := Keyboard.CaptureKeyboardFrame(session, keys[:], text[:])
     if keyboard.codepoints.count != 1 || keyboard.codepoints[0] != 937 { return 6 }
+    if Pane.TerminalPaneHandleInputTo(*terminal, keyboard, Write, null) != 2 ||
+        TextView(received[0:received_size]) != "Ω" || terminal.fd != -1 { return 10 }
     sequence: [64]u8
     mode: Keys.TerminalPaneKeyMode
     mode.application_cursor_keys = 1

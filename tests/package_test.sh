@@ -41,14 +41,31 @@ pathlib.Path(path).write_text('[overrides]\n' + ''.join(
 PY
 cd "$work"
 "$compiler" add https://github.com/taijiosnet/t9.git
-"$compiler" check --project src/consumer.zi
-"$compiler" ir --project --entry consumer:main -o ir src/consumer.zi
+consumer_flags=
+if test "${T9_PACKAGE_LOCKED:-0}" = 1; then
+    # Test committed Git objects rather than local work in progress.
+    rm ziran.local.toml
+    consumer_flags=--locked
+fi
+python3 - <<'PY'
+import json
+lock = json.load(open('ziran.lock'))
+print('t9 consumer dependency:', next(p['commit'] for p in lock['packages'] if p['name'] == 't9'))
+PY
+"$compiler" check --project $consumer_flags src/consumer.zi
+printf '%s\n' '#import "t9/terminal_pane_render"' > src/private.zi
+if "$compiler" check --project $consumer_flags src/private.zi > private.log 2>&1; then
+    echo 'An external host imported a private Terminal module' >&2
+    exit 1
+fi
+rg -q 'is not exported by a direct dependency' private.log
+"$compiler" ir --project $consumer_flags --entry consumer:main -o ir src/consumer.zi
 for form in source saved; do
     input=src/consumer.zi
     if test "$form" = saved; then input=ir/consumer.zir; fi
-    "$compiler" build --project --target=c --entry consumer:main --exe -o "$form-c" "$input"
+    "$compiler" build --project $consumer_flags --target=c --entry consumer:main --exe -o "$form-c" "$input"
     timeout --kill-after=2s 15s "./$form-c/consumer"
-    "$compiler" build --project --target=cpp --entry consumer:main -o "$form-cpp" "$input"
+    "$compiler" build --project $consumer_flags --target=cpp --entry consumer:main -o "$form-cpp" "$input"
     "${CXX:-c++}" -std=c++17 -O1 -I"$form-cpp" "$form-cpp"/*.cpp -o "$form-cpp/run"
     timeout --kill-after=2s 15s "./$form-cpp/run"
 done
