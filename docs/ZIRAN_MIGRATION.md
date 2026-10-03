@@ -69,7 +69,7 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`a752b976`) and compiler (`83e25588`) master commits. The complete
+Kryon (`94f9f7c1`) and compiler (`83e25588`) master commits. The complete
 fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
