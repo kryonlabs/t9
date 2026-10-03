@@ -69,7 +69,7 @@ The remaining application hosts must migrate to this explicit frame API;
 removed global input polling functions are not restored in Kryon.
 
 The dependency lock is generated with Ziran package commands against canonical
-Kryon (`94f9f7c1`) and compiler (`83e25588`) master commits. The complete
+Kryon (`88b59a18`) and compiler (`83e25588`) master commits. The complete
 fresh locked application build remains unverified.
 Local development uses the canonical organization-root overrides; when that
 file is absent, the test and build routes require the committed lock. Fresh
@@ -370,6 +370,14 @@ Finish those gates before claiming the full migration complete. The `.zi` applic
 single maintained implementation while this remaining work proceeds.
 
 ## Native interfaces and parser benchmarks
+
+Embedded hosts can paint while unfocused without consuming their containing
+desktop's key, text, wheel or retained pointer activation. Closing an embedded
+host preserves the standalone application's saved tabs. `make host-test`
+checks background menus and input preservation, controlled child I/O, and
+standalone session restoration after embedded disposal in C/C++ from source
+and saved IR. Rill owns window placement and closing; Terminal owns its child
+processes and tab state.
 
 The old handwritten headers and unbuilt combined C fixtures are removed.
 Their current behavior checks live in `terminal_engine_test.zi`,

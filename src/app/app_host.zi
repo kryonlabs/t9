@@ -178,6 +178,14 @@ Draw :: (host: *Host, frame: Frames.Session, bounds: Rectangle,
     result.node = -1
     if host == null || host.app == null || !host.started ||
         !Frames.SessionValid(frame) || !Tree.TreeIsBuilding(frame) { return result }
+    suspended: Device.InputSnapshot
+    if !device.focused {
+        suspended = Device.TreeInputSuspend(frame)
+        device.middle = Input.ButtonFrame.{}
+    }
+    // An unfocused embedded view paints without taking its containing
+    // desktop's key, text, wheel or retained pointer activation.
+    defer Device.TreeInputResume(frame, suspended)
     app := host.app
     was_modal := Input.ModalActive(app)
     pointer := Device.PointerSample(frame)
@@ -219,7 +227,7 @@ Close :: (host: *Host, session_path: string = "") -> bool {
     if host == null { return true }
     saved: bool = true
     if host.app != null {
-        if host.started && host.persist && host.app.session_count > 0 {
+        if host.started && host.persist && !host.embedded && host.app.session_count > 0 {
             saved = Tabs.Save(host.app, session_path)
         }
         State.Dispose(host.app)

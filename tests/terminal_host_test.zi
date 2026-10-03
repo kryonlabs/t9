@@ -38,10 +38,11 @@ Bytes :: (value: string) -> *u8 {
 }
 Failure :: (message: string) -> bool { print("Terminal host: %\n", message); return false }
 Bounds :: () -> Geometry.Rectangle { return .{0.0, 0.0, 400.0, 240.0} }
-Open :: (host: *Host.Host, command: string = "", hold: bool = false) -> bool {
+Open :: (host: *Host.Host, command: string = "", hold: bool = false,
+    embedded: bool = true) -> bool {
     args: [7]string = .{"t9", "--shell", Shell(), "--command", command, "--title", "fixture"}
     error: [256]u8
-    parsed := Host.Prepare(host, args[:], error[:], false, true)
+    parsed := Host.Prepare(host, args[:], error[:], false, embedded)
     if parsed != Launch.ParseResult.ParseOk { return Failure("prepare controlled child") }
     host.app.launch.hold = hold
     if !Host.Start(host, Bounds()) { return Failure("start controlled child") }
@@ -116,6 +117,19 @@ CheckFrameOwnership :: () -> bool {
     if Draw(*host, frame).node < 0 || !Observe(terminal, "\x1b[I") { return Failure("focus gain") }
     if Draw(*host, frame, true, false).input.wrote != 0 || !Observe(terminal, "\x1b[O") { return Failure("focus loss") }
     if Draw(*host, frame, true, false).node < 0 || !NoBytes(terminal) { return Failure("repeated focus loss") }
+    // A background view may have its own open menu, but pending input still
+    // belongs to the containing desktop, including Escape and typed text.
+    host.app.menu.focused = true
+    Input.KeyboardSend(frame, Input.KeyEscape)
+    Input.TypedCodepointSend(frame, #char "z")
+    Input.PointerWheelSend(frame, 20.0, 30.0, -2.0)
+    if Draw(*host, frame, true, false).node < 0 || !host.app.menu.focused ||
+        Input.KeyboardTake(frame) != Input.KeyEscape ||
+        Input.TypedCodepointTake(frame) != #char "z" ||
+        Input.PointerWheelTake(frame, Bounds()) != -2.0 || !NoBytes(terminal) {
+        return Failure("background view consumed desktop input")
+    }
+    host.app.menu.focused = false
     if Draw(*host, frame).node < 0 || !Observe(terminal, "\x1b[I") { return Failure("focus regain") }
     terminal.focus_reporting = 0
     keys: [1]s32 = .{#char "A"}
@@ -227,7 +241,7 @@ CheckMiddleClick :: () -> bool {
 CheckPersistence :: () -> bool {
     host: Host.Host
     defer Host.Close(*host)
-    if !Open(*host, EchoCommand()) { return false }
+    if !Open(*host, EchoCommand(), false, false) { return false }
     Records.SetTitle(*host.app.sessions[0], "restored host")
     host.persist = true
     if !Host.Close(*host, "host-fixture.sessions") || host.app != null { return Failure("close saved sessions") }
@@ -247,6 +261,22 @@ CheckPersistence :: () -> bool {
         return Failure("restored host child I/O")
     }
     if Host.Start(*host, Bounds()) || host.app.session_count != 1 { return Failure("duplicate host start") }
+    // Closing Rill's embedded Terminal must preserve standalone tab state.
+    embedded_host: Host.Host
+    defer Host.Close(*embedded_host)
+    if !Open(*embedded_host, EchoCommand()) { return false }
+    Records.SetTitle(*embedded_host.app.sessions[0], "embedded host")
+    embedded_host.persist = true
+    if !Host.Close(*embedded_host, "host-fixture.sessions") { return Failure("embedded close") }
+    if !Host.Close(*host) { return false }
+    if Host.Prepare(*host, args[:], error[:], false) != Launch.ParseResult.ParseOk { return false }
+    host.persist = true
+    if !Host.Start(*host, Bounds(), 0.0, "host-fixture.sessions") ||
+        Records.Title(*host.app.sessions[0]) != "restored host" {
+        host.persist = false
+        return Failure("embedded close overwrote standalone sessions")
+    }
+    host.persist = false
     return true
 }
 
