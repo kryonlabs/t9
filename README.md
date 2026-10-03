@@ -50,6 +50,46 @@ and Rill's actual embedded integration remain migration gates.
 Rill can import `t9/app_host`; its integration must own the surrounding frame,
 device input and window operations.
 
+## Embedding as a Ziran package
+
+t9 is also a Git-backed Ziran package. Add it to an existing application:
+
+```sh
+ziran add https://github.com/taijiosnet/t9.git
+ziran pkg list t9
+```
+
+Commit the generated `ziran.lock` with the application's manifest. Use
+`#import "t9/terminal"` for the parser, `Terminal`/`Cell` state, scrollback and
+owned PTY lifecycle, and `#import "t9/terminal_pane_widget"` for
+`TerminalPane` and `DrawTerminalPane`. The pane accepts the host's existing
+Kryon session and bounds; it creates no window, event loop or application
+configuration. `t9/app_host` is available when embedding the complete tabbed
+Terminal application instead of a single pane.
+
+Initialize each state with `terminal_init`, then either `terminal_spawn` for
+an owned child or `terminal_resize` and `terminal_feed` for host-supplied
+output. Draw it inside the host's `BeginFrame`/`EndFrame`, with `handle_input`
+enabled only while the terminal owns keyboard focus. Call `terminal_poll` for
+owned children and `terminal_close` when removing a terminal to release its
+buffers and supervised child. Display and window lifecycle stay with the host.
+
+The package also exports `t9/terminal_keyboard`, `t9/terminal_pane_keys`,
+`t9/terminal_pane_profile_colors` and `t9/terminal_clipboard` for hosts that
+manage input frames, protocol encoding, colors or clipboard routing directly.
+Internal parser modules remain private. Applications should use the same
+locked Kryon dependency as t9 so their session and geometry types are shared.
+Local application overrides may name the canonical `taijiosnet/t9` checkout
+in an ignored `ziran.local.toml`; no source copies or sibling module paths are
+needed in application code.
+
+`make package-test` adds t9 by its public HTTPS URL to a generated consumer,
+then compiles and runs package-qualified imports in C and C++ from source and
+saved IR. It checks Unicode/ANSI parsing, pane painting through the host's
+Kryon session, keyboard encoding and clipboard storage without a desktop
+display. The consumer has its own module roots, so it cannot accidentally
+import Terminal's private modules through the repository's build roots.
+
 `make install` installs the `t9` command and a desktop launcher named Terminal.
 The default `PREFIX` is `~/.local`; `DESTDIR` supports staged packaging.
 `install-test` checks a disposable staged installation.

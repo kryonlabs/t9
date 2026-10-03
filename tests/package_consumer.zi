@@ -1,0 +1,71 @@
+// External host: every Terminal import goes through its public package API.
+Engine :: #import "t9/terminal";
+Pane :: #import "t9/terminal_pane_widget";
+Keys :: #import "t9/terminal_pane_keys";
+Keyboard :: #import "t9/terminal_keyboard";
+Colors :: #import "t9/terminal_pane_profile_colors";
+Clipboard :: #import "t9/terminal_clipboard";
+Sessions :: #import "kryon/session";
+Tree :: #import "kryon/tree";
+Frame :: #import "kryon/Frame";
+Input :: #import "kryon/tree_input";
+Paint :: #import "kryon/paint_queue";
+Text :: #import "std/byte_text_linux";
+using Geometry :: #import "kryon/geometry";
+Host :: #import "terminal_pane_widget_host";
+ClipboardHost :: #import "terminal_clipboard_host";
+
+#scope_file
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Feed :: (terminal: *Engine.Terminal, value: string) {
+    Engine.terminal_feed(terminal, cast(*void)Bytes(value), cast(s32)value.count)
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    terminal: Engine.Terminal
+    Engine.terminal_init(*terminal)
+    if terminal.fd != -1 || terminal.running != 0 { return 1 }
+    Engine.terminal_resize(*terminal, 8, 4)
+    Feed(*terminal, "\x1b[31mÁ界\x1b[0m")
+    first := Engine.terminal_cell(*terminal, 0, 0)
+    if first.codepoint != 65 || first.combining != 769 || first.fg != 1 ||
+        Engine.terminal_cell(*terminal, 1, 0).codepoint != 30028 { return 2 }
+    // Direct Kryon imports and t9's transitive Kryon types must agree.
+    session := Sessions.SessionOpen()
+    bounds := Rectangle.{0.0, 0.0, 68.0, 68.0}
+    if cast(s32)Frame.BeginFrame(session, cast(u64)1, bounds) != 0 { return 3 }
+    pane: Pane.TerminalPane
+    pane.key = cast(u64)1; pane.bounds = bounds; pane.terminal = *terminal
+    pane.font_size = 14; pane.padding = 2
+    pane.colors = Colors.GetTerminalPaneThemeColors()
+    result := Pane.DrawTerminalPane(session, pane)
+    if result.cols != 8 || result.rows != 4 || Paint.PendingPaintCount(session) < 4 ||
+        Paint.PendingPaintAt(session, 2).value != "Á" ||
+        Paint.PendingPaintAt(session, 3).value != "界" { return 4 }
+    if cast(s32)Frame.EndFrame(session) != 0 || Host.failed { return 5 }
+    Input.TypedCodepointSend(session, 937)
+    keys: [1]s32
+    text: [32]u32
+    keyboard := Keyboard.CaptureKeyboardFrame(session, keys[:], text[:])
+    if keyboard.codepoints.count != 1 || keyboard.codepoints[0] != 937 { return 6 }
+    sequence: [64]u8
+    mode: Keys.TerminalPaneKeyMode
+    mode.application_cursor_keys = 1
+    length := Keys.EncodeTerminalPaneKey(*sequence[0], 64,
+        Keys.TERMINAL_PANE_KEY_UP, 0, mode)
+    if length != 3 || TextView(sequence[0:length]) != "\x1bOA" { return 7 }
+    clipboard: Clipboard.ClipboardBuffer
+    Clipboard.InitClipboardBuffer(*clipboard, Bytes("host clipboard"))
+    if clipboard.length != 14 { return 8 }
+    // Freeing an embedded parser must not start or touch a desktop process.
+    Engine.terminal_close(*terminal)
+    Paint.PaintDispose(session); Tree.TreeDispose(session)
+    if !Sessions.SessionClose(session) { return 9 }
+    print("t9 package: parser, Unicode paint, shared Kryon session, keyboard and clipboard passed\n")
+    return 0
+}

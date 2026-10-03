@@ -21,7 +21,7 @@ PLAN9_PREP_DIR := $(BUILD_ROOT)/plan9
 PLAN9_GENERATED := $(PLAN9_PREP_DIR)/generated
 ZIRAN_MIGRATION_TEST := tests/ziran_migration_test.sh
 
-.PHONY: all run test clean install install-test standalone-test standalone-window-test standalone-plan9-test standalone-plan9-graphics-test plan9-c pty-native parser-replay parser-replay-test
+.PHONY: all run test clean install install-test standalone-test standalone-window-test standalone-plan9-test standalone-plan9-graphics-test plan9-c pty-native parser-replay parser-replay-test package-test
 all: $(APP)
 
 $(APP): $(SOURCES) $(PACKAGE_INPUTS) scripts/build.sh scripts/ziran.sh Makefile
@@ -208,7 +208,10 @@ clipboard-plan9-c:
 		--root tests \
 		-o $(BUILD_ROOT)/plan9/clipboard-test tests/terminal_pane_clipboard_test.zi
 
-test: pane-ziran-test standalone-test install-test parser-replay-test
+package-test:
+	ZIRAN="$(ZIRAN)" sh tests/package_test.sh
+
+test: package-test pane-ziran-test standalone-test install-test parser-replay-test
 
 install: $(APP)
 	mkdir -p "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(APPDIR)"
