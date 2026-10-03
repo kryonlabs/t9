@@ -1,0 +1,229 @@
+// The standalone window and Rill share one Terminal application lifecycle.
+// The caller owns the Kryon frame, device polling, fonts and window actions.
+#scope_module
+State :: #import "app_state";
+Launch :: #import "app_launch_options";
+Config :: #import "app_config";
+Tabs :: #import "app_sessions";
+Records :: #import "app_session";
+Profile :: #import "app_profile";
+Palette :: #import "app_palette";
+Clipboard :: #import "app_clipboard";
+View :: #import "app_terminal_view";
+Input :: #import "app_input";
+Engine :: #import "terminal";
+Keys :: #import "terminal_pane_keys";
+Frames :: #import "kryon/session";
+Tree :: #import "kryon/tree";
+Device :: #import "kryon/tree_input";
+Text :: #import "std/text_buffer";
+Bytes :: #import "std/byte_text_linux";
+using Geometry :: #import "kryon/geometry";
+#if #defined(PLAN9) {
+    Clock :: #import "std/date_time_plan9";
+} else {
+    Clock :: #import "std/timer_linux";
+}
+
+Milliseconds :: () -> s64 {
+    #if #defined(PLAN9) {
+        return Clock.UnixMilliseconds()
+    } else {
+        return Clock.MonotonicMilliseconds()
+    }
+}
+Drain :: (terminal: *Engine.Terminal, burst_ms: s32) -> s32 {
+    bytes := Engine.terminal_poll_bytes(terminal)
+    if bytes <= 0 || burst_ms <= 0 { return bytes }
+    if burst_ms > 20 { burst_ms = 20 }
+    start := Milliseconds()
+    if start < 0 { return bytes }
+    empty: s32
+    // The time and iteration bounds both apply, including a failed clock.
+    for poll: 0..63 {
+        unused poll
+        now := Milliseconds()
+        if now < start || now - start >= cast(s64)burst_ms { break }
+        more := Engine.terminal_poll_bytes(terminal)
+        if more > 0 { bytes += more; empty = 0 }
+        else { empty += 1; if empty >= 2 { break } }
+    }
+    return bytes
+}
+UpdateTitle :: (app: *State.State) -> bool {
+    active := Tabs.Active(app)
+    title := "Terminal"
+    if active != null && Records.Title(active) != "" { title = Records.Title(active) }
+    if Text.TextUntilNul(app.window_title[:]) == title { return false }
+    Records.CopyText(app.window_title[:], title)
+    return true
+}
+
+#scope_export
+Host :: struct {
+    app: *State.State
+    prepared: bool
+    started: bool
+    embedded: bool
+    persist: bool
+    burst_ms: s32
+    fast_poll_until: float64
+}
+DeviceFrame :: struct {
+    now: float64
+    focused: bool
+    key_fresh: bool
+    middle: Input.ButtonFrame
+    down: []s32
+    layout_down: []u32
+}
+PollResult :: struct { bytes: s32; title_changed: bool; quit: bool; }
+FrameResult :: struct {
+    node: s32
+    font_changed: bool
+    title_changed: bool
+    input: Input.Result
+    quit: bool
+}
+
+Prepare :: (host: *Host, arguments: []string, error: []u8,
+    persist: bool = true, embedded: bool = false) -> Launch.ParseResult {
+    if host == null || host.app != null {
+        Records.CopyText(error, "Terminal host is already initialized")
+        return Launch.ParseResult.ParseError
+    }
+    host.app = State.Allocate()
+    if host.app == null {
+        Records.CopyText(error, "Could not allocate Terminal state")
+        return Launch.ParseResult.ParseError
+    }
+    host.persist = persist; host.embedded = embedded
+    #if #defined(PLAN9) {
+        host.burst_ms = 0
+    } else {
+        host.burst_ms = 8
+    }
+    if persist { Config.Load(*host.app.config) }
+    // Embedded Terminal starts a shell; a saved standalone command does not
+    // run again merely because Rill opens its application view.
+    if embedded { host.app.config.command[0] = 0 }
+    parsed := Launch.Parse(*host.app.launch, *host.app.config, arguments, error)
+    host.prepared = parsed == Launch.ParseResult.ParseOk
+    host.app.window_focused = false
+    return parsed
+}
+
+RefreshTheme :: (host: *Host) {
+    if host == null || host.app == null { return }
+    app := host.app
+    old := Profile.ColorsFor(*app.config, *app.palette)
+    Palette.Defaults(*app.palette)
+    // An embedded view uses the containing application's installed rules.
+    if !host.embedded { Palette.ApplySystemTheme(*app.palette) }
+    Profile.SyncThemeDefaults(app, old)
+}
+
+Start :: (host: *Host, viewport: Rectangle, now: float64 = 0.0,
+    session_path: string = "") -> bool {
+    if host == null || host.app == null || !host.prepared || host.started { return false }
+    app := host.app
+    app.viewport = viewport
+    RefreshTheme(host)
+    app.next_theme_refresh = now + 2.0
+    Records.CopyText(app.window_title[:], "Terminal")
+    if Tabs.OpenLaunchSessions(app) == 0 {
+        restored: bool
+        if !host.embedded && host.persist { restored = Tabs.Restore(app, session_path) }
+        if !restored { Tabs.Open(app) }
+    }
+    host.started = app.session_count > 0
+    return host.started
+}
+
+Poll :: (host: *Host, now: float64) -> PollResult {
+    result: PollResult
+    if host == null || host.app == null || !host.started { result.quit = true; return result }
+    app := host.app
+    if app.session_count == 0 && !app.quit_requested { Tabs.Open(app) }
+    active := Tabs.Active(app)
+    if active != null { Clipboard.SyncFromHost(active) }
+    index: s32
+    while index < app.session_count {
+        session := *app.sessions[index]
+        burst := ifx index == app.active then host.burst_ms else 0
+        result.bytes += Drain(*session.terminal, burst)
+        Records.SyncMetadata(session, app.config.dynamic_title_mode)
+        if session.terminal.running == 0 && !app.launch.hold {
+            Tabs.CloseExited(app, index)
+        } else { index += 1 }
+    }
+    if result.bytes > 0 { host.fast_poll_until = now + 0.25 }
+    active = Tabs.Active(app)
+    if active != null {
+        if Engine.terminal_consume_bell(*active.terminal) != 0 { app.bell_until = now + 0.18 }
+        Clipboard.FlushToHost(active)
+    }
+    if now >= app.next_theme_refresh {
+        RefreshTheme(host)
+        app.next_theme_refresh = now + 2.0
+    }
+    result.title_changed = UpdateTitle(app)
+    result.quit = app.quit_requested
+    return result
+}
+
+Draw :: (host: *Host, frame: Frames.Session, bounds: Rectangle,
+    device: DeviceFrame) -> FrameResult {
+    result: FrameResult
+    result.node = -1
+    if host == null || host.app == null || !host.started ||
+        !Frames.SessionValid(frame) || !Tree.TreeIsBuilding(frame) { return result }
+    app := host.app
+    was_modal := Input.ModalActive(app)
+    pointer := Device.PointerSample(frame)
+    drawn := View.Draw(frame, app, bounds,
+        .{device.now, device.key_fresh, device.middle.pressed, pointer.x, pointer.y}, host.persist)
+    result.node = drawn.node; result.font_changed = drawn.font_changed
+    key_buffer: [1]s32
+    codepoints: [32]u32
+    input := Input.Capture(frame, key_buffer[:], codepoints[:], bounds,
+        device.middle, device.now, device.focused)
+    if !device.key_fresh {
+        input.keyboard.repeated = input.keyboard.keys
+        input.keyboard.keys = key_buffer[0:0]
+    }
+    input.keyboard.down = device.down; input.keyboard.layout_down = device.layout_down
+    // Closing a modal consumes its complete device frame, including a
+    // physical key and a quick press/release that otherwise reach Terminal.
+    if was_modal {
+        input.keyboard = Keys.KeyboardFrame.{}
+        input.left = Input.ButtonFrame.{}; input.middle = Input.ButtonFrame.{}
+        input.right = Input.ButtonFrame.{}; input.wheel = 0.0
+    }
+    result.input = Input.Handle(app, input, host.persist)
+    if result.input.wrote > 0 || Input.ModalActive(app) || input.left.down ||
+        input.middle.down || input.right.down || input.keyboard.mods != 0 {
+        host.fast_poll_until = device.now + 0.25
+    }
+    result.title_changed = UpdateTitle(app)
+    result.quit = app.quit_requested
+    return result
+}
+
+Title :: (host: *Host) -> string {
+    if host == null || host.app == null { return "Terminal" }
+    return Bytes.TextFromCString(*host.app.window_title[0])
+}
+
+Close :: (host: *Host, session_path: string = "") -> bool {
+    if host == null { return true }
+    saved: bool = true
+    if host.app != null {
+        if host.started && host.persist && host.app.session_count > 0 {
+            saved = Tabs.Save(host.app, session_path)
+        }
+        State.Dispose(host.app)
+    }
+    host.* = Host.{}
+    return saved
+}

@@ -1,0 +1,263 @@
+Host :: #import "app_host";
+Launch :: #import "app_launch_options";
+Records :: #import "app_session";
+Tabs :: #import "app_sessions";
+Engine :: #import "terminal";
+Data :: #import "terminal_clipboard";
+Frames :: #import "kryon/session";
+Frame :: #import "kryon/Frame";
+Input :: #import "kryon/tree_input";
+Tree :: #import "kryon/tree";
+Geometry :: #import "kryon/geometry";
+Text :: #import "std/byte_text_linux";
+ClipboardHost :: #import "terminal_clipboard_host";
+PaintHost :: #import "terminal_view_host";
+#if #defined(PLAN9) {
+    Transport :: #import "terminal_pty_plan9";
+} else {
+    Transport :: #import "terminal_pty_linux";
+}
+
+libc :: #system_library "c";
+#if #defined(PLAN9) {
+    Pause :: (milliseconds: s32) -> s32 #foreign libc "sleep";
+    Shell :: () -> string { return "/bin/rc" }
+    EchoCommand :: () -> string { return "exec /bin/cat" }
+    ExitCommand :: () -> string { return "echo done" }
+} else {
+    Environment :: (name: *s8) -> *s8 #foreign libc "getenv";
+    PauseHost :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    Pause :: (milliseconds: s32) { PauseHost(cast(u32)(milliseconds * 1000)) }
+    Shell :: () -> string { return Text.TextFromCString(cast(*u8)Environment(cast(*s8)Bytes("T9_TEST_SHELL"))) }
+    EchoCommand :: () -> string { return "stty raw -echo; exec /bin/cat" }
+    ExitCommand :: () -> string { return "printf done" }
+}
+Bytes :: (value: string) -> *u8 {
+    descriptor := cast(*Text.TextDescriptor)(*value)
+    return descriptor.data
+}
+Failure :: (message: string) -> bool { print("Terminal host: %\n", message); return false }
+Bounds :: () -> Geometry.Rectangle { return .{0.0, 0.0, 400.0, 240.0} }
+Open :: (host: *Host.Host, command: string = "", hold: bool = false) -> bool {
+    args: [7]string = .{"t9", "--shell", Shell(), "--command", command, "--title", "fixture"}
+    error: [256]u8
+    parsed := Host.Prepare(host, args[:], error[:], false, true)
+    if parsed != Launch.ParseResult.ParseOk { return Failure("prepare controlled child") }
+    host.app.launch.hold = hold
+    if !Host.Start(host, Bounds()) { return Failure("start controlled child") }
+    Pause(30)
+    return true
+}
+Draw :: (host: *Host.Host, frame: Frames.Session, fresh: bool = true,
+    focused: bool = true, held: bool = false, middle: bool = false) -> Host.FrameResult {
+    PaintHost.Reset()
+    Frame.BeginFrame(frame, cast(u64)1, Bounds())
+    device: Host.DeviceFrame
+    device.now = 1.0; device.focused = focused; device.key_fresh = fresh
+    device.middle.pressed = middle
+    held_keys: [1]s32 = .{#char "A"}
+    if held { device.down = held_keys[:] }
+    result := Host.Draw(host, frame, Bounds(), device)
+    if cast(s32)Frame.EndFrame(frame) != 0 { result.node = -1 }
+    return result
+}
+Observe :: (terminal: *Engine.Terminal, expected: string) -> bool {
+    output: [512]u8
+    used: s32
+    for attempt: 0..99 {
+        unused attempt
+        count := Transport.TerminalPtyRead(terminal.fd, cast(*void)(*output[used]), 512 - used)
+        if count < 0 { return Failure("input child exited") }
+        if count > 0 { used += count }
+        if cast(s64)used > expected.count { return Failure("extra input bytes") }
+        if cast(s64)used == expected.count {
+            if TextView(output[0:used]) != expected { return Failure("input bytes differ") }
+            return true
+        }
+        Pause(10)
+    }
+    return Failure("input did not reach child")
+}
+NoBytes :: (terminal: *Engine.Terminal) -> bool {
+    output: [64]u8
+    for attempt: 0..4 {
+        unused attempt
+        Pause(10)
+        if Transport.TerminalPtyRead(terminal.fd, cast(*void)(*output[0]), 64) != 0 { return false }
+    }
+    return true
+}
+
+CheckPreparation :: () -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    error: [256]u8
+    help: [2]string = .{"t9", "--help"}
+    if Host.Prepare(*host, help[:], error[:], false) != Launch.ParseResult.ParseHelp ||
+        host.prepared || host.started || Host.Start(*host, Bounds()) || host.app.session_count != 0 {
+        return Failure("help started a child")
+    }
+    if !Host.Close(*host) || host.app != null || !Host.Close(*host) { return Failure("idempotent close") }
+    invalid: [3]string = .{"t9", "--geometry", "bad"}
+    if Host.Prepare(*host, invalid[:], error[:], false) != Launch.ParseResult.ParseError ||
+        error[0] == 0 || Host.Start(*host, Bounds()) || host.app.session_count != 0 {
+        return Failure("invalid options started a child")
+    }
+    return true
+}
+
+CheckFrameOwnership :: () -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    if !Open(*host, EchoCommand()) { return false }
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    terminal := *host.app.sessions[0].terminal
+    terminal.focus_reporting = 1
+    if Draw(*host, frame).node < 0 || !Observe(terminal, "\x1b[I") { return Failure("focus gain") }
+    if Draw(*host, frame, true, false).input.wrote != 0 || !Observe(terminal, "\x1b[O") { return Failure("focus loss") }
+    if Draw(*host, frame, true, false).node < 0 || !NoBytes(terminal) { return Failure("repeated focus loss") }
+    if Draw(*host, frame).node < 0 || !Observe(terminal, "\x1b[I") { return Failure("focus regain") }
+    terminal.focus_reporting = 0
+    keys: [1]s32 = .{#char "A"}
+    Input.KeyboardModifiersSend(frame, Input.KeyModifierControl)
+    Input.KeyboardSend(frame, keys[0]); Input.TypedCodepointSend(frame, #char "a")
+    if Draw(*host, frame, true, true, true).input.wrote != 1 || !Observe(terminal, "\x01") {
+        return Failure("fresh Control key and typed-text deduplication")
+    }
+    if Draw(*host, frame, true, true, true).input.wrote != 0 || !NoBytes(terminal) { return Failure("held key flooding") }
+    Input.KeyboardSend(frame, keys[0])
+    if Draw(*host, frame, false, true, true).input.wrote != 1 || !Observe(terminal, "\x01") {
+        return Failure("OS repeat converted to repeated input")
+    }
+    Input.KeyboardModifiersSend(frame, 0)
+    Input.TypedCodepointSend(frame, 0x4e00); Input.TypedCodepointSend(frame, #char "x")
+    if Draw(*host, frame).input.wrote != 4 || !Observe(terminal, "一x") { return Failure("Unicode frame input") }
+    Input.KeyboardSend(frame, 299)
+    if Draw(*host, frame).input.wrote != 0 || !host.app.menu.focused || !NoBytes(terminal) {
+        return Failure("menu opening leaked input")
+    }
+    Input.KeyboardSend(frame, 299)
+    if Draw(*host, frame, false).input.wrote != 0 || !host.app.menu.focused || !NoBytes(terminal) {
+        return Failure("repeated menu shortcut")
+    }
+    Input.KeyboardSend(frame, Input.KeyEscape)
+    if Draw(*host, frame).input.wrote != 0 || host.app.menu.focused || !NoBytes(terminal) {
+        return Failure("closing menu leaked Escape")
+    }
+    host.app.about_visible = true
+    Input.KeyboardSend(frame, Input.KeyEscape); Input.TypedCodepointSend(frame, #char "x")
+    if Draw(*host, frame).input.wrote != 0 || host.app.about_visible || !NoBytes(terminal) {
+        return Failure("closing About leaked its device frame")
+    }
+    return true
+}
+
+CheckPolling :: () -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    if !Open(*host, EchoCommand()) { return false }
+    host.app.sessions[0].title_override = false
+    terminal := *host.app.sessions[0].terminal
+    ClipboardHost.HostClipboardReset("host value")
+    sequence := "\x1b]2;live host\x07\x07\x1b]52;c;bmV3\x07"
+    if Engine.terminal_write(terminal, cast(*void)Bytes(sequence), cast(s32)sequence.count) != cast(s32)sequence.count { return false }
+    total: s32
+    changed: bool
+    for attempt: 0..99 {
+        unused attempt
+        polled := Host.Poll(*host, 1.0)
+        total += polled.bytes; changed = changed || polled.title_changed
+        if Host.Title(*host) == "live host" && ClipboardHost.HostClipboardText() == "new" { break }
+        Pause(10)
+    }
+    if total != cast(s32)sequence.count || !changed || Host.Title(*host) != "live host" ||
+        host.app.bell_until < 1.17 || host.fast_poll_until != 1.25 ||
+        ClipboardHost.HostClipboardText() != "new" || ClipboardHost.write_count != 1 {
+        return Failure("polling, metadata, bell and clipboard flush")
+    }
+    if Host.Poll(*host, 1.0).title_changed { return Failure("unchanged title update") }
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    Records.SetTitle(*host.app.sessions[0], "renamed")
+    if !Draw(*host, frame).title_changed || Host.Title(*host) != "renamed" { return Failure("frame title notification") }
+    return true
+}
+
+CheckExit :: (hold: bool) -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    if !Open(*host, ExitCommand(), hold) { return false }
+    for attempt: 0..99 {
+        unused attempt
+        polled := Host.Poll(*host, 1.0)
+        if hold && host.app.sessions[0].terminal.running == 0 {
+            return !polled.quit && host.app.session_count == 1 && host.app.active == 0
+        }
+        if polled.quit { return !hold && host.app.session_count == 0 && host.app.active == -1 }
+        Pause(10)
+    }
+    return Failure("child-exit lifecycle")
+}
+
+CheckMiddleClick :: () -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    if !Open(*host, EchoCommand()) || !Tabs.Open(host.app, EchoCommand()) { return false }
+    Records.SetTitle(*host.app.sessions[1], "second")
+    frame := Frames.SessionOpen(); defer Frame.CloseSession(frame)
+    if Draw(*host, frame).node < 0 { return false }
+    target: Geometry.Rectangle
+    tree_count := Tree.TreeCount(frame)
+    for index: 0..tree_count - 1 {
+        node := Tree.TreeNodeAt(frame, index)
+        if node.semantic_label == "second" { target = node.bounds }
+    }
+    if target.width <= 0.0 { return Failure("middle-click tab target") }
+    Input.TreePointerUpdate(frame, .{target.x + 5.0, target.y + 5.0, false, false, false})
+    host.app.config.middle_click_closes_tab = 0
+    if Draw(*host, frame, true, true, false, true).node < 0 || host.app.session_count != 2 {
+        return Failure("disabled middle-click close through host")
+    }
+    host.app.config.middle_click_closes_tab = 1
+    if Draw(*host, frame, true, true, false, true).node < 0 || host.app.session_count != 1 || host.app.active != 0 {
+        return Failure("host supplied the middle-click position")
+    }
+    return true
+}
+
+CheckPersistence :: () -> bool {
+    host: Host.Host
+    defer Host.Close(*host)
+    if !Open(*host, EchoCommand()) { return false }
+    Records.SetTitle(*host.app.sessions[0], "restored host")
+    host.persist = true
+    if !Host.Close(*host, "host-fixture.sessions") || host.app != null { return Failure("close saved sessions") }
+    args: [3]string = .{"t9", "--shell", Shell()}
+    error: [256]u8
+    if Host.Prepare(*host, args[:], error[:], false) != Launch.ParseResult.ParseOk { return false }
+    host.persist = true
+    if !Host.Start(*host, Bounds(), 0.0, "host-fixture.sessions") || host.app.session_count != 1 ||
+        Records.Title(*host.app.sessions[0]) != "restored host" || host.app.sessions[0].terminal.running == 0 {
+        host.persist = false
+        return Failure("standalone startup restored its saved child and title")
+    }
+    host.persist = false
+    Pause(30)
+    terminal := *host.app.sessions[0].terminal
+    if Engine.terminal_write(terminal, cast(*void)Bytes("restored"), 8) != 8 || !Observe(terminal, "restored") {
+        return Failure("restored host child I/O")
+    }
+    if Host.Start(*host, Bounds()) || host.app.session_count != 1 { return Failure("duplicate host start") }
+    return true
+}
+
+#program_export
+main :: () -> s32 {
+    if !CheckPreparation() { return 1 }
+    if !CheckFrameOwnership() { return 2 }
+    if !CheckPolling() { return 3 }
+    if !CheckExit(false) || !CheckExit(true) { return 4 }
+    if !CheckMiddleClick() { return 5 }
+    if !CheckPersistence() { return 6 }
+    print("Terminal shared host lifecycle and frame ownership passed\n")
+    return 0
+}

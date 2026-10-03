@@ -11,8 +11,8 @@ the full terminal engine and its typed state, application configuration,
 command-line options, sessions and their persistence, plus application state,
 tab lifecycle, selection/clipboard routing, palette and profile changes,
 commands, search dialogs, the context menu, application input routing and the
-menu bar and graphical view. There are two legacy `.kry`
-inputs and one handwritten C implementation remaining at the app
+menu bar, graphical view and shared application host. There is one legacy
+`.kry` input and one handwritten C implementation remaining at the app
 boundaries. The current
 boundary is the legacy C-header/K2C API. Remaining modules must be
 expressed as Ziran types and explicit foreign/host bindings, then linked to the
@@ -318,7 +318,33 @@ rendering, clipping, cursor and scroll behavior, tab lifecycle and dialog
 actions. These checks do not establish whole-application graphics, host font
 loading or OS input.
 
-The next source boundary is the standalone and embedded application hosts.
+## Shared application host
+
+`app_host.zi` owns the lifecycle shared by the standalone application and
+Rill's embedded Terminal. It exports preparation, startup, polling,
+composition, title notifications and closing. Preparation parses options
+before creating a child. Startup uses the canonical sessions and transports;
+standalone restoration and embedded shell startup keep their separate
+policies. Closing saves sessions when requested and disposes only owned
+Terminal state and processes. The old embedded `.kry` host is removed.
+
+The caller owns the Kryon frame, device polling, fonts and window operations.
+Composition captures only the input left by the current widgets and preserves
+fresh versus repeated keys. Closing a modal consumes its complete device
+frame. Polling updates metadata, bell feedback and clipboard writes, retains
+hold behavior and reports when the last child exits. Embedded views use the
+containing application's installed theme rules. Hosts can import the
+package's `t9/app_host` export; Terminal code remains in this repository.
+
+`make host-test` checks source and saved-IR execution in C and C++;
+`make host-plan9-test` checks actual native Plan 9 8c/8l execution. They use
+controlled real child processes to verify focus reports, Unicode input,
+Control-key repeats, held-key suppression, modal input ownership, title and
+clipboard updates, exit and hold behavior, middle-click positions, saved
+sessions and restored child I/O. These checks do not establish the standalone
+OS host, Rill's actual embedded integration or installation/release routes.
+
+The next source boundary is the standalone OS host and Rill integration.
 Migrate their consumers to these current modules, then migrate app
 entrypoints to Kryon sessions and frames, remove k2c and the remaining C
 product files, and establish complete Linux/Plan 9, Rill, installation, and
@@ -328,6 +354,7 @@ those whole-application gates pass.
 ## Completed modules
 
 - `src/app/app_terminal_view.zi`
+- `src/app/app_host.zi`
 
 - `src/terminal_pane/terminal_pane_text.zi`
 - `src/terminal_pane/terminal_pane_sgr.zi`

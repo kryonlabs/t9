@@ -9,3 +9,8 @@ ref = "master"
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
 ref = "master"
+
+[exports]
+app_host = "src/app/app_host.zi"
+terminal = "src/terminal.zi"
+terminal_pane_widget = "src/terminal_pane/terminal_pane_widget.zi"
