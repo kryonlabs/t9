@@ -369,6 +369,17 @@ fallback, Rill's actual embedded integration or fresh locked release builds.
 Finish those gates before claiming the full migration complete. The `.zi` application is the
 single maintained implementation while this remaining work proceeds.
 
+`make standalone-plan9-graphics-test` now prepares the complete executable
+from source and saved IR and compares captures from an empty terminal and a
+real child emitting ANSI truecolor and text. It checks the native viewport,
+opaque capture bytes, colored cells and glyph pixels on Terminal's owned
+offscreen render target. It scrubs desktop connections, uses private Xvfb and
+keeps the existing one-CPU, 256 MB, 120-second guest limits. Configuration and
+session files stay in a disposable guest home. This gate is not yet verified:
+the sandbox blocks QEMU's guest filesystem connection, and automatic approval
+review cannot initialize while the system disk is full. It does not replace
+the remaining native device-input or font-fallback checks.
+
 ## Native interfaces and parser benchmarks
 
 Embedded hosts can paint while unfocused without consuming their containing

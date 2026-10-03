@@ -51,14 +51,14 @@
     </div>
   </header>
 
-  <div class="migration-banner"><strong>Migration note:</strong> Ziran (<code>.zi</code>) is t9’s maintained source language. Independent clipboard and selection checks work with current Ziran. Full application builds still require legacy Kryon/k2c APIs; the remaining migration is in progress.</div>
+  <div class="migration-banner"><strong>Migration note:</strong> t9’s maintained application and terminal engine are written in Ziran (<code>.zi</code>) and build with current Kryon modules. Native graphical input, font fallback, Rill integration and fresh locked release builds remain migration work.</div>
   <main id="top">
     <section class="hero">
       <div class="hero-inner">
         <span class="hero-eyebrow"><span class="dot"></span>Terminal emulator · Ziran migration</span>
         <img class="hero-icon" src="favicon.svg" width="84" height="84" alt="t9">
         <h1>t9</h1>
-        <p class="hero-sub">t9 is Taiji OS’s Terminal application, moving its product sources and visual boundary to Ziran-based Kryon. Recorded benchmarks describe an earlier transition build; a full build with current Kryon remains migration work.</p>
+        <p class="hero-sub">t9 is Taiji OS’s Terminal application, written in Ziran and using Kryon for its interface and platform hosts. Recorded benchmarks describe an earlier transition build; the complete native and release validation remains in progress.</p>
         <div class="hero-cta">
           <a class="btn btn-primary" href="#benchmarks">View benchmarks</a>
           <a class="btn" href="#parity">Parity matrix</a>
@@ -224,7 +224,7 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
         </article>
         <article class="feature-card">
           <h3>Kryon integration</h3>
-          <p>The current transition app uses Kryon for windowing, rendering, input, theme integration, and platform hooks. Terminal-specific behavior stays in t9, with remaining legacy modules scheduled for migration and deletion.</p>
+          <p>The application uses current Kryon modules for windowing, rendering, input, themes and platform hooks. Terminal behavior stays in t9’s Ziran modules. Native graphical input, font fallback and embedded desktop integration still need complete application checks.</p>
         </article>
       </div>
     </section>
@@ -233,11 +233,13 @@ Alt+1..Alt+8 switch tabs directly.</code></pre>
       <div class="callout-inner">
         <p class="section-eyebrow">Install</p>
         <h2>Check t9 locally</h2>
-        <p>Install Ziran on your PATH, then run the independent pane checks. Package lookup uses the committed lock. Full application builds and installation still require legacy Kryon/k2c APIs while the remaining migration is underway.</p>
+        <p>Install Ziran on your PATH and the Linux build dependencies listed in the README. The application uses Git-backed Ziran packages and the committed dependency lock. Window checks run on a private display; native and release validation remains in progress.</p>
 <pre><code>git clone https://github.com/taijiosnet/t9.git
 cd t9
+make -j1
+make standalone-window-test
 make pane-ziran-test
-make clipboard-plan9-c</code></pre>
+make install</code></pre>
       </div>
     </section>
 

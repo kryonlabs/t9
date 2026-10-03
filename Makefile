@@ -21,7 +21,7 @@ PLAN9_PREP_DIR := $(BUILD_ROOT)/plan9
 PLAN9_GENERATED := $(PLAN9_PREP_DIR)/generated
 ZIRAN_MIGRATION_TEST := tests/ziran_migration_test.sh
 
-.PHONY: all run test clean install install-test standalone-test standalone-window-test standalone-plan9-test plan9-c pty-native parser-replay parser-replay-test
+.PHONY: all run test clean install install-test standalone-test standalone-window-test standalone-plan9-test standalone-plan9-graphics-test plan9-c pty-native parser-replay parser-replay-test
 all: $(APP)
 
 $(APP): $(SOURCES) $(PACKAGE_INPUTS) scripts/build.sh scripts/ziran.sh Makefile
@@ -44,6 +44,14 @@ plan9-c:
 standalone-plan9-test:
 	ZIRAN="$(ZIRAN)" sh tests/standalone_plan9_test.sh source
 	ZIRAN="$(ZIRAN)" sh tests/standalone_plan9_test.sh saved
+
+standalone-plan9-graphics-test:
+	@set -eu; for form in source saved; do \
+		env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER \
+			ZIRAN="$(ZIRAN)" LP_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+			xvfb-run -a -s '-screen 0 1024x768x24' \
+			env T9_PRIVATE_XVFB=1 sh tests/standalone_plan9_test.sh "$$form" graphics; \
+	done
 
 parser-replay:
 	ZIRAN="$(ZIRAN)" sh scripts/parser-replay.sh

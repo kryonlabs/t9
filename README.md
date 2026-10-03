@@ -34,14 +34,20 @@ with one CPU, 256 MB RAM, a 32 MB translation buffer and a 120-second limit:
 
 ```sh
 TAIJI_DIR=/path/to/taijiosnet/taiji make standalone-plan9-test
+TAIJI_DIR=/path/to/taijiosnet/taiji make standalone-plan9-graphics-test
 TAIJI_DIR=/path/to/taijiosnet/taiji make terminal-plan9-test host-plan9-test
 make plan9-c
 ```
 
 `plan9-c` emits the complete application for native `mk`/8c/8l. The standalone
 native test builds the real executable and checks its CLI and forwarding to
-Rill from source and saved IR. Native graphics and Rill's actual embedded
-integration remain separate migration gates. Rill can import `t9/app_host`; its integration must own the surrounding frame,
+Rill from source and saved IR. `standalone-plan9-graphics-test` adds captures
+from the real native application and checks child output, ANSI truecolor and
+rendered glyphs on its owned offscreen target. It runs through private Xvfb
+and the bounded guest. This new gate remains unverified because the sandbox
+blocks the guest filesystem connection; native graphical input, font fallback
+and Rill's actual embedded integration remain migration gates.
+Rill can import `t9/app_host`; its integration must own the surrounding frame,
 device input and window operations.
 
 `make install` installs the `t9` command and a desktop launcher named Terminal.
